@@ -1,0 +1,58 @@
+# Test-suite configuration (see design/design.md).
+# config_path names the base CECE driver config; relative paths resolve
+# against this file's directory (or CECE_CONFIG_SEARCH_PATH when set).
+# The sweep mirrors the driver-config structure: dimensions attach to named
+# streams (or positional species entries); the combination space is the
+# cartesian product of all attached value lists. Fields absent from the
+# sweep stay at their base-config values.
+name: simple-maccity
+config_path: ../cece/simple-maccity.yaml
+timeout_s: 10  # per combination; capped by CECE_RUN_TIMEOUT_S when that is smaller
+assertions:
+  expected_nc_file_count:  # null = derive from the combo config
+  validate_filenames: true
+  species:
+    co:
+      attributes:
+        exact: true  # the full attribute dictionary must match; false = subset
+        expected:
+          # per value: string = exact match; null = must be absent;
+          # "__ignore__" = any value allowed
+          units: kg m-2 s-1
+          long_name: carbon_monoxide_emission_flux
+          coordinates: time lev lat lon
+# Each entry's sweep_selector mirrors `sweep` with regexes (fullmatch) at the
+# leaves and must select exactly one combination; ulids live under
+# CECE_BASELINE_ROOT_DIR; atol is per entry (default 0.0 = bit-for-bit).
+baseline_comparisons:
+  - sweep_selector:
+      cece_data:
+        streams:
+          - name: MACCITY
+            mapalgo: bilinear
+    ulid: 01KXNXCJ858EE6R4FPF39BC8V2
+  - sweep_selector:
+      cece_data:
+        streams:
+          - name: MACCITY
+            mapalgo: consd
+    ulid: 01KXNXCJ86E8Z2FKVAXRER5ND4
+  - sweep_selector:
+      cece_data:
+        streams:
+          - name: MACCITY
+            mapalgo: passthrough
+    ulid: 01KXNXCJ87190QGHQZV2913JAW
+analysis:
+  compute_descriptive_stats: true  # default; false skips test_descriptive_stats
+plotting:
+  enabled: true  # default; spatial plots per NetCDF in <combo>/plots/
+  gif_enabled: true  # default; per-variable animated GIF from those plots
+sweep:
+  cece_data:
+    streams:
+      - name: MACCITY  # selector: which base-config stream; siblings are the swept dimensions
+        mapalgo:
+          - bilinear
+          - consd
+          - passthrough

@@ -1,0 +1,14 @@
+# Kept coherent with [tool.yamlfix] in pyproject.toml (no document start).
+# design/ holds records (spike artifacts, run manifests), not maintained code.
+extends: default
+ignore: |
+  design/
+  .venv/
+rules:
+  document-start: disable
+  line-length:
+    max: 120
+  # GitHub workflow files key on `on:`, which yamlfix normalizes to the
+  # bare form; keep checking truthy *values*, just not keys.
+  truthy:
+    check-keys: false

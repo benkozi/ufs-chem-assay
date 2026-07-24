@@ -1,0 +1,9 @@
+# Per-machine configuration (absolute paths) — never committed; see README.
+.env
+
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.idea/
+/*.png

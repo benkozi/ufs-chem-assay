@@ -1,0 +1,11 @@
+# Runs CECE's shipped ex7 example as an ordinary suite: cadence-aware temporal scale factors + 2 AMIO worker threads.
+# Select with: --suite-config ex7-suite.yaml (needs CECE_ROOT_DIR or
+# --cece-root-dir for the ${CECE_ROOT_DIR} anchor below).
+# Prerequisite: example data downloaded into the checkout, e.g.
+#   python3 <CECE>/examples/download-example-data.py --example ex7
+# EXPECTED FAILURE until the CAMS-TEMPO weights have a public source
+# (the datasets are deliberately not substituted; see the example's header).
+# No sweep: the example config runs as the single 'base' combination.
+name: ex7
+config_path: ${CECE_ROOT_DIR}/examples/config/cece_config_ex7.yaml
+timeout_s: 300

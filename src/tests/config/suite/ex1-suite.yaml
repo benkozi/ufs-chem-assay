@@ -1,0 +1,9 @@
+# Runs CECE's shipped ex1 example as an ordinary suite: basic multi-sector species with temporal scale factors.
+# Select with: --suite-config ex1-suite.yaml (needs CECE_ROOT_DIR or
+# --cece-root-dir for the ${CECE_ROOT_DIR} anchor below).
+# Prerequisite: example data downloaded into the checkout, e.g.
+#   python3 <CECE>/examples/download-example-data.py --example ex1
+# No sweep: the example config runs as the single 'base' combination.
+name: ex1
+config_path: ${CECE_ROOT_DIR}/examples/config/cece_config_ex1.yaml
+timeout_s: 300
