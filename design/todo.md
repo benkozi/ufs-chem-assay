@@ -1,3 +1,0 @@
-- [ ] run combo-test-runner under MPI and more threads; need "execution_options" to test runner
-- [ ] add basic ci system run all tests and examples in container
-- [x] add filter for suites that defaults to simple-maccity suite
