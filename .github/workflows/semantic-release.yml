@@ -1,0 +1,35 @@
+# Manual-only releases: dispatch this workflow against develop (produces
+# X.Y.Z-rc.N prereleases) or main (full releases) via the Run-workflow
+# branch picker; any other ref fails the guard. The official PSR action
+# reads [tool.semantic_release] from pyproject.toml and pushes the
+# version-bump commit + tag + CHANGELOG.md update back to the dispatched
+# branch (contents: write). vcs_release: false means no GitHub Release
+# object; nothing is published to PyPI or anywhere else. Dispatch only on
+# a green branch — this workflow deliberately does not gate on ci.yaml.
+name: semantic-release
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard — releases run only against develop or main
+        run: |
+          case "$GITHUB_REF_NAME" in
+            develop|main) ;;
+            *)
+              echo "::error::dispatched against '$GITHUB_REF_NAME'; pick develop or main"
+              exit 1
+              ;;
+          esac
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Python Semantic Release
+        uses: python-semantic-release/python-semantic-release@v10
+        with:
+          github_token: ${{ github.token }}
+          vcs_release: false

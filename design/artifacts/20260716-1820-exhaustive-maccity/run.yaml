@@ -1,0 +1,46 @@
+run_id: 01KXPMQEHK6WCFA17CG5BXHR0B
+suite:
+  name: exhaustive-maccity-asserted
+  config_path: /Users/bkoziol/sandbox/git-benkozi/CECE/combo-test-runner/src/tests/config/cece/simple-maccity.yaml
+  analysis:
+    compute_descriptive_stats: false
+  plotting:
+    enabled: false
+    gif_enabled: false
+  baseline_comparisons: []
+  assertions:
+    expected_nc_file_count: null
+    validate_filenames: true
+    validate_file_count: true
+    species: null
+  timeout_s: 10
+  sweep:
+    cece_data:
+      streams:
+        - name: MACCITY
+          taxmode:
+            - cycle
+            - extend
+          tintalgo:
+            - linear
+            - nearest
+          mapalgo:
+            - bilinear
+            - consd
+            - conss
+            - cubic
+            - nn
+            - passthrough
+    species:
+      co:
+        - operation:
+            - add
+            - replace
+          category:
+            - undefined
+          vdist_method:
+            - height
+            - pbl
+            - pressure
+            - range
+            - single

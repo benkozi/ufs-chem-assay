@@ -1,0 +1,4 @@
+# Self-contained since the runner moved to its own repository (it previously
+# extended the CECE repo-root ruff.toml, whose only content was spack-specific
+# per-file-ignores that do not apply here).
+target-version = "py311"

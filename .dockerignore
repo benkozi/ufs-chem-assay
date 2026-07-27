@@ -1,0 +1,8 @@
+# Allowlist: the image bakes only the dependency set and hook environments;
+# source is bind-mounted at run time. Everything else — .env especially
+# (per-machine absolute paths), .git, .venv, caches, design records — must
+# never enter the build context.
+*
+!pyproject.toml
+!uv.lock
+!.pre-commit-config.yaml

@@ -1,0 +1,31 @@
+# Asserted variant of the exhaustive run-only suite, for the log-analysis
+# spike (design/spike/20260716-1820-analyze-exhaustive-maccity-logs.md):
+# identical sweep, but the execution-level assertions (file count, filenames)
+# run at their defaults — did the driver write what its exit code claims?
+# Output-content checks (species attributes, stats, plots) stay off.
+name: exhaustive-maccity-asserted
+config_path: ../cece/simple-maccity.yaml
+timeout_s: 10  # per combination; capped by CECE_RUN_TIMEOUT_S when smaller
+# assertions: defaults apply — validate_file_count and validate_filenames
+# true, expected_nc_file_count null (derived: 3 for the 3-hour base config),
+# no species block.
+analysis:
+  compute_descriptive_stats: false
+plotting:
+  enabled: false
+  gif_enabled: false
+sweep:
+  cece_data:
+    streams:
+      - name: MACCITY
+        taxmode: .*
+        tintalgo: .*
+        mapalgo: .*
+  species:
+    co:
+      - operation: .*
+        # category is a pure label the driver never reads — sweeping it would
+        # multiply runtime for identical execution, so it is pinned instead.
+        category:
+          - undefined
+        vdist_method: .*

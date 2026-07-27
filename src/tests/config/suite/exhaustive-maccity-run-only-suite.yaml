@@ -1,0 +1,37 @@
+# Exhaustive run-only suite (design/feat/20260716-1647-exhaustive-maccity.md).
+# Sweep values are regexes: ".*" expands (fullmatch) to every enum value at
+# load time, so this suite never needs editing as enums grow. Everything but
+# the driver-exit assertion is off — pass/fail per combination is the only
+# question, and inapplicable value combinations may fail; that is this
+# suite's data. Run on demand (never the default):
+#   uv run pytest src/tests/test_driver_combos.py \
+#     --suite-config=src/tests/config/suite/exhaustive-maccity-run-only-suite.yaml
+# Add --dry-run to generate every config and the test-report.csv without
+# executing the driver.
+name: exhaustive-maccity-run-only
+config_path: ../cece/simple-maccity.yaml
+timeout_s: 10  # per combination; capped by CECE_RUN_TIMEOUT_S when smaller
+assertions:
+  validate_file_count: false
+  validate_filenames: false
+  validate_dimensions: false
+analysis:
+  compute_descriptive_stats: false
+plotting:
+  enabled: false
+  gif_enabled: false
+sweep:
+  cece_data:
+    streams:
+      - name: MACCITY
+        taxmode: .*
+        tintalgo: .*
+        mapalgo: .*
+  species:
+    co:
+      - operation: .*
+        # category is a pure label the driver never reads — sweeping it would
+        # multiply runtime for identical execution, so it is pinned instead.
+        category:
+          - undefined
+        vdist_method: .*
