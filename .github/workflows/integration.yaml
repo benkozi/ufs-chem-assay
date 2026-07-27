@@ -1,0 +1,104 @@
+# Integration: the real simple-maccity suite against CECE feature/helm —
+# clone CECE (nested submodules), build its image (gha buildx cache, loaded
+# into the host daemon as cece/cece-dev), compile the driver in the container
+# (build/ cached by CECE SHA), download the one dataset the suite needs
+# (MACCity_4x5.nc = the ex3 data set, cached), then run the runner on the
+# host (docker-in-docker avoided) and upload the whole output root.
+#
+# The push trigger exists to create develop-scoped caches PR runs can
+# restore — a pull_request-only workflow never shares caches across PRs.
+#
+# Baselines are OFF (CECE_ENABLE_BASELINE_COMPARISONS=false): the baseline
+# store has no public home yet. TODO: re-enable once it does (see
+# design/feat/20260727-1633-simple-maccity-ci.md).
+#
+# Merge sequencing: this job runs BLOCKING while the feature PR is open;
+# the branch's final pre-merge commit adds `continue-on-error: true` on the
+# job so the long end-to-end run never blocks unrelated PRs to develop.
+name: integration
+on:
+  pull_request:
+    branches:
+      - develop
+  push:
+    branches:
+      - develop
+permissions:
+  contents: read
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CECE_REPOSITORY: ufs-community/CECE
+  CECE_REF: feature/helm
+jobs:
+  simple-maccity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check out CECE (nested submodules)
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.CECE_REPOSITORY }}
+          ref: ${{ env.CECE_REF }}
+          path: cece
+          submodules: recursive
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the CECE image (gha cache) and load it as cece/cece-dev
+        uses: docker/build-push-action@v6
+        with:
+          context: cece
+          load: true
+          tags: cece/cece-dev
+          cache-from: type=gha,scope=cece-image
+          cache-to: type=gha,mode=max,scope=cece-image
+      - name: Resolve the CECE commit
+        id: cece
+        run: echo "sha=$(git -C cece rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Cache the CECE build directory
+        uses: actions/cache@v4
+        with:
+          path: cece/build
+          key: cece-build-${{ steps.cece.outputs.sha }}
+          restore-keys: |
+            cece-build-
+      - name: Cache the maccity dataset
+        uses: actions/cache@v4
+        with:
+          path: cece/data
+          key: maccity-data-v2014-07
+      # CECE's own entrypoint: configure-if-no-cache + cmake --build in the
+      # already-loaded image (it never builds an image; ESMF stays off via
+      # the Dockerfile's BUILD_ESMF=OFF default).
+      - name: Build CECE in the container
+        run: python3 cece/scripts/build-and-test-container.py --no-test
+      # The suite reads exactly /work/data/MACCity_4x5.nc — the ex3 data
+      # set; the stdlib-only entrypoint skips files the cache restored.
+      - name: Download the maccity dataset
+        run: >-
+          python3 cece/examples/download-example-data.py
+          --example ex3 --dst-dir cece/data
+      - name: Install uv (interpreter matches the runner Dockerfile)
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.14'
+      - name: Run simple-maccity-suite.yaml
+        env:
+          CECE_ROOT_DIR: ${{ github.workspace }}/cece
+          # No public baseline store yet; the suite's three comparisons
+          # skip. TODO: drop this once baselines are downloadable.
+          CECE_ENABLE_BASELINE_COMPARISONS: 'false'
+        run: |
+          uv sync --frozen
+          uv run pytest src/tests/test_driver_combos.py \
+            --suite-config=simple-maccity-suite.yaml \
+            --combo-output-root=ctr-ci-output
+      # Success and failure alike: run.yaml (with cece_commit), combos.csv,
+      # test-report.csv, stats, plots, NetCDF, .out, cece.log per combo.
+      - name: Upload the output root
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simple-maccity-output-${{ github.run_id }}-${{ github.run_attempt }}
+          path: cece/ctr-ci-output

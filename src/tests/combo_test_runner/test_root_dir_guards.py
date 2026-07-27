@@ -38,6 +38,26 @@ def _run_pytest(
     )
 
 
+def _git_checkout(path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "fabricated",
+        ],
+        cwd=path,
+        check=True,
+    )
+
+
 def test_driver_execution_without_root_dir_is_usage_error(tmp_path: Path) -> None:
     result = _run_pytest([], tmp_path)
     assert result.returncode == _USAGE_ERROR, result.stdout + result.stderr
@@ -68,6 +88,7 @@ def test_bare_dry_run_passes_with_no_environment(tmp_path: Path) -> None:
 
 
 def test_cece_root_dir_flag_satisfies_requirement(tmp_path: Path) -> None:
+    _git_checkout(tmp_path)
     result = _run_pytest(
         ["--dry-run", "--combo-output-root=combo_runs", f"--cece-root-dir={tmp_path}"],
         tmp_path,
@@ -81,6 +102,7 @@ def test_flag_wins_over_env(tmp_path: Path) -> None:
     flag_root = tmp_path / "from-flag"
     env_root.mkdir()
     flag_root.mkdir()
+    _git_checkout(flag_root)  # only the winning root must be a checkout
     result = _run_pytest(
         ["--dry-run", "--combo-output-root=combo_runs", f"--cece-root-dir={flag_root}"],
         tmp_path,
@@ -89,3 +111,14 @@ def test_flag_wins_over_env(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert (flag_root / "combo_runs" / "run.yaml").is_file()
     assert not (env_root / "combo_runs").exists()
+
+
+def test_non_git_root_dir_is_usage_error(tmp_path: Path) -> None:
+    # A configured root that is not a git checkout is fatal at sessionstart:
+    # the run must record the CECE commit it ran against.
+    plain = tmp_path / "not-a-checkout"
+    plain.mkdir()
+    result = _run_pytest(["--dry-run"], tmp_path, {"CECE_ROOT_DIR": str(plain)})
+    assert result.returncode == _USAGE_ERROR, result.stdout + result.stderr
+    assert str(plain) in result.stderr
+    assert "git" in result.stderr

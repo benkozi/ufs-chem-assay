@@ -249,8 +249,11 @@ Layout under the output root is the same either way:
 
 ```
 <output-root>/                 # default: pytest tmp dir; else /work-relative
-  run.yaml                     # RunManifest: session ULID + every resolved suite,
-                               #   in selection order (one-element when single)
+  run.yaml                     # RunManifest: session ULID, cece_commit (the CECE
+                               #   checkout's HEAD SHA; null only when no checkout is
+                               #   configured — an unresolvable SHA for a configured
+                               #   root fails the session at start), and every
+                               #   resolved suite in selection order
   combos.csv                   # effective-parameter table: run_id, combo_id,
                                #   suite, name, target, field, value, swept
   test-report.csv              # every combo-test's outcome: pytest_name, suite,

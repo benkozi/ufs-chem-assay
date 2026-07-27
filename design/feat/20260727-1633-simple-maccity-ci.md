@@ -127,19 +127,25 @@ Second architecture pass (verified 2026-07-27):
 ### Phase 1 — runner: `cece_commit` in run.yaml (red-green)
 
 Red: unit tests — a fabricated git repo as `root_dir` yields its HEAD
-SHA in the written run.yaml; a non-repo (or unset) `root_dir` yields
-null and never errors; the manifest round-trip test carries the field.
+SHA in the written run.yaml; a **configured root that is not a git
+checkout (or has no commits) is a fatal usage error at sessionstart**;
+only an *unconfigured* root records null; the manifest round-trip test
+carries the field.
 
 Green:
 
 - `RunManifest.cece_commit: str | None = Field(None, description=…)` —
-  the CECE checkout's HEAD commit SHA, null when no checkout is
-  configured or it is not a git repository.
-- A small helper (`git -C <root_dir> rev-parse HEAD` via subprocess,
-  swallowing every failure to `None` — recording must never break a
-  run) called once at sessionstart; `combo_roots` writes it into the
-  manifest. README (Results/run.yaml description) and
-  `design/design.md` updated.
+  the CECE checkout's HEAD commit SHA; null **only** when no checkout
+  is configured.
+- `settings.cece_commit_sha(root_dir)` (`git -C <root_dir> rev-parse
+  HEAD`) **raises ValueError on any failure** — sessions always run
+  against a checked-out CECE, so an unresolvable SHA is a
+  misconfiguration, not a recordable state. Sessionstart converts it
+  to the standard usage error (before any work; configured-root
+  sessions therefore fail fast on non-checkout roots), stashes the
+  value, and `combo_roots` writes it into the manifest. Harness tests
+  that fabricate CECE-shaped roots git-init them. README
+  (Results/run.yaml description) and `design/design.md` updated.
 
 ### Phase 2 — the workflow (`.github/workflows/integration.yaml`)
 
@@ -236,8 +242,9 @@ on the job (recorded in this doc's notes when it happens).
 
 ## Acceptance criteria
 
-1. run.yaml contains `cece_commit` (the checkout's HEAD SHA; null
-   without a git checkout), unit-tested both ways.
+1. run.yaml contains `cece_commit` (the checkout's HEAD SHA; null only
+   when no checkout is configured; a configured root that is not a git
+   checkout fails the session at start), unit-tested all three ways.
 2. `.github/workflows/integration.yaml` exists: PRs to `develop` plus
    pushes to `develop` (the cache-warming trigger); CECE
    `feature/helm` cloned with recursive submodules; image built
@@ -252,7 +259,55 @@ on the job (recorded in this doc's notes when it happens).
 
 ## Implementation notes
 
-(To be filled during implementation.)
+**Outcome: implemented 2026-07-27; local mirror green; the real
+workflow run awaits the user's PR (report-back loop follows).**
+
+- **Phase 1 (`cece_commit`)**: `settings.cece_commit_sha(root_dir)` —
+  `git -C <root> rev-parse HEAD`, **raising ValueError on every
+  failure mode** (not a repo, no commits, git missing/failing/timeout)
+  per the fatal-error direction; sessionstart converts to a usage
+  error for configured roots, records null only for an unconfigured
+  root, and stashes the value (`_CECE_COMMIT`) for `combo_roots` to
+  write. `RunManifest.cece_commit` (`Field(description=…)`, null only
+  without a checkout). Red-green tests: helper SHA/raise (non-repo,
+  commit-less repo); a subprocess dry-run against a git-inited root
+  asserts run.yaml carries the exact HEAD SHA; a new guard test
+  asserts a configured non-checkout root is a usage error naming the
+  path. Ripple: every harness test that fabricates a CECE-shaped root
+  and reaches sessionstart now git-inits it (examples-gating fake
+  root, dry-run roots, root-dir-guard flag tests — the flag-wins test
+  deliberately repo-ifies only the winning root).
+- **Phase 2 (`.github/workflows/integration.yaml`)**: as designed —
+  PR-to-develop + push-to-develop triggers (cache warming),
+  `integration-${{ github.ref }}` concurrency, `timeout-minutes: 60`,
+  env-parameterized `ufs-community/CECE` @ `feature/helm`, recursive
+  submodule checkout into `cece/`, `build-push-action` with
+  `type=gha,scope=cece-image` cache and `load: true` as
+  `cece/cece-dev`, `actions/cache` on `cece/build`
+  (`cece-build-<sha>` + prefix restore-key) feeding
+  `build-and-test-container.py --no-test`, `actions/cache` on
+  `cece/data` (`maccity-data-v2014-07`) feeding
+  `download-example-data.py --example ex3`, `setup-uv@v6` pinned to
+  python 3.14, the suite run with
+  `CECE_ENABLE_BASELINE_COMPARISONS=false` and
+  `--combo-output-root=ctr-ci-output`, and an `if: always()`
+  `upload-artifact` of `cece/ctr-ci-output` named by run id +
+  attempt. The header comment carries the baselines TODO and the
+  merge-sequencing note (blocking now; `continue-on-error: true`
+  added as the final pre-merge commit).
+- **Local mirror verification**: with baselines off,
+  `simple-maccity-suite.yaml` = **18 passed + 3 skipped** (exactly the
+  CI expectation) and run.yaml's `cece_commit` matched
+  `git rev-parse HEAD` of the checkout byte-for-byte. 214 unit tests
+  green; maccity `--dry-run` green; all 7 pre-commit hooks pass
+  (yamlfix accepted the workflow file unchanged).
+- **Not verifiable locally**: the workflow execution itself
+  (buildx/gha cache behavior, runner wall-clock vs the 10 s per-combo
+  timeout, artifact upload) — user-triggered via the PR; findings from
+  the first real runs land here.
+- **Docs**: README CI section (integration workflow paragraph + local
+  mirror command) and Results tree (`run.yaml` now lists
+  `cece_commit`); `design/design.md` layout block updated likewise.
 
 ---
 
@@ -305,6 +360,24 @@ on the job (recorded in this doc's notes when it happens).
   is not downloadable from anywhere yet. **Re-enabling baselines in CI
   once they have a public home is a standing TODO** (Out of
   scope/Future work).
+- 2026-07-27: **an unresolvable CECE commit is fatal** (user
+  direction, superseding the swallow-to-null first cut): sessions
+  always run against a checked-out CECE, so a configured root whose
+  SHA cannot be determined fails the session at start with a usage
+  error; null is recorded only when no checkout is configured at all.
+  Fabricated CECE roots in the harness tests are git-inited to match.
+- 2026-07-27: **SHA ownership moved into `Settings`** (user
+  direction) — the module-level `cece_commit_sha(root_dir)` became the
+  method `Settings.get_cece_commit_sha()`, which also absorbs the
+  unconfigured-root-returns-None branch; conftest and the tests import
+  only `Settings` (one import fewer, one call site with no ternary).
+- 2026-07-27: **`RunManifest.cece_commit` is required-but-nullable**
+  (user review) — fully non-nullable would kill the checkout-less
+  `--dry-run` flow (a documented feature: suite validation with zero
+  environment), so instead the field lost its default: every writer
+  must state the SHA explicitly, deliberate `null` stays expressible
+  for that one flow, and omission is a validation error no future code
+  path can slip past (unit-tested).
 - 2026-07-27: **second architecture pass** (user request) confirmed
   the host-runner/loaded-image/build-script choices against the real
   files (image 1.28 GB, `BUILD_ESMF=OFF` default, configure

@@ -26,6 +26,25 @@ def _fake_cece_root(tmp_path: Path) -> tuple[Path, Path]:
     (root / DOWNLOAD_ENTRYPOINT).write_text(
         f"import pathlib\npathlib.Path({str(marker)!r}).touch()\n"
     )
+    # A configured root must be a git checkout (the run.yaml SHA is fatal
+    # otherwise).
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "fabricated",
+        ],
+        cwd=root,
+        check=True,
+    )
     return root, marker
 
 
