@@ -122,6 +122,31 @@ Second architecture pass (verified 2026-07-27):
     CI deliberately tests upstream as-is; if upstream later regresses,
     this job is the alarm, which is its purpose.
 
+Third pass — diagnosis of the first real CI runs (2026-07-27):
+
+13. **Consistent failures at ~78%, compiling gmock** (`_deps/
+    googletest-build/.../gmock-all.cc.o`), presenting as a timeout.
+    Three compounding causes, not a mysterious flake:
+    - `build-and-test-container.py` runs `cmake --build build -j` —
+      **bare `-j` is unlimited parallelism**, a memory-thrash/OOM
+      recipe on a 4-vCPU/16 GB GitHub runner with heavy template TUs
+      (Kokkos, ArborX) compiling alongside googletest.
+    - The build phase compiles the default **"all" target** — every
+      C++ test executable plus googletest/rapidcheck — none of which
+      this job needs. `gmock` is not in `cece_standalone_driver`'s
+      dependency graph at all.
+    - **The build cache never saves**: `actions/cache` persists in a
+      post-job hook that a `timeout-minutes` kill doesn't reliably
+      reach, so every run restarts cold and dies at the same spot —
+      the "consistent failure" is a cold-build loop, not one bug.
+14. **The fix requires modifying CECE**, so CI retargets to the fork
+    branch under our control: `benkozi/CECE @ fix/all-examples-pass`
+    (the working checkout of this whole effort). Retargeting back
+    upstream later is the one-line env edit the workflow was designed
+    for. A Dockerfile `BUILD_TEST_DEPS` arg was considered and
+    rejected — test deps enter at CMake time inside the mounted
+    checkout, not at image build, so the image has no knob to hold.
+
 ## Design
 
 ### Phase 1 — runner: `cece_commit` in run.yaml (red-green)
@@ -157,8 +182,10 @@ concurrency-cancelled per ref under its own group
 (`integration-${{ github.ref }}`, distinct from ci.yaml's), single job
 `simple-maccity` (`runs-on: ubuntu-latest`, an explicit
 `timeout-minutes` around 60 so a wedged driver can't burn a 6-hour
-default). Env at the top: `CECE_REPOSITORY` (`ufs-community/CECE`) and
-`CECE_REF` (`feature/helm`) so the target is one edit. Steps:
+default). Env at the top: `CECE_REPOSITORY` (**`benkozi/CECE`**) and
+`CECE_REF` (**`fix/all-examples-pass`**) — the fork branch carrying the
+CECE-side script change (audit item 14); retargeting upstream later is
+this one edit. Steps:
 
 1. **Checkouts**: the runner repo, and CECE via `actions/checkout`
    with `repository`/`ref` from env, `path: cece`,
@@ -168,15 +195,24 @@ default). Env at the top: `CECE_REPOSITORY` (`ufs-community/CECE`) and
    `load: true`, `tags: cece/cece-dev` — the host daemon ends up with
    the image the runner and CECE tooling both expect; nothing is
    pushed off-runner.
-3. **CECE build, cached**: `actions/cache` on `cece/build` keyed
-   `cece-build-<CECE SHA>` with a prefix restore-key (stale-tree
-   incremental rebuilds are cmake's normal case), then
-   `cece/scripts/build-and-test-container.py --no-test` — CECE's own
-   entrypoint compiles the driver in the already-present image
-   (verified: the script never builds an image, and its configure
-   step self-skips when the restored `build/CMakeCache.txt` exists,
-   so a warm cache goes straight to the incremental build; ESMF stays
-   off via the Dockerfile's `BUILD_ESMF=OFF` default).
+3. **CECE build, cached and bounded** (reworked per audit item 13):
+   `actions/cache/restore` on `cece/build` keyed
+   `cece-build-<CECE SHA>` with a prefix restore-key, then
+
+   ```
+   cece/scripts/build-and-test-container.py --no-test \
+     --target cece_standalone_driver --jobs 4
+   ```
+
+   — the driver target only (googletest/gmock never compile; they are
+   not in its dependency graph) at bounded parallelism, via CECE's own
+   entrypoint (verified: no image build; configure self-skips on a
+   restored `build/CMakeCache.txt`; ESMF off via `BUILD_ESMF=OFF`).
+   The save half is an explicit **`actions/cache/save` step with
+   `if: always()`** so a timed-out or failed build still persists its
+   partial tree and the next run resumes incrementally — turning the
+   cold-build failure loop into convergence. (Saving under an
+   already-existing key is a non-fatal warning.)
 4. **Data, cached**: `actions/cache` on `cece/data` keyed by the
    dataset identity (`maccity-data-v2014-07`), then
    `python3 cece/examples/download-example-data.py --example ex3
@@ -206,6 +242,24 @@ default). Env at the top: `CECE_REPOSITORY` (`ufs-community/CECE`) and
 **Allowed-to-fail flip**: developed and reviewed with the job blocking;
 the branch's final commit before merge adds `continue-on-error: true`
 on the job (recorded in this doc's notes when it happens).
+
+### CECE-side change (`scripts/build-and-test-container.py`, fork branch)
+
+Two flags, keeping the script's name and phase semantics (`--no-build`/
+`--no-test` already subset phases; these subset *what the build phase
+builds*):
+
+- `--target NAME` (repeatable; default: the "all" target as today) —
+  forwarded as `cmake --build build --target …`. Generic beats a
+  bespoke no-test-build flag: CMake has no "everything except tests"
+  target, so the honest mechanics are "build these targets".
+- `--jobs N` (default: `os.cpu_count()`) — replaces the unbounded bare
+  `-j`, fixing a latent footgun for every caller, not just CI.
+
+No rename (the default invocation still builds and tests; the name
+stays true) and no CMake `BUILD_TESTING` gating — configure-time
+leanness is a possible later CECE refinement, unnecessary for this
+job since `--target` already skips compiling the test stack.
 
 ### Out of scope (deliberately)
 
@@ -305,6 +359,20 @@ workflow run awaits the user's PR (report-back loop follows).**
   (buildx/gha cache behavior, runner wall-clock vs the 10 s per-combo
   timeout, artifact upload) — user-triggered via the PR; findings from
   the first real runs land here.
+- **CI-failure fix round (2026-07-28, after the first real runs)**:
+  per the third-pass diagnosis (audit items 13–14),
+  `build-and-test-container.py` gained `--target` (repeatable,
+  append) and `--jobs` (default `os.cpu_count()`), with `build()`
+  emitting `cmake --build build -j N [--target …]`; the workflow now
+  targets `benkozi/CECE @ fix/all-examples-pass`, builds only
+  `cece_standalone_driver` at `--jobs 4`, and splits the build cache
+  into `actions/cache/restore` + `if: always()` `actions/cache/save`
+  so partial cold builds persist and converge. Verified locally: the
+  exact CI invocation builds the driver (incremental, no
+  googletest/gmock compiled), `--help` documents both flags, runner
+  hooks 7/7, and the baselines-off maccity mirror stays 18 + 3. The
+  script change lives in the CECE fork checkout (user commits there);
+  real-run confirmation on the next CI trigger.
 - **Docs**: README CI section (integration workflow paragraph + local
   mirror command) and Results tree (`run.yaml` now lists
   `cece_commit`); `design/design.md` layout block updated likewise.
@@ -371,6 +439,19 @@ workflow run awaits the user's PR (report-back loop follows).**
   method `Settings.get_cece_commit_sha()`, which also absorbs the
   unconfigured-root-returns-None branch; conftest and the tests import
   only `Settings` (one import fewer, one call site with no ternary).
+- 2026-07-27: **CI-failure diagnosis and the CECE-side fix** (user
+  direction after consistent ~78% gmock failures): root causes are
+  unbounded `-j`, building the unneeded "all" target, and a build
+  cache that never saves on timeout (audit item 13). Fix:
+  `build-and-test-container.py` gains `--target` (repeatable) and
+  `--jobs` (default `os.cpu_count()`); the workflow builds only
+  `cece_standalone_driver` at `--jobs 4` and splits the build cache
+  into restore + `if: always()` save so partial cold builds converge.
+  CI retargets to `benkozi/CECE @ fix/all-examples-pass` — the fork
+  branch we can modify; upstream retarget stays a one-line env edit.
+  A Dockerfile `BUILD_TEST_DEPS` arg was considered and rejected
+  (test deps enter at CMake time, not image build); a CMake
+  `BUILD_TESTING` gate remains a possible later CECE refinement.
 - 2026-07-27: **`RunManifest.cece_commit` is required-but-nullable**
   (user review) — fully non-nullable would kill the checkout-less
   `--dry-run` flow (a documented feature: suite validation with zero
