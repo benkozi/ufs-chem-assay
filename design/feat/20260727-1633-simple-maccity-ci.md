@@ -371,8 +371,9 @@ workflow run awaits the user's PR (report-back loop follows).**
   exact CI invocation builds the driver (incremental, no
   googletest/gmock compiled), `--help` documents both flags, runner
   hooks 7/7, and the baselines-off maccity mirror stays 18 + 3. The
-  script change lives in the CECE fork checkout (user commits there);
-  real-run confirmation on the next CI trigger.
+  script change lives in the CECE fork checkout (user commits there).
+  **Confirmed 2026-07-28: the real CI run passes with the fix** — the
+  driver-only bounded build eliminated the ~78% gmock failure.
 - **Docs**: README CI section (integration workflow paragraph + local
   mirror command) and Results tree (`run.yaml` now lists
   `cece_commit`); `design/design.md` layout block updated likewise.
