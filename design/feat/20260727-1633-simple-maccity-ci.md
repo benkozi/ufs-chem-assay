@@ -388,6 +388,12 @@ workflow run awaits the user's PR (report-back loop follows).**
   changed on this branch except this record. Standing dependency for
   any future retarget (develop or upstream): the target ref must
   carry the `--target`/`--jobs` script flags first.
+- **Pre-merge flip applied (2026-09-01, user direction)**: the
+  `simple-maccity` job now carries `continue-on-error: true` — the
+  designed final pre-merge step, closing the merge-sequencing thread.
+  The workflow header notes the consequence: the workflow reports
+  green even when the job fails, so the job's own status is the
+  signal to watch. The branch is merge-ready.
 - **Docs**: README CI section (integration workflow paragraph + local
   mirror command) and Results tree (`run.yaml` now lists
   `cece_commit`); `design/design.md` layout block updated likewise.

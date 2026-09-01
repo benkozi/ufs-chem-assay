@@ -12,9 +12,9 @@
 # store has no public home yet. TODO: re-enable once it does (see
 # design/feat/20260727-1633-simple-maccity-ci.md).
 #
-# Merge sequencing: this job runs BLOCKING while the feature PR is open;
-# the branch's final pre-merge commit adds `continue-on-error: true` on the
-# job so the long end-to-end run never blocks unrelated PRs to develop.
+# The job is allowed to fail (continue-on-error): the long end-to-end run
+# must never block PRs to develop. Check the job's own status — a red
+# simple-maccity is a real finding even when the workflow reports green.
 name: integration
 on:
   pull_request:
@@ -36,6 +36,8 @@ env:
 jobs:
   simple-maccity:
     runs-on: ubuntu-latest
+    # Allowed to fail: the e2e run never blocks merges (see header note).
+    continue-on-error: true
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
