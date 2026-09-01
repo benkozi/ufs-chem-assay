@@ -399,6 +399,22 @@ workflow run awaits the user's PR (report-back loop follows).**
   baseline-comparison tests skip in CI. Precise counts remain only in
   this doc's implementation notes as dated verification evidence,
   where staleness is expected and harmless.
+- **Warm-cache failure diagnosed and fixed (2026-09-01)**: the first
+  post-flip run pair exposed a uid pathology in the build-cache round
+  trip — run 1 (cold) was green end-to-end and saved `cece/build`;
+  run 2 restored it and died in 17 s at the build step with
+  `fatal: detected dubious ownership in repository at
+  '/work/build/_deps/arborx-src'`. Mechanism: the cold build's
+  FetchContent git clones are created in-container as **root**;
+  `actions/cache` tars and untars as the **runner user**, re-owning
+  the restored tree to uid 1001; the container's root-run git then
+  fails git ≥ 2.35's `safe.directory` owner check during the CMake
+  re-run, so the configure dies before any compilation (warm-only,
+  seconds-fast — cold clones never change owner, which is why run 1
+  passed). Fix: a workflow-only step after the restore —
+  `sudo chown -R 0:0 cece/build` — returning the tree to the exact
+  ownership a cold build produces. The failed run also demonstrated
+  the flip semantics working: job red, workflow green.
 - **Pre-merge flip applied (2026-09-01, user direction)**: the
   `simple-maccity` job now carries `continue-on-error: true` — the
   designed final pre-merge step, closing the merge-sequencing thread.

@@ -70,6 +70,14 @@ jobs:
           key: cece-build-${{ steps.cece.outputs.sha }}
           restore-keys: |
             cece-build-
+      # The cache round-trip re-owns the tree to the runner user, but the
+      # container builds as root — and the FetchContent git clones under
+      # build/_deps then trip git's safe.directory check ("dubious
+      # ownership": repo owner != git's uid), killing the configure re-run.
+      # Hand the restored tree back to root, matching the cold-build state.
+      - name: Re-own the restored build tree for the container
+        run: |
+          if [ -d cece/build ]; then sudo chown -R 0:0 cece/build; fi
       - name: Cache the maccity dataset
         uses: actions/cache@v4
         with:
