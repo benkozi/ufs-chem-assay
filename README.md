@@ -223,17 +223,18 @@ docker run --rm -v "$PWD":/repo -w /repo combo-test-runner:dev \
 
 Pull requests targeting `develop` (and pushes to `develop`, which exist
 to warm the shared caches) additionally run
-`.github/workflows/integration.yaml`: CECE's `feature/helm` branch is
-cloned (nested submodules), its container image built through the buildx
-cache and loaded as `cece/cece-dev`, the driver compiled in the container
-(`build/` cached by CECE commit), the maccity dataset downloaded via
-CECE's own `ex3` data set (cached), and `simple-maccity-suite.yaml` runs
-for real — 18 passed + 3 skipped, the skips being the suite's baseline
-comparisons (`CECE_ENABLE_BASELINE_COMPARISONS=false`: the baseline
-store has no public download source yet — re-enabling is a standing
-TODO). The full output root uploads as a workflow artifact on success
-and failure alike; `run.yaml` records the exact CECE commit
-(`cece_commit`). Mirror it locally:
+`.github/workflows/integration.yaml`: the CECE repository and ref named
+in the workflow's `env` block are cloned (nested submodules), the
+container image built through the buildx cache and loaded as
+`cece/cece-dev`, the driver compiled in the container (`build/` cached
+by CECE commit), the maccity dataset downloaded via CECE's own `ex3`
+data set (cached), and `simple-maccity-suite.yaml` runs for real.
+Baseline-comparison tests skip in CI
+(`CECE_ENABLE_BASELINE_COMPARISONS=false`: the baseline store has no
+public download source yet — re-enabling is a standing TODO). The full
+output root uploads as a workflow artifact on success and failure
+alike; `run.yaml` records the exact CECE commit (`cece_commit`). Mirror
+it locally:
 
 ```sh
 CECE_ENABLE_BASELINE_COMPARISONS=false uv run pytest \

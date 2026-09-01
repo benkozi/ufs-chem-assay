@@ -388,6 +388,17 @@ workflow run awaits the user's PR (report-back loop follows).**
   changed on this branch except this record. Standing dependency for
   any future retarget (develop or upstream): the target ref must
   carry the `--target`/`--jobs` script flags first.
+- **PR #2 review response (2026-09-01)**: two review comments, both on
+  the README's integration-CI paragraph, both applied: (1) the
+  specific CECE branch name is gone — the paragraph now points at "the
+  repository and ref named in the workflow's `env` block", which stays
+  true through retargets (the flagged text still said `feature/helm`
+  while the workflow had moved on: the fragility proving itself);
+  (2) the exact test counts ("18 passed + 3 skipped") are replaced
+  with the qualitative statement that the suite runs for real and
+  baseline-comparison tests skip in CI. Precise counts remain only in
+  this doc's implementation notes as dated verification evidence,
+  where staleness is expected and harmless.
 - **Pre-merge flip applied (2026-09-01, user direction)**: the
   `simple-maccity` job now carries `continue-on-error: true` — the
   designed final pre-merge step, closing the merge-sequencing thread.
