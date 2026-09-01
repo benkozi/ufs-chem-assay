@@ -374,6 +374,20 @@ workflow run awaits the user's PR (report-back loop follows).**
   script change lives in the CECE fork checkout (user commits there).
   **Confirmed 2026-07-28: the real CI run passes with the fix** — the
   driver-only bounded build eliminated the ~78% gmock failure.
+- **Retarget to `develop` attempted and reverted (2026-09-01)**: a
+  move of `CECE_REF` to the fork's `develop` was requested, and the
+  retarget audit found `develop` (through the PR #46
+  TIDE-removal/HELM restructure) does **not** contain the
+  `--target`/`--jobs` script change — the build step would die on an
+  unknown argument until that change lands there. On that finding the
+  user reverted the direction: **CI stays on
+  `benkozi/CECE @ fix/all-examples-pass`**, whose remote head
+  (`c480810`, 2026-07-28) is exactly the state the green CI run
+  exercised and has not moved since. The workflow and the local CECE
+  checkout were restored to their pre-retarget state; nothing
+  changed on this branch except this record. Standing dependency for
+  any future retarget (develop or upstream): the target ref must
+  carry the `--target`/`--jobs` script flags first.
 - **Docs**: README CI section (integration workflow paragraph + local
   mirror command) and Results tree (`run.yaml` now lists
   `cece_commit`); `design/design.md` layout block updated likewise.
