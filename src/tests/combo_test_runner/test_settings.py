@@ -4,6 +4,7 @@ shell cannot influence assertions, and chdir to tmp_path so the repo-root
 .env file is out of scope (each test opts in by writing its own)."""
 
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -93,3 +94,59 @@ def test_init_kwarg_beats_env_file(
 ) -> None:
     (tmp_path / ".env").write_text("cece_root_dir=/from/dotenv\n")
     assert Settings(root_dir=Path("/from/flag")).root_dir == Path("/from/flag")
+
+
+# -- cece_commit_sha: the checkout's HEAD SHA for run.yaml -------------------
+
+
+def _git_repo_with_commit(path: Path) -> str:
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+        cwd=path,
+        check=True,
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return head.stdout.strip()
+
+
+def test_cece_commit_sha_of_git_checkout(tmp_path: Path) -> None:
+    expected = _git_repo_with_commit(tmp_path)
+    assert Settings(root_dir=tmp_path).get_cece_commit_sha() == expected
+    assert len(expected) == 40
+
+
+def test_cece_commit_sha_raises_for_non_repo(tmp_path: Path) -> None:
+    # Sessions always run against a checked-out CECE: a configured root
+    # without a resolvable SHA is fatal, not a recordable state.
+    with pytest.raises(ValueError, match="git checkout"):
+        Settings(root_dir=tmp_path).get_cece_commit_sha()
+
+
+def test_cece_commit_sha_raises_for_repo_without_commits(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    with pytest.raises(ValueError, match="rev-parse"):
+        Settings(root_dir=tmp_path).get_cece_commit_sha()
+
+
+def test_cece_commit_sha_none_when_no_checkout_configured() -> None:
+    # An explicit None root (init kwarg beats env) means "no checkout":
+    # recorded as null, never an error.
+    assert Settings(root_dir=None).get_cece_commit_sha() is None

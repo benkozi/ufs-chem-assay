@@ -399,6 +399,16 @@ class RunManifest(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     run_id: str  # session ULID; its timestamp encodes the run start
+    # Required-but-nullable: every writer must state the SHA explicitly —
+    # null is the deliberate "no checkout configured" record (checkout-less
+    # dry-runs), never an accidental omission.
+    cece_commit: str | None = Field(
+        description=(
+            "HEAD commit SHA of the CECE checkout the session ran against; "
+            "null only when no checkout is configured (a configured root "
+            "without a resolvable SHA fails the session at start)"
+        ),
+    )
     suites: list[SuiteConfig]
 
     def to_yaml(self, path: Path) -> None:

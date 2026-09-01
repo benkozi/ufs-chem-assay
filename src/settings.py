@@ -1,4 +1,5 @@
 import os
+import subprocess
 from pathlib import Path
 from typing import Annotated
 
@@ -58,3 +59,34 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [Path(part) for part in value.split(os.pathsep) if part]
         return value
+
+    def get_cece_commit_sha(self) -> str | None:
+        """HEAD commit SHA of the CECE checkout, for the run.yaml record.
+
+        None when no checkout is configured (root_dir unset). A session
+        always runs against a checked-out CECE, so a configured root whose
+        SHA cannot be determined (not a git repository, no commits, git
+        missing or failing) is a fatal misconfiguration: ValueError,
+        converted to a usage error at sessionstart before any work runs."""
+        if self.root_dir is None:
+            return None
+        try:
+            completed = subprocess.run(
+                ["git", "-C", str(self.root_dir), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ValueError(
+                f"cannot determine the CECE commit for {self.root_dir}: {exc}"
+            ) from exc
+        sha = completed.stdout.strip()
+        if completed.returncode != 0 or not sha:
+            detail = completed.stderr.strip() or "git produced no output"
+            raise ValueError(
+                f"cannot determine the CECE commit for {self.root_dir}: git "
+                f"rev-parse HEAD failed ({detail}); the CECE root must be a "
+                "git checkout"
+            )
+        return sha

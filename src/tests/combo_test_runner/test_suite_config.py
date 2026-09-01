@@ -386,7 +386,9 @@ def test_expanded_regex_recorded_in_run_manifest(
     suite_file = tmp_path / "manifest-regex-suite.yaml"
     suite_file.write_text(_regex_suite_text(cece_config_path, "cons.*"))
     suite = SuiteConfig.from_yaml(suite_file)
-    manifest = RunManifest(run_id="01JZZZZZZZZZZZZZZZZZZZZZZZ", suites=[suite])
+    manifest = RunManifest(
+        run_id="01JZZZZZZZZZZZZZZZZZZZZZZZ", cece_commit=None, suites=[suite]
+    )
     manifest_path = tmp_path / "run.yaml"
     manifest.to_yaml(manifest_path)
     dumped = yaml.safe_load(manifest_path.read_text())
@@ -452,12 +454,24 @@ def test_run_manifest_round_trips_through_yaml(
 ) -> None:
     # suites is a list in selection order — one element for single-suite runs.
     suite = SuiteConfig.from_yaml(suite_path)
-    manifest = RunManifest(run_id="01JZZZZZZZZZZZZZZZZZZZZZZZ", suites=[suite])
+    manifest = RunManifest(
+        run_id="01JZZZZZZZZZZZZZZZZZZZZZZZ", cece_commit=None, suites=[suite]
+    )
     manifest_path = tmp_path / "run.yaml"
     manifest.to_yaml(manifest_path)
 
     reloaded = RunManifest.model_validate(yaml.safe_load(manifest_path.read_text()))
     assert reloaded.run_id == manifest.run_id
+    assert reloaded.cece_commit is None  # explicit null round-trips
     (reloaded_suite,) = reloaded.suites
     assert reloaded_suite.config_path == suite.config_path
     assert reloaded_suite.sweep == suite.sweep
+
+
+def test_run_manifest_requires_explicit_cece_commit(suite_path: Path) -> None:
+    # Required-but-nullable: omitting the SHA is a validation error, so no
+    # writer can silently record null by accident; deliberate null stays
+    # expressible for checkout-less dry-runs.
+    suite = SuiteConfig.from_yaml(suite_path)
+    with pytest.raises(ValidationError, match="cece_commit"):
+        RunManifest(run_id="01JZZZZZZZZZZZZZZZZZZZZZZZ", suites=[suite])  # type: ignore[call-arg]

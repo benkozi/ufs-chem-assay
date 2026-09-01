@@ -87,6 +87,7 @@ class SuiteContext(BaseModel):
 # once at sessionstart (realized roots: once in combo_roots), read everywhere
 # else. StashKey is the sanctioned pattern for hanging state on the config.
 _RUN_ID = pytest.StashKey[str]()
+_CECE_COMMIT = pytest.StashKey[str | None]()
 _SETTINGS = pytest.StashKey[Settings]()
 _SUITE_CONTEXTS = pytest.StashKey[list[SuiteContext]]()
 _EXPLICIT_ROOTS = pytest.StashKey[ComboRoots | None]()
@@ -164,6 +165,15 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         Settings() if root_dir_option is None else Settings(root_dir=root_dir_option)
     )
     configure_logging(settings.log_level)
+
+    # Sessions always run against a checked-out CECE when a root is
+    # configured: an unresolvable commit SHA is a fatal misconfiguration,
+    # surfaced here before any work. No configured root records null.
+    try:
+        config.stash[_CECE_COMMIT] = settings.get_cece_commit_sha()
+    except ValueError as exc:
+        raise pytest.UsageError(str(exc)) from exc
+
     try:
         suite_paths = select_suites(
             config.getoption("--suite-config"),
@@ -503,6 +513,7 @@ def combo_roots(
     roots.host.mkdir(parents=True, exist_ok=True)
     manifest = RunManifest(
         run_id=request.config.stash[_RUN_ID],
+        cece_commit=request.config.stash[_CECE_COMMIT],
         suites=[context.suite for context in request.config.stash[_SUITE_CONTEXTS]],
     )
     manifest.to_yaml(roots.host / "run.yaml")

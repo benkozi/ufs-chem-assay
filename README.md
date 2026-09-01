@@ -221,6 +221,26 @@ docker run --rm -v "$PWD":/repo -w /repo combo-test-runner:dev \
          && uv sync --frozen && uv run pytest src/tests/combo_test_runner'
 ```
 
+Pull requests targeting `develop` (and pushes to `develop`, which exist
+to warm the shared caches) additionally run
+`.github/workflows/integration.yaml`: the CECE repository and ref named
+in the workflow's `env` block are cloned (nested submodules), the
+container image built through the buildx cache and loaded as
+`cece/cece-dev`, the driver compiled in the container (`build/` cached
+by CECE commit), the maccity dataset downloaded via CECE's own `ex3`
+data set (cached), and `simple-maccity-suite.yaml` runs for real.
+Baseline-comparison tests skip in CI
+(`CECE_ENABLE_BASELINE_COMPARISONS=false`: the baseline store has no
+public download source yet — re-enabling is a standing TODO). The full
+output root uploads as a workflow artifact on success and failure
+alike; `run.yaml` records the exact CECE commit (`cece_commit`). Mirror
+it locally:
+
+```sh
+CECE_ENABLE_BASELINE_COMPARISONS=false uv run pytest \
+  src/tests/test_driver_combos.py --suite-config=simple-maccity-suite.yaml
+```
+
 Releases are **manual only**: dispatch `.github/workflows/semantic-release.yml`
 from the Actions tab, picking `develop` (produces `X.Y.Z-rc.N` release
 candidates) or `main` (full releases) in the branch selector — any other
@@ -247,8 +267,12 @@ directory per combination:
 
 ```
 <output-root>/
-  run.yaml                       # run manifest: session ULID + every resolved suite,
-                                 #   in selection order (one-element list when single)
+  run.yaml                       # run manifest: session ULID, the CECE checkout's
+                                 #   HEAD commit SHA (cece_commit; null only when no
+                                 #   checkout is configured — a configured root that
+                                 #   is not a git checkout fails the session at
+                                 #   start), and every resolved suite in selection
+                                 #   order (one-element list when single)
   combos.csv                     # effective-parameter table: one row per sweepable
                                  #   dimension per combo (columns: run_id, combo_id,
                                  #   suite, name, target, field, value, swept)
