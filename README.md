@@ -1,9 +1,6 @@
 # ufs-chem-assay
 
-The UFS-Chem testing, verification, and benchmarking harness. Today it is a
-combinatorial pytest suite for CECE's `cece_standalone_driver`; CATChem is
-planned as the second application (see
-[design/spike/20260901-1229-rename-and-plan-for-catchem.md](design/spike/20260901-1229-rename-and-plan-for-catchem.md)).
+The UFS-Chem testing, verification, and benchmarking harness.
 
 Combinations of enum-valued driver options (declared in a suite file, e.g.
 `src/tests/config/suite/simple-maccity-suite.yaml`) are rendered to YAML
