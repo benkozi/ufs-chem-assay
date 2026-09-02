@@ -6,7 +6,7 @@ Add an integration CI job that runs the real thing: clone CECE's
 `feature/helm` branch, build the CECE container image (cached), compile
 CECE inside it (build directory cached), download the one dataset the
 maccity suite needs, and run `simple-maccity-suite.yaml` through the
-combo-test-runner without `--dry-run` — uploading the full output root
+harness without `--dry-run` — uploading the full output root
 (run.yaml, combos.csv, test-report.csv, stats, plots, NetCDF, cece.log)
 as a workflow artifact. Alongside, one small runner feature: **run.yaml
 records the CECE commit SHA** the session ran against, so every stored
@@ -227,14 +227,14 @@ this one edit. Steps:
    CECE_ENABLE_BASELINE_COMPARISONS=false \
    uv run pytest src/tests/test_driver_combos.py \
      --suite-config=simple-maccity-suite.yaml \
-     --combo-output-root=ctr-ci-output
+     --combo-output-root=ufs-chem-assay-ci-output
    ```
 
    (audit item 5: baselines off — no public baseline store yet; the
    explicit output root resolves into the CECE checkout at
-   `cece/ctr-ci-output`, a plain host path the upload step can reach.)
+   `cece/ufs-chem-assay-ci-output`, a plain host path the upload step can reach.)
 6. **Artifacts, always**: `actions/upload-artifact` (`if: always()`)
-   of `cece/ctr-ci-output/` — run.yaml (now carrying `cece_commit`),
+   of `cece/ufs-chem-assay-ci-output/` — run.yaml (now carrying `cece_commit`),
    combos.csv, test-report.csv, stats CSVs, plots/GIFs, driver NetCDF,
    `.out`, and `cece.log` per combo; named with the run attempt so
    retries don't collide.
@@ -276,7 +276,7 @@ job since `--target` already skips compiling the test stack.
 ## Verification
 
 - Runner unit tests (new `cece_commit` tests + existing) via
-  `uv run pytest src/tests/combo_test_runner`; all suites still pass
+  `uv run pytest src/tests/ufs_chem_assay`; all suites still pass
   `--dry-run`.
 - `simple-maccity-suite.yaml` without `--dry-run` locally: 18 passed +
   3 baseline skips with `CECE_ENABLE_BASELINE_COMPARISONS=false`
@@ -344,8 +344,8 @@ workflow run awaits the user's PR (report-back loop follows).**
   `download-example-data.py --example ex3`, `setup-uv@v6` pinned to
   python 3.14, the suite run with
   `CECE_ENABLE_BASELINE_COMPARISONS=false` and
-  `--combo-output-root=ctr-ci-output`, and an `if: always()`
-  `upload-artifact` of `cece/ctr-ci-output` named by run id +
+  `--combo-output-root=ufs-chem-assay-ci-output`, and an `if: always()`
+  `upload-artifact` of `cece/ufs-chem-assay-ci-output` named by run id +
   attempt. The header comment carries the baselines TODO and the
   merge-sequencing note (blocking now; `continue-on-error: true`
   added as the final pre-merge commit).
@@ -432,7 +432,7 @@ workflow run awaits the user's PR (report-back loop follows).**
 ## always do
 
 - include updating design.md as part of the implementation
-- update combo-test-runner tests in addition to any changes to test_driver_combos.py
+- update the harness tests (`src/tests/ufs_chem_assay`) in addition to any changes to test_driver_combos.py
 - update README.md with any necessary documentation changes in case of an api adjustment
 - use pydantic models as opposed to dataclasses
   - all pydantic fields should include a description like `... = Field(description="<description content here>", ...`
@@ -464,8 +464,8 @@ workflow run awaits the user's PR (report-back loop follows).**
 - ci job is allowed to fail
 - ci job is run on pull requests to develop
 - ci job should fail but before merge we will change to allow to fail before merge develop. note in design.
-- store output cece artifacts from the combo-test-runner
-- update combo-test-runner to store the current cece commit sha in the output run.yaml
+- store output cece artifacts from the harness
+- update the harness to store the current cece commit sha in the output run.yaml
 
 ## conversational updates
 

@@ -1,7 +1,7 @@
 [project]
-name = "combo-test-runner"
+name = "ufs-chem-assay"
 version = "0.1.0"
-description = "Combinatorial pytest runner for cece_standalone_driver"
+description = "UFS-Chem testing, verification, and benchmarking harness: a combinatorial pytest suite for cece_standalone_driver"
 requires-python = ">=3.11"
 dependencies = [
     "cartopy>=0.22",

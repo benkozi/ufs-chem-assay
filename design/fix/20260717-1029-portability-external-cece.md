@@ -33,10 +33,10 @@ default to derive.
    paths are container-side, relative to `/work`, and stay correct as long
    as `/work` is the CECE root.
 4. **Existing touch points to migrate**: the dry-run harness test sets
-   `CECE_ROOT` ([test_dry_run.py:18](src/tests/combo_test_runner/test_dry_run.py:18));
+   `CECE_ROOT` ([test_dry_run.py:18](src/tests/ufs_chem_assay/test_dry_run.py:18));
    unit tests construct `Settings(root=...)`
-   ([test_runner.py:14](src/tests/combo_test_runner/test_runner.py:14),
-   [test_maccity_pipeline.py:26](src/tests/combo_test_runner/test_maccity_pipeline.py:26));
+   ([test_runner.py:14](src/tests/ufs_chem_assay/test_runner.py:14),
+   [test_maccity_pipeline.py:26](src/tests/ufs_chem_assay/test_maccity_pipeline.py:26));
    `README.md` and `design.md` document `CECE_ROOT` in their env-var
    tables and the docker-invocation section.
 
@@ -94,7 +94,7 @@ resolved `root_dir` (whichever source supplied it), and raise
   when a collected item requests `driver_run`** and `--dry-run` is off —
   not unconditionally in `pytest_sessionstart`, because the root conftest
   loads for every pytest invocation, including docker-free harness-only
-  runs (`pytest src/tests/combo_test_runner`) that must stay green with no
+  runs (`pytest src/tests/ufs_chem_assay`) that must stay green with no
   environment. Collection time is still before any test executes, so the
   fail-fast property holds — and it beats an obscure docker mount error
   three fixtures deep.
@@ -167,7 +167,7 @@ testing rules.
   not in this repo; a setup example `export CECE_ROOT_DIR=/path/to/CECE`
   (or the flag equivalent). This is an API adjustment, so the README
   update is mandatory.
-- Pydantic field with description; TDD red-green; combo-test-runner tests
+- Pydantic field with description; TDD red-green; harness tests
   updated alongside any `test_driver_combos.py`-facing change.
 
 ## Acceptance criteria
@@ -217,7 +217,7 @@ testing rules.
 ## always do
 
 - include updating design.md as part of the implementation
-- update combo-test-runner tests in addition to any changes to test_driver_combos.py
+- update the harness tests (`src/tests/ufs_chem_assay`) in addition to any changes to test_driver_combos.py
 - update README.md with any necessary documentation changes in case of an api adjustment
 - use pydantic models as opposed to dataclasses
   - all pydantic fields should include a description like `... = Field(description="<description content here>", ...`

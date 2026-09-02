@@ -7,7 +7,7 @@ Replace CECE's per-example shell download scripts and the geos-chem-only
 `examples/` — `download-example-data.py` and `run-example.py` — driven by
 a single example→data mapping, with simple sequential (blocking)
 downloads, shared enums/logging in `examples/common.py`, and
-example configs moved to `examples/config/`. The combo-test-runner switches to the new
+example configs moved to `examples/config/`. The harness switches to the new
 entrypoints for both download and execution. `<CECE>/data` is left
 intact (known-missing S3 files — CAMS — stay expected-fail).
 
@@ -160,7 +160,7 @@ not to paper over (expected to work: the container runs already resolve
   dev container (`docker run … python3 examples/run-example.py …`) and
   natively (HPC: `python3 examples/run-example.py …` beside a built
   driver, `CECE_EXAMPLES_DRIVER_PATH` for nonstandard build dirs). Per
-  the standing rule, **no combo-test-runner mentions**.
+  the standing rule, **no harness mentions**.
 - `docs/scripts.md`: replace the stale `download_hemco_data.py` and
   `verify_hemco_data.py` sections (both document flags the scripts never
   had) with the new entrypoints.
@@ -305,7 +305,7 @@ not to paper over (expected to work: the container runs already resolve
 ## always do
 
 - include updating design.md as part of the implementation
-- update combo-test-runner tests in addition to any changes to test_driver_combos.py
+- update the harness tests (`src/tests/ufs_chem_assay`) in addition to any changes to test_driver_combos.py
 - update README.md with any necessary documentation changes in case of an api adjustment
 - do *not* add driver bugs to known bugs in `README.md` unless explicitly told to do so
 - use a test-driven development, red-green-refactor approach for all fixes and features (when possible)
@@ -316,7 +316,7 @@ not to paper over (expected to work: the container runs already resolve
 
 ### testing
 
-- combo-test-runner run examples works
+- harness run examples works
 - example downloads should be tested for the data files that are available in known S3 targets
 
 ## requirements
@@ -336,7 +336,7 @@ not to paper over (expected to work: the container runs already resolve
   - accepts all arguments for download script
 - share enums or other code in an examples/helpers/common.py file
 - update examples/README.md documentation to use the new scripts
-- update combo-test-runner to use the new python entrypoints for running the examples
+- update the harness to use the new python entrypoints for running the examples
 - move examples yaml config files to examples/config/
 - leave <CECE>/data intact (we know there are missing data files in S3 locations)
 - add basic python logging to download and run
@@ -355,7 +355,7 @@ not to paper over (expected to work: the container runs already resolve
   also works on HPC platforms without docker. Consequences: example
   configs switch from `/work/data/…` to relative `data/…` paths
   (resolved against the repo-root cwd, identical in-container and
-  native); the combo-test-runner keeps the docker wrapping on its side
+  native); the harness keeps the docker wrapping on its side
   and invokes the entrypoint inside the container;
   `CECE_EXAMPLES_DRIVER_PATH` overrides the default
   `build/cece_standalone_driver` location.

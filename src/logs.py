@@ -1,8 +1,11 @@
-"""Logging for the combo test runner: one namespace logger, level from settings."""
+"""Logging for the harness: one namespace logger, level from settings."""
 
 import logging
 
-LOGGER_NAME = "combo_test_runner"
+# The harness name: the one place code names it (logger namespace, plot
+# footer). Kept identical to the repository name for consistency.
+HARNESS_NAME = "ufs-chem-assay"
+LOGGER_NAME = HARNESS_NAME
 
 _FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 

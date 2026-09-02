@@ -45,7 +45,7 @@ model — no custom flags:
 
 ## Implementation notes
 
-- Single change site: `run_driver()` in `combo-test-runner/src/runner.py`,
+- Single change site: `run_driver()` in `src/runner.py`,
   which already owns both the success and failure paths. The test body stays
   a bare `run_driver(...)` call.
 - The combo name for the header is derived from `out_path.stem` (already the

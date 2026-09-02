@@ -118,12 +118,12 @@ analysis never pay cluster startup.
 
 - `src/analysis.py`: `compute_file_stats(nc_path) -> list[VariableStats]`,
   `write_combo_stats_csv(...)`, `concatenate_stats_csvs(...)` — logging via
-  the `combo_test_runner.analysis` logger in the established style.
+  the `ufs-chem-assay.analysis` logger in the established style.
 - New dependencies: `pandas`, `xarray`, `netcdf4`, `dask[distributed]`.
   This is the runner's first heavyweight dependency set — acceptable, since
   the future baseline-comparison work needs the same stack.
 
-## Harness tests (mocked/local, `src/tests/combo_test_runner/`)
+## Harness tests (mocked/local, `src/tests/ufs_chem_assay/`)
 
 - A helper writes a **temporary NetCDF matching real driver output** (`co`
   variable on a small lat/lon grid with a time dimension, written via

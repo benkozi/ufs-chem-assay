@@ -2,8 +2,8 @@
 # pre-commit hook environments. Source is NOT baked — CI and local runs
 # bind-mount the checkout at /repo and run against the /opt/venv here:
 #
-#   docker buildx build --load -t combo-test-runner:dev .
-#   docker run --rm -v "$PWD":/repo -w /repo combo-test-runner:dev \
+#   docker buildx build --load -t ufs-chem-assay:dev .
+#   docker run --rm -v "$PWD":/repo -w /repo ufs-chem-assay:dev \
 #     sh -c 'git config --global --add safe.directory /repo \
 #            && uv sync --frozen && uv run pre-commit run --all-files'
 #

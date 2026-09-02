@@ -4,7 +4,7 @@
 
 - **Always update `design.md`** as part of any implementation that changes
   behavior it describes.
-- **Always update the `combo_test_runner` harness tests** in addition to any
+- **Always update the `ufs_chem_assay` harness tests** in addition to any
   change to `test_driver_combos.py` — the harness is the always-run
   verification layer and must never lag the integration layer.
 - **Always use pydantic models, never dataclasses** (established repo
@@ -35,7 +35,7 @@ expectations:
 The expected timestep count is defined **once**, in the harness conftest:
 
 ```python
-# src/tests/combo_test_runner/conftest.py
+# src/tests/ufs_chem_assay/conftest.py
 MACCITY_N_TIMESTEPS = 3  # simple-maccity.yaml: 3 h at 3600 s, frequency_steps 1
 ```
 
@@ -82,7 +82,7 @@ assertions and the files the tests fabricate.
 ## Acceptance criteria
 
 - All harness tests pass with `MACCITY_N_TIMESTEPS` as the only
-  duration-derived literal (`uv run pytest src/tests/combo_test_runner`).
+  duration-derived literal (`uv run pytest src/tests/ufs_chem_assay`).
 - Integration, with `timeout_s` unchanged at 10: outcomes are reported as
   observed — expected shape is `test_driver_execution`,
   `test_nc_file_count`, and `test_descriptive_stats` passing with

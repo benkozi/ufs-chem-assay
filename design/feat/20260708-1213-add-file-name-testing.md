@@ -80,7 +80,7 @@ is fixed, with no suite edit required. `validate_filenames: false` remains
 available for anyone needing a green run in the interim. The count assertion
 is unaffected either way.
 
-## Harness tests (mocked, `src/tests/combo_test_runner/`)
+## Harness tests (mocked, `src/tests/ufs_chem_assay/`)
 
 - `expected_nc_filenames`: maccity config → `{"cece_20100101_010000.nc"}`;
   multi-step config (6 h, `frequency_steps: 2`) → three names at hours

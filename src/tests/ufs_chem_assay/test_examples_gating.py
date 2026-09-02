@@ -11,7 +11,7 @@ from pathlib import Path
 
 from examples import DOWNLOAD_ENTRYPOINT, EXAMPLES_SUBDIR
 
-_RUNNER_ROOT = Path(__file__).resolve().parents[3]  # combo-test-runner/
+_RUNNER_ROOT = Path(__file__).resolve().parents[3]  # <repo root>/
 _EXAMPLE_TESTS = _RUNNER_ROOT / "src" / "tests" / "test_examples.py"
 _USAGE_ERROR = 4  # pytest.ExitCode.USAGE_ERROR
 

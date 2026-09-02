@@ -9,7 +9,7 @@ ex7 (`amio_worker_threads: 2`) currently produces
 now fails the runner's `test_nc_variable_dimensions` and broke plotting
 (`KeyError: 'lat'`). The fix lives in **AMIO** (the CECE submodule at
 `extern/helm/libs/amio`), with a new AMIO unit test that fails before
-and passes after; the combo-test-runner is not modified — its new
+and passes after; the harness is not modified — its new
 dimension assertion is the acceptance gate: **ex7 passes**.
 
 ## Background (diagnosed this session; recorded in
@@ -171,7 +171,7 @@ the binary, `conf::Config::from_string`, zarr/grib2 registrar stubs,
 
 ## Constraints
 
-- Fix and test live in the AMIO submodule only; **no combo-test-runner
+- Fix and test live in the AMIO submodule only; **no harness
   code changes** (design docs updated at implementation:
   this doc's notes + the 1013 doc's conversational updates when ex7
   goes green).
@@ -191,7 +191,7 @@ the binary, `conf::Config::from_string`, zarr/grib2 registrar stubs,
    `nox(time, lev, lat, lon)` and no synthetic dims in the output.
 3. `simple-maccity-suite.yaml` integration stays 21/21 on the rebuilt
    driver; ex3 stays green.
-4. No combo-test-runner source changes; runner unit tests and
+4. No harness source changes; runner unit tests and
    `--dry-run` unaffected.
 
 ## Implementation notes
@@ -242,7 +242,7 @@ consecutive runs; `nox(time, lev, lat, lon)`, no synthetic dims.**
   canonical-resolution block in
   `src/drivers/netcdf/netcdf_driver.cpp`, the new test file, and its
   registration block in `tests/unit/CMakeLists.txt`. No
-  combo-test-runner code changes (per requirements); runner-side
+  harness code changes (per requirements); runner-side
   design docs updated only.
 
 ---
@@ -252,7 +252,7 @@ consecutive runs; `nox(time, lev, lat, lon)`, no synthetic dims.**
 ## always do
 
 - include updating design.md as part of the implementation
-- update combo-test-runner tests in addition to any changes to test_driver_combos.py
+- update the harness tests (`src/tests/ufs_chem_assay`) in addition to any changes to test_driver_combos.py
 - update README.md with any necessary documentation changes in case of an api adjustment
 - use pydantic models as opposed to dataclasses
   - all pydantic fields should include a description like `... = Field(description="<description content here>", ...`
@@ -278,8 +278,8 @@ consecutive runs; `nox(time, lev, lat, lon)`, no synthetic dims.**
 - add a unit test to amio
   - ensure the added unit test passes
   - no need to run other tests in amio
-- ensure ex7 passes in the combo-test-runner
-  - no changes to combo-test-runner should be needed
+- ensure ex7 passes in the harness
+  - no changes to the harness should be needed
 - as you noted, this issue is probably related to amio threads >= 2
 
 ## conversational updates

@@ -224,7 +224,7 @@ Green:
 
 ## Verification
 
-- Unit tests (new + existing) via `uv run pytest src/tests/combo_test_runner`.
+- Unit tests (new + existing) via `uv run pytest src/tests/ufs_chem_assay`.
 - All checked-in suites pass `--dry-run` — now including
   `ex1-suite.yaml` … `ex7-suite.yaml` (requires `root_dir` for the
   `${CECE_ROOT_DIR}` expansion; `.env` provides it here and CI has the
@@ -295,7 +295,7 @@ Green:
   fullmatch — `--suite-config ex7` does *not* select `ex7-suite.yaml`;
   use the filename or `'ex7.*'`. The Design section was fixed
   accordingly.
-- **Tests**: new `combo_test_runner/test_example_suites.py` (schema
+- **Tests**: new `ufs_chem_assay/test_example_suites.py` (schema
   fields red-green, log-redirect 3-case parametrization, anchor
   resolution/error/priority, per-example checked-in-suite validation
   against a fabricated checkout tree); `test_combos.py` identity-combo
@@ -330,7 +330,7 @@ Green:
 ## always do
 
 - include updating design.md as part of the implementation
-- update combo-test-runner tests in addition to any changes to test_driver_combos.py
+- update the harness tests (`src/tests/ufs_chem_assay`) in addition to any changes to test_driver_combos.py
 - update README.md with any necessary documentation changes in case of an api adjustment
 - use pydantic models as opposed to dataclasses
   - all pydantic fields should include a description like `... = Field(description="<description content here>", ...`

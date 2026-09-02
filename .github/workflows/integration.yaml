@@ -2,7 +2,7 @@
 # clone CECE (nested submodules), build its image (gha buildx cache, loaded
 # into the host daemon as cece/cece-dev), compile the driver in the container
 # (build/ cached by CECE SHA), download the one dataset the suite needs
-# (MACCity_4x5.nc = the ex3 data set, cached), then run the runner on the
+# (MACCity_4x5.nc = the ex3 data set, cached), then run the harness on the
 # host (docker-in-docker avoided) and upload the whole output root.
 #
 # The push trigger exists to create develop-scoped caches PR runs can
@@ -118,7 +118,7 @@ jobs:
           uv sync --frozen
           uv run pytest src/tests/test_driver_combos.py \
             --suite-config=simple-maccity-suite.yaml \
-            --combo-output-root=ctr-ci-output
+            --combo-output-root=ufs-chem-assay-ci-output
       # Success and failure alike: run.yaml (with cece_commit), combos.csv,
       # test-report.csv, stats, plots, NetCDF, .out, cece.log per combo.
       - name: Upload the output root
@@ -126,4 +126,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: simple-maccity-output-${{ github.run_id }}-${{ github.run_attempt }}
-          path: cece/ctr-ci-output
+          path: cece/ufs-chem-assay-ci-output

@@ -9,7 +9,7 @@ question is credibility, not correctness of values — *it says it works, but
 does it?* — so the spike looks only at execution behavior (including
 warnings, which may indicate driver problems), never at NetCDF contents.
 The deliverable is a markdown report under
-`combo-test-runner/design/spike_artifacts/`. **No code changes**: if the
+`design/spike_artifacts/`. **No code changes**: if the
 analysis reveals work requiring code, the report surfaces it as feature
 requirements and the spike is revisited afterward.
 
@@ -47,7 +47,7 @@ skip automatically for combos whose driver run failed.
 ### Command
 
 ```sh
-cd combo-test-runner
+cd <repo root>
 uv run pytest src/tests/test_driver_combos.py \
   --suite-config=src/tests/config/suite/exhaustive-maccity-asserted-suite.yaml \
   -vs 2>&1 | tee <scratch>/exhaustive-session.log
@@ -95,7 +95,7 @@ covers runner code; the analysis leaves no code behind):
 
 ## The report
 
-`combo-test-runner/design/spike_artifacts/` (new directory):
+`design/spike_artifacts/` (new directory):
 
 ```
 design/spike_artifacts/
@@ -157,7 +157,7 @@ uv run pytest src/tests/test_driver_combos.py \
 - report any failures or abnormal output
   - include warnings as they may indiate problems in the driver
 - enable suite "assertions". file count, etc.
-- create a markdown report in combo-test-runner/design/spike_artifacts summarizing failures
+- create a markdown report in design/spike_artifacts summarizing failures
 - no code changes! if code changes are required, surface requirements and we'll make feature and revisit the spike
 - goal: identify anything fishy in the cece execution. it says it works, but does it?
   - only looking at execution, no interest in the output contents at this pointK

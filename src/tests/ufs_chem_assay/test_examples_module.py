@@ -23,6 +23,7 @@ from examples import (
     run_example_command,
     write_examples_report,
 )
+from logs import LOGGER_NAME
 from settings import Settings
 
 
@@ -100,7 +101,7 @@ def test_download_failure_logged_and_does_not_abort(
         ],
     )
 
-    with caplog.at_level(logging.WARNING, logger="combo_test_runner.examples"):
+    with caplog.at_level(logging.WARNING, logger=f"{LOGGER_NAME}.examples"):
         results = download_example_data(cece_root)
 
     assert [result.returncode for result in results] == [1, 0]

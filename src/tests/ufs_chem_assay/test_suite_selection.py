@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-_RUNNER_ROOT = Path(__file__).resolve().parents[3]  # combo-test-runner/
+_RUNNER_ROOT = Path(__file__).resolve().parents[3]  # <repo root>/
 _INTEGRATION_TESTS = _RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"
 _USAGE_ERROR = 4  # pytest.ExitCode.USAGE_ERROR
 

@@ -161,7 +161,7 @@ and found counts.
 ### Logging
 
 - Standard `logging` with per-module loggers under a shared
-  `combo_test_runner` namespace.
+  `ufs-chem-assay` namespace.
 - **Level from the environment**: new setting `log_level`
   (`CECE_LOG_LEVEL`, default `INFO`) on `settings.py`, e.g. `DEBUG` vs
   `INFO`. Applied once at session start (conftest) when configuring the
