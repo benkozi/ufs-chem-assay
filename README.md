@@ -1,7 +1,11 @@
-# combo-test-runner
+# ufs-chem-assay
 
-Combinatorial pytest suite for `cece_standalone_driver`. Combinations of
-enum-valued driver options (declared in a suite file, e.g.
+The UFS-Chem testing, verification, and benchmarking harness. Today it is a
+combinatorial pytest suite for CECE's `cece_standalone_driver`; CATChem is
+planned as the second application (see
+[design/spike/20260901-1229-rename-and-plan-for-catchem.md](design/spike/20260901-1229-rename-and-plan-for-catchem.md)).
+
+Combinations of enum-valued driver options (declared in a suite file, e.g.
 `src/tests/config/suite/simple-maccity-suite.yaml`) are rendered to YAML
 configs and each runs in its own Docker container, followed by per-combo
 assertions on the output (exit code, file counts/names, attributes) and a
@@ -46,7 +50,7 @@ uv run pytest -x                   # fail fast: stop at the first failure
 uv run pytest -k map-consd         # run a subset by combo name
 uv run pytest --combo-clean-root   # delete an existing output root first
 
-uv run pytest src/tests/combo_test_runner      # runner harness only: fast, no docker
+uv run pytest src/tests/ufs_chem_assay                  # harness only: fast, no docker
 uv run pytest src/tests/test_driver_combos.py  # integration only (real docker)
 
 uv run mypy                        # type checking (all of src/; zero errors expected)
@@ -212,13 +216,13 @@ inside it with no `CECE_*` environment at all. Reproduce exactly what CI
 runs locally:
 
 ```sh
-docker buildx build --load -t combo-test-runner:dev .
-docker run --rm -v "$PWD":/repo -w /repo combo-test-runner:dev \
+docker buildx build --load -t ufs-chem-assay:dev .
+docker run --rm -v "$PWD":/repo -w /repo ufs-chem-assay:dev \
   sh -c 'git config --global --add safe.directory /repo \
          && uv sync --frozen && uv run pre-commit run --all-files'
-docker run --rm -v "$PWD":/repo -w /repo combo-test-runner:dev \
+docker run --rm -v "$PWD":/repo -w /repo ufs-chem-assay:dev \
   sh -c 'git config --global --add safe.directory /repo \
-         && uv sync --frozen && uv run pytest src/tests/combo_test_runner'
+         && uv sync --frozen && uv run pytest src/tests/ufs_chem_assay'
 ```
 
 Pull requests targeting `develop` (and pushes to `develop`, which exist

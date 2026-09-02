@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-_RUNNER_ROOT = Path(__file__).resolve().parents[3]  # combo-test-runner/
+_RUNNER_ROOT = Path(__file__).resolve().parents[3]  # <repo root>/
 
 
 def test_dry_run_generates_everything_but_never_executes(tmp_path: Path) -> None:

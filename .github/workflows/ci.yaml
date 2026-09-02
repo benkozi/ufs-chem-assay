@@ -49,12 +49,12 @@ jobs:
         with:
           context: .
           push: true
-          tags: localhost:5000/combo-test-runner:ci
+          tags: localhost:5000/ufs-chem-assay:ci
           cache-from: type=gha
       - name: pre-commit (all files)
         run: |
           docker run --rm -v "$GITHUB_WORKSPACE":/repo -w /repo \
-            localhost:5000/combo-test-runner:ci \
+            localhost:5000/ufs-chem-assay:ci \
             sh -c 'git config --global --add safe.directory /repo \
                    && uv sync --frozen \
                    && uv run pre-commit run --all-files'
@@ -68,7 +68,7 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           docker run --rm -e PR_TITLE -v "$GITHUB_WORKSPACE":/repo -w /repo \
-            localhost:5000/combo-test-runner:ci \
+            localhost:5000/ufs-chem-assay:ci \
             sh -c 'git config --global --add safe.directory /repo \
                    && uv sync --frozen \
                    && printf "%s\n" "$PR_TITLE" > /tmp/pr-title.txt \
@@ -93,14 +93,14 @@ jobs:
         with:
           context: .
           push: true
-          tags: localhost:5000/combo-test-runner:ci
+          tags: localhost:5000/ufs-chem-assay:ci
           cache-from: type=gha
       # No CECE_* environment and no .env: the harness suite is hermetic
       # and mocks CECE_ROOT_DIR itself where needed.
-      - name: combo-test-runner tests
+      - name: harness tests
         run: |-
           docker run --rm -v "$GITHUB_WORKSPACE":/repo -w /repo \
-            localhost:5000/combo-test-runner:ci \
+            localhost:5000/ufs-chem-assay:ci \
             sh -c 'git config --global --add safe.directory /repo \
                    && uv sync --frozen \
-                   && uv run pytest src/tests/combo_test_runner'
+                   && uv run pytest src/tests/ufs_chem_assay'

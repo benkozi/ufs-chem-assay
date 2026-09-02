@@ -55,7 +55,7 @@ derive from `VariableStats.model_fields`.
 
 ## Ripples (standing process rules)
 
-- **Harness tests** (`src/tests/combo_test_runner/`): the fabricated
+- **Harness tests** (`src/tests/ufs_chem_assay/`): the fabricated
   driver-like NetCDF already has a time coordinate — assert the extracted
   `time`/part columns match it; a fabricated dataset *without* a time
   coordinate exercises the null path; `test_analysis` row-builder helpers

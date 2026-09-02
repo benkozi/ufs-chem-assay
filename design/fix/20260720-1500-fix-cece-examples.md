@@ -207,7 +207,7 @@ original five-stream, five-file layout. Details:
 
 ### Revision 2d (2026-07-21): CECE docs decoupled from the runner
 
-Per direction, **CECE content no longer mentions the combo-test-runner**:
+Per direction, **CECE content no longer mentions the harness**:
 the `examples/README.md` intro drops the runner link and
 `--run-examples` invocation ("expected to run green" stands on its own),
 and ex7's known-bug comment drops its pointer to the runner's examples
@@ -397,7 +397,7 @@ set and the pending-CAMS failures.
 ## always do
 
 - include updating design.md as part of the implementation
-- update combo-test-runner tests in addition to any changes to test_driver_combos.py
+- update the harness tests (`src/tests/ufs_chem_assay`) in addition to any changes to test_driver_combos.py
 - update README.md with any necessary documentation changes in case of an api adjustment
 - use pydantic models as opposed to dataclasses
   - all pydantic fields should include a description like `... = Field(description="<description content here>", ...`
@@ -421,5 +421,5 @@ set and the pending-CAMS failures.
 - DO NOT modify CECE/src code
 - report back if there are fundamental issues that cannot be addressed (broken downloads or missing data)
 - it's okay to update configurations in CECE/examples
-- in theory, there should be no changes to the cece-combo-test-runner
+- in theory, there should be no changes to the harness
 - are the CECE files examples/cece_driver_*.cfg needed? maybe we can remove them

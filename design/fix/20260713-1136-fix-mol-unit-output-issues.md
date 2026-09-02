@@ -174,7 +174,7 @@ assertion verifies the echo).
 
 ### Runner-side ripple (forced by StrictModel)
 
-- `combo-test-runner/src/models/cece_config.py`: the `Output` model gains
+- `src/models/cece_config.py`: the `Output` model gains
   `field_attributes: dict[str, dict[str, str]] | None = None` — without it,
   the new key would be rejected at load.
 - `src/tests/config/cece/simple-maccity.yaml` sets
@@ -256,9 +256,9 @@ environment, nothing more. A new **Python** script (argparse +
 - **Test phase**: the full CECE test suite runs via
   `ctest --test-dir <mount>/build --output-on-failure` **in the container**,
   where the toolchain and netcdf-c live (`-R` applies `--test-filter`).
-  **The combo-test-runner suite is deliberately out of the script's scope**
+  **The harness suite is deliberately out of the script's scope**
   — it is run separately on the host (`uv run pytest` in
-  `combo-test-runner/`), where it orchestrates its own per-combo
+  this repository), where it orchestrates its own per-combo
   containers. The script is the C++ build/test loop, nothing more.
 - `check_call` semantics give the script its exit contract for free: the
   first failing step aborts with a nonzero exit — the one-command
@@ -277,7 +277,7 @@ with a timestamped format, everything at INFO for now.)
 - Post-fix, `./scripts/build-and-test-container.py` is green (invoked from an
   arbitrary cwd, proving the `__file__`-derived root works): both C++
   writer-attribute tests pass in the container. **Separately**,
-  `uv run pytest` in `combo-test-runner/` passes on the host — output
+  `uv run pytest` at the repo root passes on the host — output
   NetCDFs carry `units: kg m-2 s-1` on `co` and `test_species_units` passes
   for all three combos.
 - `--clean` removes and rebuilds from scratch successfully; `--no-build`

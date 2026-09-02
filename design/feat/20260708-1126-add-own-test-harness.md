@@ -20,8 +20,8 @@ working driver build.
 ### Layout
 
 ```
-combo-test-runner/src/tests/
-  combo_test_runner/          # harness tests: the runner testing itself
+<repo root>/src/tests/
+  ufs_chem_assay/             # harness tests: the runner testing itself
     conftest.py               # fixtures: paths to the checked-in maccity configs
     test_combos.py            # enumeration, naming, build_config
     test_suite_config.py      # loading, config_path/search-path resolution
@@ -40,9 +40,9 @@ first wins). Anything a test needs to import lives in a real `src/` module:
 `DriverRunResult` moved from the integration conftest into `runner.py` for
 exactly this reason.
 
-The directory is named `combo_test_runner` (underscores, not the project's
-hyphenated name) so it can become an importable package later without a
-rename; it also matches the `combo_test_runner` logger namespace. It carries
+The directory is named `ufs_chem_assay` (the harness name, underscored because
+mypy requires a valid package name); it matches the `ufs-chem-assay` logger
+namespace. It carries
 no `__init__.py` today — pytest imports test modules by file. Test module
 basenames are unique across the tree, which rootdir-style collection
 requires.
@@ -100,7 +100,7 @@ Both remain under `testpaths`, so plain `uv run pytest` runs everything —
 unchanged default. Slicing is by path, no markers needed yet:
 
 ```sh
-uv run pytest src/tests/combo_test_runner    # harness only: fast, no docker
+uv run pytest src/tests/ufs_chem_assay    # harness only: fast, no docker
 uv run pytest src/tests/test_driver_combos.py  # integration only
 ```
 
@@ -119,7 +119,7 @@ deferred until it hurts.
 
 ## Acceptance criteria
 
-- `uv run pytest src/tests/combo_test_runner` passes in a few seconds with
+- `uv run pytest src/tests/ufs_chem_assay` passes in a few seconds with
   docker unavailable (no `docker` invocation anywhere in the harness run).
 - The pipeline test executes all three maccity combos against the checked-in
   suite/config files with `check_output` mocked, including generated-yaml

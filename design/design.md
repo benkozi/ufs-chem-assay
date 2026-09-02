@@ -1,16 +1,26 @@
-# Combinatorial Test Runner — Design
+# ufs-chem-assay — Design
 
 ## Goal
 
 A standalone pytest-based test suite that exercises `cece_standalone_driver`
 across combinations of the enum-valued configuration options defined in
-`combo-test-runner/src/models/cece_config.py`. The combinations to sweep are
+`src/models/cece_config.py`. The combinations to sweep are
 declared in a YAML **suite configuration** validated by pydantic. Each
 combination is rendered to a driver YAML config and executed in an isolated
 Docker container with its stdout/stderr captured to a per-combo `.out` file;
 unwrapped per-combo tests then assert on the outcome (driver exit code,
 NetCDF file count and names, per-species variable attributes), and an
 analysis step computes descriptive statistics and spatial plots.
+
+**Identity (2026-09-01).** The harness was renamed `ufs-chem-assay` when its
+scope widened to testing, verification, and benchmarking across UFS-Chem
+applications (the previous identity is recorded in the spike below). The name
+is used consistently everywhere: `HARNESS_NAME` in `src/logs.py` (logger
+namespace, plot footer), the `pyproject.toml` name, the image tags, the CI
+output root, and — underscored, because mypy requires a valid package name —
+the harness test package `src/tests/ufs_chem_assay/`. See
+`design/spike/20260901-1229-rename-and-plan-for-catchem.md` and
+`design/feat/20260901-1701-rename-repo.md`.
 
 ## Non-goals
 
@@ -134,7 +144,7 @@ The **initial suite** sweeps only `Mapalgo` over `bilinear`, `consd`, and
 remains expressible later purely by editing the suite YAML.
 
 The suite file path is a pytest option (`--suite-config`, default:
-`combo-test-runner/src/tests/config/suite/simple-maccity-suite.yaml`,
+`src/tests/config/suite/simple-maccity-suite.yaml`,
 checked in with the initial sweep).
 
 ## Combination space
@@ -207,7 +217,7 @@ config selected by the suite's `config_path` (the initial
 `src/tests/config/cece/simple-maccity.yaml`, modeled on
 `examples/cece_config_ex1.yaml`: single species `co`, single `MACCITY` stream
 reading `/work/data/MACCity_4x5.nc`, coarse global grid, three-hour run). Base
-configs live inside `combo-test-runner/`, preserving zero runtime dependency
+configs live inside this repository, preserving zero runtime dependency
 on files elsewhere in the repo. The base config's `output.fields` entries
 declare each field to write together with its NetCDF attributes (a plain
 string is shorthand for a field with no configured attributes; the map form
@@ -503,11 +513,11 @@ feeds the selector's search roots as described under Pytest integration.
 
 ## Code layout
 
-All new code under `combo-test-runner/src/`; the project is `uv`-managed with
-its own `pyproject.toml` at `combo-test-runner/`:
+All code under `src/`; the project is `uv`-managed with its own
+`pyproject.toml` at the repository root:
 
 ```
-combo-test-runner/
+<repo root>/
   pyproject.toml          # uv project: pytest, pytest-mock, pydantic>=2, pydantic-settings, pyyaml
   README.md               # user-facing setup + run instructions
   design/design.md
@@ -533,7 +543,7 @@ combo-test-runner/
         suite/simple-maccity-suite.yaml   # initial suite (--suite-config default)
         suite/exhaustive-maccity-run-only-suite.yaml  # every enum value via ".*"
                                           #   regex sweeps; on-demand, run-only
-      combo_test_runner/  # the runner's own tests: mocked process call, no docker
+      ufs_chem_assay/     # the harness's own tests: mocked process call, no docker
       conftest.py         # options, session fixture (generate yamls), param fixture
       test_driver_combos.py               # integration tests (real docker)
       test_examples.py                    # shipped-example execution (--run-examples)
@@ -543,11 +553,11 @@ Dependencies: `pytest`, `pytest-mock`, `pydantic>=2`, `pydantic-settings`,
 `python-ulid`, `pyyaml`, the analysis stack (`pandas`, `xarray`, `netcdf4`,
 `dask[distributed]`), and the plotting stack (`matplotlib`, `cartopy`,
 `pillow`). Nothing
-imported from the CECE repo outside `combo-test-runner/`.
+imported from the CECE repo outside this repository.
 
 ## README (user documentation)
 
-A `combo-test-runner/README.md` ships with v1 — deliberately simple at this
+A `README.md` ships with v1 — deliberately simple at this
 stage: enough for a user to set up and run the suite. It covers:
 
 - **Prerequisites**: a local CECE checkout (external to this repository)

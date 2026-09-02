@@ -13,7 +13,7 @@ changes.
 - `combos.py:base_config()` constructs the baseline `CeceConfig` in code
   (single species `co`, single MACCITY stream); the suite config only carries
   the sweep.
-- The suite file lives at `combo-test-runner/suite.yaml` (project root), which
+- The suite file lives at `suite.yaml` (repo root) (project root), which
   is also the `--suite-config` default.
 
 ## Design
@@ -82,11 +82,11 @@ The initial base config file is the current in-code baseline serialized to
 ### File layout and moves
 
 ```
-combo-test-runner/src/tests/config/
+src/tests/config/
   cece/
     simple-maccity.yaml         # base driver config (was combos.base_config())
   suite/
-    simple-maccity-suite.yaml   # was combo-test-runner/suite.yaml
+    simple-maccity-suite.yaml   # was suite.yaml at the repo root
 ```
 
 - `suite.yaml` moves to `src/tests/config/suite/simple-maccity-suite.yaml`.
@@ -133,7 +133,7 @@ revisit expected-failure handling.
 - Main `design.md` needs updating: the "Base configuration" section currently
   states the base config is defined in code with zero runtime dependency on
   files elsewhere in the repo. The zero-dependency rationale is preserved —
-  the config file lives inside `combo-test-runner/` — but the mechanism
+  the config file lives inside this repository — but the mechanism
   changes to file-based; the suite-configuration section gains `config_path`.
 - README: mention `config_path` and the new default suite path.
 
@@ -156,7 +156,7 @@ revisit expected-failure handling.
   set to directories containing copies of the configs (possibly in nested
   subdirectories), relative suite/config paths resolve under those
   directories and all tests pass; unset, behavior is unchanged.
-- `combo-test-runner/suite.yaml` no longer exists; `combos.base_config()` is
+- `suite.yaml` (repo root) no longer exists; `combos.base_config()` is
   removed.
 - Each combination runs with a 5-second effective timeout
   (`min(suite timeout_s=5, settings run_timeout_s=300)`). The suite

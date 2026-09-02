@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 logger = get_logger("conftest")
 
-# combo-test-runner/src/tests/conftest.py -> combo-test-runner/src/tests/
+# <repo root>/src/tests/conftest.py -> <repo root>/src/tests/
 _TESTS_ROOT = Path(__file__).resolve().parent
 # Always the final --suite-config search root, so checked-in suites stay
 # selectable and the bare default needs no configuration.
