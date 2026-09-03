@@ -19,6 +19,24 @@ dependencies = [
     "xarray>=2024.1",
 ]
 
+[project.scripts]
+# The orchestration entrypoint (src/cli); pytest stays the test entry point.
+ufs-chem-assay = "cli.main:main"
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# src/ is remapped to the package root so `models`, `combos`, `cli`, ...
+# import exactly as they do under pytest's pythonpath = ["src"]; the tests
+# stay out of the wheel.
+only-include = ["src"]
+exclude = ["src/tests"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
 [dependency-groups]
 dev = [
     "mypy>=1.14",
@@ -33,7 +51,9 @@ dev = [
 ]
 
 [tool.uv]
-package = false
+# Installed (editable) for the `ufs-chem-assay` console script; the CI
+# image syncs with --no-install-project since it carries no source.
+package = true
 
 [tool.pytest.ini_options]
 testpaths = ["src/tests"]
@@ -72,7 +92,7 @@ line_length = 120
 # version-bump commit + tag + changelog, nothing published anywhere. The
 # [ci skip] in commit_message keeps bump commits from triggering CI and,
 # via exclude_commit_patterns, out of the changelog. No build_command:
-# tool.uv package=false, there is nothing to build. PSR itself is not a
+# nothing is published, so the wheel is never built by a release. PSR itself is not a
 # dependency — the GHA action runs it; preview locally via
 #   uv tool run --from 'python-semantic-release>=10,<11' semantic-release --noop version
 [tool.semantic_release]

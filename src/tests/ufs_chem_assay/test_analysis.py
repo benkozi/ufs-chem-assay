@@ -14,6 +14,7 @@ from analysis import (
     VariableStats,
     compute_file_stats,
     concatenate_stats_csvs,
+    spatial_variables,
     write_combo_stats_csv,
 )
 
@@ -106,7 +107,7 @@ def test_compute_file_stats_matches_numpy(
 def test_compute_file_stats_null_time_without_time_coordinate(
     dask_client: "Client", tmp_path: Path
 ) -> None:
-    dataset = xr.Dataset({"co": (("y", "x"), np.ones((2, 3)))})
+    dataset = xr.Dataset({"co": (("lat", "lon"), np.ones((2, 3)))})
     path = tmp_path / "timeless.nc"
     dataset.to_netcdf(path, engine="netcdf4")
 
@@ -155,3 +156,46 @@ def test_concatenate_stats_csvs(tmp_path: Path) -> None:
     assert set(combined["combo"]) == {"MACCITY.map-consd", "MACCITY.map-bilinear"}
     assert set(combined["run_id"]) == {_RUN_ID}  # run id survives both CSV layers
     assert set(combined["suite"]) == {"simple-maccity"}  # suite name too
+
+
+def _with_bounds(dataset: xr.Dataset) -> xr.Dataset:
+    """Add CF-1.9 cell bounds the way the driver writes them: data
+    variables (no `bounds` attribute on the coordinates), lat_bnds reusing
+    the lon bounds dimension name."""
+    lon = dataset["lon"].values
+    lat = dataset["lat"].values
+    dataset["lon_bnds"] = (
+        ("lon", "lon_bnds_dim1"),
+        np.stack([lon - 1, lon + 1], axis=1),
+    )
+    dataset["lat_bnds"] = (
+        ("lat", "lon_bnds_dim1"),
+        np.stack([lat - 1, lat + 1], axis=1),
+    )
+    dataset["lon_bnds"].attrs["units"] = "degrees_east"
+    dataset["lat_bnds"].attrs["units"] = "degrees_north"
+    return dataset
+
+
+def test_spatial_variables_are_those_with_lat_and_lon(
+    driver_like_nc: tuple[Path, np.ndarray],
+) -> None:
+    path, _ = driver_like_nc
+    with xr.open_dataset(path) as ds:
+        ds = _with_bounds(ds.load())
+        ds["nox"] = ds["co"] * 2  # a second field, in file order after co
+        assert spatial_variables(ds) == ["co", "nox"]
+
+
+def test_compute_file_stats_skips_bounds_variables(
+    driver_like_nc: tuple[Path, np.ndarray], dask_client: "Client", tmp_path: Path
+) -> None:
+    path, _ = driver_like_nc
+    with xr.open_dataset(path) as ds:
+        dataset = _with_bounds(ds.load())
+    bounded = tmp_path / "bounded.nc"
+    dataset.to_netcdf(bounded, engine="netcdf4")
+
+    stats = compute_file_stats(bounded, combo="c", combo_id=_COMBO_ID, run=_RUN)
+
+    assert [row.variable for row in stats] == ["co"]

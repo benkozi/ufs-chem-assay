@@ -77,7 +77,7 @@ def test_maccity_pipeline_runs_all_combos_mocked(
         out_path = combo_dir / f"{combo.combo_id}.out"
         run_driver(
             settings,
-            container_yaml=container_dir / f"{combo.combo_id}.yaml",
+            driver_yaml=container_dir / f"{combo.combo_id}.yaml",
             out_path=out_path,
             timeout_s=effective_timeout,
             output_mount=(tmp_path, container_root),

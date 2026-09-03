@@ -24,6 +24,7 @@ from models.suite_config import (
 from plotting import render_all_bias_plots, render_all_plots
 from report import TestReportRow, worst_result, write_test_report_csv
 from ulid import ULID
+from platforms import Runtime
 from resolution import resolve_output_roots, select_suites
 from runner import DriverRunResult, run_driver
 from settings import Settings
@@ -42,20 +43,24 @@ _BUILTIN_SUITE_DIR = _TESTS_ROOT / "config" / "suite"
 _DEFAULT_SUITE = "simple-maccity-suite.yaml"
 
 # Container-side mount point for the default (pytest tmp) output root, which
-# lives outside the /work mount.
+# lives outside the /work mount (docker runtime only).
 _CONTAINER_TMP_ROOT = PurePosixPath("/combo_runs")
 
 
 class ComboRoots(BaseModel):
+    """The output root as the harness sees it (host) and as the driver sees
+    it (driver): the container path under docker, the same host path
+    natively."""
+
     model_config = ConfigDict(frozen=True)
 
     host: Path
-    container: PurePosixPath
-    needs_mount: bool  # True when the host root is outside the /work mount
+    driver: PurePosixPath
+    needs_mount: bool  # docker only: the host root is outside the /work mount
 
     @property
     def output_mount(self) -> tuple[Path, PurePosixPath] | None:
-        return (self.host, self.container) if self.needs_mount else None
+        return (self.host, self.driver) if self.needs_mount else None
 
 
 class GeneratedCombo(BaseModel):
@@ -64,7 +69,7 @@ class GeneratedCombo(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     host_dir: Path
-    container_yaml: PurePosixPath
+    driver_yaml: PurePosixPath  # the config path as the driver sees it
     config: CeceConfig
 
 
@@ -113,8 +118,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--combo-output-root",
         default=None,
         help=(
-            "Root artifact directory; relative paths resolve against /work in the "
-            "container. Default: a pytest-managed temporary directory."
+            "Root artifact directory; relative paths resolve against the CECE "
+            "checkout (mounted at /work under docker). Default: a "
+            "pytest-managed temporary directory."
         ),
     )
     group.addoption(
@@ -235,7 +241,9 @@ def pytest_sessionstart(session: pytest.Session) -> None:
                 f"--combo-output-root resolves against the CECE repository root; {_ROOT_DIR_SOURCES}"
             )
         try:
-            host_root, container_root = resolve_output_roots(option, settings.root_dir)
+            host_root, driver_root = resolve_output_roots(
+                option, settings.root_dir, settings.runtime
+            )
         except ValueError as exc:
             raise pytest.UsageError(str(exc)) from exc
         if host_root.exists():
@@ -245,7 +253,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
                 raise pytest.UsageError(
                     f"output root {host_root} already exists; move it aside or pass --combo-clean-root"
                 )
-        roots = ComboRoots(host=host_root, container=container_root, needs_mount=False)
+        roots = ComboRoots(host=host_root, driver=driver_root, needs_mount=False)
 
     config.stash[_SETTINGS] = settings
     config.stash[_SUITE_CONTEXTS] = contexts
@@ -496,13 +504,14 @@ def combo_roots(
 ) -> ComboRoots:
     roots = request.config.stash[_EXPLICIT_ROOTS]
     if roots is None:
-        # Default: all test-generated data goes to a pytest temp directory,
-        # bind-mounted into the container at a fixed path.
-        roots = ComboRoots(
-            host=tmp_path_factory.mktemp("combo_runs"),
-            container=_CONTAINER_TMP_ROOT,
-            needs_mount=True,
-        )
+        # Default: all test-generated data goes to a pytest temp directory —
+        # bind-mounted into the container at a fixed path under docker, seen
+        # directly by the driver natively.
+        host = tmp_path_factory.mktemp("combo_runs")
+        if request.config.stash[_SETTINGS].runtime is Runtime.NATIVE:
+            roots = ComboRoots(host=host, driver=PurePosixPath(host), needs_mount=False)
+        else:
+            roots = ComboRoots(host=host, driver=_CONTAINER_TMP_ROOT, needs_mount=True)
     # Stash the realized roots for pytest_sessionfinish (hooks cannot request
     # fixtures; the tmp-default root only exists once this fixture has run).
     request.config.stash[_REALIZED_ROOTS] = roots
@@ -511,9 +520,12 @@ def combo_roots(
     # that dies mid-way records what ran (combos.csv follows immediately
     # after config generation — its values come from the generated configs).
     roots.host.mkdir(parents=True, exist_ok=True)
+    settings = request.config.stash[_SETTINGS]
     manifest = RunManifest(
         run_id=request.config.stash[_RUN_ID],
         cece_commit=request.config.stash[_CECE_COMMIT],
+        platform=settings.platform,
+        runtime=settings.runtime,
         suites=[context.suite for context in request.config.stash[_SUITE_CONTEXTS]],
     )
     manifest.to_yaml(roots.host / "run.yaml")
@@ -536,16 +548,16 @@ def generated_combos(
             # combo's runtime ULID; combos.csv dereferences them.
             combo_dir = combo_roots.host / combo.combo_id
             combo_dir.mkdir(parents=True)
-            container_dir = combo_roots.container / combo.combo_id
+            driver_dir = combo_roots.driver / combo.combo_id
             config = build_config(
                 combo,
-                output_directory=str(container_dir),
+                output_directory=str(driver_dir),
                 config_path=context.suite.config_path,
             )
             config.to_yaml(combo_dir / f"{combo.combo_id}.yaml")
             generated[combo.combo_id] = GeneratedCombo(
                 host_dir=combo_dir,
-                container_yaml=container_dir / f"{combo.combo_id}.yaml",
+                driver_yaml=driver_dir / f"{combo.combo_id}.yaml",
                 config=config,
             )
             entries.append((context.suite.name, combo, config))
@@ -587,7 +599,7 @@ def driver_run(
     try:
         run_driver(
             settings,
-            container_yaml=generated.container_yaml,
+            driver_yaml=generated.driver_yaml,
             out_path=out_path,
             timeout_s=run_timeout_s,
             output_mount=combo_roots.output_mount,

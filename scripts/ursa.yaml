@@ -1,0 +1,48 @@
+# Run config for Ursa (RDHPCS): native driver build against CECE's own
+# modulefiles, the harness session as one Slurm batch job. Copy, edit the
+# account and paths, then:
+#   ufs-chem-assay run --config-file=scripts/ursa.yaml [--dry-run]
+# Every stage renders to <root_dir>/scripts/<NN>-<stage>.sh; the login-node
+# stages (source, build, data) run with bash, the compute stages
+# (cece-tests, harness) go into one sbatch script.
+platform: ursa  # optional: detected from the hostname when absent; --platform wins
+root_dir: /scratch3/NCEPDEV/stmp/Benjamin.Koziol/my_stmp/ufs-chem-assay  # everything the CLI creates lands here
+cece:
+  git_url: git@github.com:benkozi/CECE.git
+  ref: fix/all-examples-pass  # branch or SHA; the integration workflow's ref
+  clone_dir:  # default <root_dir>/CECE; an existing checkout is used as-is
+  update_source: false  # fetch + checkout + pull --ff-only an existing clone
+  modulefile: cece_ursa.intelllvm  # from <clone>/modulefiles after `module purge`
+  cmake_args:
+    - -DCMAKE_BUILD_TYPE=Release
+  build_jobs: 8
+  targets:  # `all` to also build the unit-test stack (needed by run_tests)
+    - cece_standalone_driver
+  run_tests: false  # ctest under the launcher, in the batch job
+data:
+  examples:  # download-example-data.py --example ... (login node)
+    - ex3
+  warm_cartopy: true  # fetch Natural Earth coastlines on the login node
+baselines:
+  root_dir:  # CECE_BASELINE_ROOT_DIR
+  enabled: false  # CECE_ENABLE_BASELINE_COMPARISONS; no public store yet
+harness:
+  suite_config: simple-maccity-suite.yaml
+  output_root: ufs-chem-assay-output  # relative: under the CECE checkout
+  clean_root: true
+  pytest_args: []  # e.g. [-x, -k, map-consd]
+  launcher: srun --ntasks=1  # CECE_LAUNCHER: prefix for every native driver run
+  env:  # exported before pytest; the single-node MPI hints CECE's ctest uses
+    I_MPI_FABRICS: shm
+    FI_PROVIDER: tcp
+  dask_nworkers:  # null: the Slurm allocation's cpus
+  run_timeout_s: 300
+slurm:  # null: the compute stages run directly with bash (the local path)
+  account: epic  # sbatch -A; the default when omitted
+  qos: debug  # 30 min cap; `batch` (8 h) for the exhaustive suites
+  partition: u1-compute
+  time: 00:30:00
+  cpus: 8
+  submit: true  # false: write the sbatch script and print the command
+uv:
+  cache_dir:  # UV_CACHE_DIR; default <root_dir>/uv-cache

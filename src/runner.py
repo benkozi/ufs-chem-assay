@@ -1,4 +1,6 @@
-"""Docker invocation of cece_standalone_driver for a single combination."""
+"""One cece_standalone_driver invocation per combination: docker run against
+the cece/cece-dev image (local), or a host process behind an optional
+launcher prefix (native — RDHPC machines have no docker)."""
 
 from __future__ import annotations
 
@@ -9,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, InstanceOf
 
 from combos import Combo
 from models.cece_config import CeceConfig
+from platforms import Runtime
 from settings import Settings
 
 
@@ -28,11 +31,13 @@ class DriverRunResult(BaseModel):
     error: InstanceOf[Exception] | None
 
 
-def build_command(
-    settings: Settings,
-    container_yaml: PurePosixPath,
-    output_mount: tuple[Path, PurePosixPath] | None = None,
+def docker_prefix(
+    settings: Settings, output_mount: tuple[Path, PurePosixPath] | None = None
 ) -> list[str]:
+    """`docker run` up to and including the image: the checkout bind-mounted
+    at /work (plus the output root when it lies outside it), cwd /work, and
+    the run-as-root MPI environment. The driver and the examples entrypoint
+    share it; only what runs in the container differs."""
     command = [
         "docker",
         "run",
@@ -53,10 +58,31 @@ def build_command(
         "-e",
         "OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1",
         settings.docker_image,
-        settings.driver_path,
-        str(container_yaml),
     ]
     return command
+
+
+def build_command(
+    settings: Settings,
+    driver_yaml: PurePosixPath,
+    output_mount: tuple[Path, PurePosixPath] | None = None,
+) -> list[str]:
+    """The driver command for one combination, per settings.runtime.
+
+    docker: the shared docker prefix, then the driver; driver_yaml is a
+    container path.
+    native: the launcher prefix, the driver resolved against the checkout,
+    and driver_yaml as a host path; output_mount is meaningless and ignored.
+    """
+    if settings.runtime is Runtime.NATIVE:
+        assert settings.root_dir is not None  # guarded at collection
+        driver = settings.root_dir / settings.driver_path
+        return [*settings.launcher_argv, str(driver), str(driver_yaml)]
+    return [
+        *docker_prefix(settings, output_mount),
+        settings.driver_path,
+        str(driver_yaml),
+    ]
 
 
 def _print_output(out_path: Path, output: bytes) -> None:
@@ -69,21 +95,26 @@ def _print_output(out_path: Path, output: bytes) -> None:
 
 def run_driver(
     settings: Settings,
-    container_yaml: PurePosixPath,
+    driver_yaml: PurePosixPath,
     out_path: Path,
     timeout_s: int,
     output_mount: tuple[Path, PurePosixPath] | None = None,
 ) -> None:
-    """Run one driver invocation in a fresh container.
+    """Run one driver invocation (a fresh container, or a host process).
 
     Combined stdout/stderr is written to out_path and printed whether the run
     passes or fails; a nonzero exit re-raises CalledProcessError to fail the
     test, and a hung driver fails with TimeoutExpired after timeout_s.
+    Natively the process runs in the checkout (cwd = root_dir), so the
+    relative driver path and cwd-relative data paths resolve as they do
+    under docker's -w /work; the environment is inherited as-is (modules,
+    MPI hints are the caller's job).
     """
-    command = build_command(settings, container_yaml, output_mount=output_mount)
+    command = build_command(settings, driver_yaml, output_mount=output_mount)
+    cwd = settings.root_dir if settings.runtime is Runtime.NATIVE else None
     try:
         output = subprocess.check_output(
-            command, stderr=subprocess.STDOUT, timeout=timeout_s
+            command, stderr=subprocess.STDOUT, timeout=timeout_s, cwd=cwd
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         out_path.write_bytes(exc.output or b"")

@@ -112,15 +112,31 @@ def _time_fields(when: datetime | None) -> _TimeFields:
     }
 
 
+def spatial_variables(ds: xr.Dataset) -> list[str]:
+    """The data variables that are spatial fields — those carrying both lat
+    and lon dimensions — in file order. Anything else (CF cell bounds the
+    driver writes as data variables, since its coordinates carry no
+    `bounds` attribute; any future auxiliary table) is not a field and is
+    skipped by stats and plots alike."""
+    fields: list[str] = []
+    for name in ds.data_vars:
+        dims = set(ds[name].dims)
+        if {"lat", "lon"} <= dims:
+            fields.append(str(name))
+        else:
+            logger.debug("skipping non-spatial variable %s %s", name, tuple(dims))
+    return fields
+
+
 def compute_file_stats(
     nc_path: Path, combo: str, combo_id: str, run: RunContext
 ) -> list[VariableStats]:
-    """Nan-aware descriptive stats for every data variable in one NetCDF file."""
+    """Nan-aware descriptive stats for every spatial field in one NetCDF file."""
     with xr.open_dataset(nc_path, chunks="auto", engine="netcdf4") as ds:
         time_fields = _time_fields(_file_time(ds))
         deferred: list[object] = []
         names: list[str] = []
-        for name in ds.data_vars:
+        for name in spatial_variables(ds):
             flat = dsa.asarray(ds[str(name)].data).ravel().astype(float)
             deferred.extend(
                 [

@@ -18,7 +18,7 @@ species:
 cece_data:
   streams:
     - name: MACCITY
-      file: /work/data/MACCity_4x5.nc
+      file: data/MACCity_4x5.nc  # cwd-relative: the driver runs in the checkout (/work in docker)
       yearFirst: 2000
       yearLast: 2010
       yearAlign: 2020

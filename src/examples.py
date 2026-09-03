@@ -17,6 +17,8 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from logs import get_logger
+from platforms import Runtime
+from runner import docker_prefix
 from settings import Settings
 
 logger = get_logger("examples")
@@ -110,26 +112,20 @@ def download_example_data(root_dir: Path, timeout_s: int = 300) -> list[Download
 
 
 def run_example_command(settings: Settings, eid: str) -> list[str]:
-    """Docker invocation of run-example.py for one example: the entrypoint is
-    container-agnostic, so the container wrapping lives here."""
-    return [
-        "docker",
-        "run",
-        "--rm",
-        "-v",
-        f"{settings.root_dir}:/work",
-        "-w",
-        "/work",
-        "-e",
-        "OMPI_ALLOW_RUN_AS_ROOT=1",
-        "-e",
-        "OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1",
-        settings.docker_image,
-        "python3",
-        str(RUN_ENTRYPOINT),
-        "--example",
-        eid,
-    ]
+    """Invocation of run-example.py for one example. The entrypoint is
+    container-agnostic (it never spawns docker itself), so the wrapping lives
+    here: docker run locally; natively the harness's own interpreter, the
+    one guaranteed to be >= 3.11 (the entrypoint uses StrEnum) once modules
+    have replaced the login node's python3."""
+    if settings.runtime is Runtime.NATIVE:
+        assert settings.root_dir is not None  # guarded at collection
+        return [
+            sys.executable,
+            str(settings.root_dir / RUN_ENTRYPOINT),
+            "--example",
+            eid,
+        ]
+    return [*docker_prefix(settings), "python3", str(RUN_ENTRYPOINT), "--example", eid]
 
 
 def _tail(text: str, lines: int = 10) -> str:

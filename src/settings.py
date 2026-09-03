@@ -1,10 +1,13 @@
 import os
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+from platforms import Platform, Runtime, default_runtime, detect_platform
 
 
 class Settings(BaseSettings):
@@ -17,6 +20,28 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="CECE_", frozen=True, env_file=".env")
 
+    platform: Platform = Field(
+        description=(
+            "Machine the harness runs on: an explicit value (CECE_PLATFORM or "
+            "init kwarg) beats hostname detection, which falls back to local "
+            "(filled in by the model validator below, never required)"
+        ),
+    )
+    runtime: Runtime = Field(
+        default=Runtime.DOCKER,
+        description=(
+            "How the driver is spawned: docker (the cece/cece-dev image) or "
+            "native (a host process). Defaults from the platform — docker on "
+            "local, native elsewhere — unless CECE_RUNTIME says otherwise"
+        ),
+    )
+    launcher: str = Field(
+        default="",
+        description=(
+            "Command prefix for native driver runs, word-split like a shell "
+            "(e.g. 'srun --ntasks=1'); empty runs the driver directly"
+        ),
+    )
     docker_image: str = "cece/cece-dev"
     root_dir: Path | None = Field(
         None,
@@ -52,6 +77,23 @@ class Settings(BaseSettings):
             "directory is always searched last"
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_platform_and_runtime(cls, data: object) -> object:
+        # The model is frozen, so the detected platform and the
+        # platform-derived runtime are filled in before construction; explicit
+        # values (env, .env, or init kwarg) are left alone. Sources are merged
+        # before validation, so `data` carries the env/.env values too.
+        if isinstance(data, dict):
+            data = dict(data)
+            data.setdefault("platform", detect_platform())
+            data.setdefault("runtime", default_runtime(Platform(data["platform"])))
+        return data
+
+    @property
+    def launcher_argv(self) -> list[str]:
+        return shlex.split(self.launcher)
 
     @field_validator("suite_config_search_path", mode="before")
     @classmethod

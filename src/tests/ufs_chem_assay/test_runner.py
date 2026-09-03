@@ -55,7 +55,7 @@ def test_run_driver_success_writes_out(mocker: MockerFixture, tmp_path: Path) ->
 
     run_driver(
         _settings(),
-        container_yaml=PurePosixPath("/work/x.yaml"),
+        driver_yaml=PurePosixPath("/work/x.yaml"),
         out_path=out_path,
         timeout_s=7,
     )
@@ -76,7 +76,7 @@ def test_run_driver_nonzero_exit_writes_out_and_reraises(
     with pytest.raises(subprocess.CalledProcessError):
         run_driver(
             _settings(),
-            container_yaml=PurePosixPath("/work/x.yaml"),
+            driver_yaml=PurePosixPath("/work/x.yaml"),
             out_path=out_path,
             timeout_s=7,
         )
@@ -94,7 +94,7 @@ def test_run_driver_timeout_writes_out_and_reraises(
     with pytest.raises(subprocess.TimeoutExpired):
         run_driver(
             _settings(),
-            container_yaml=PurePosixPath("/work/x.yaml"),
+            driver_yaml=PurePosixPath("/work/x.yaml"),
             out_path=out_path,
             timeout_s=7,
         )
