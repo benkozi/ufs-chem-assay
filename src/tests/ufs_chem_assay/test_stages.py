@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from cli.run_config import RunConfig
-from cli.stages import HARNESS_ROOT, WRAPPER, Stage, render_stage
+from cli.stages import HARNESS_ROOT, Stage, render_stage
+from runner import WRAPPER
 from platforms import Platform
 from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR, run_config_file
 
@@ -132,18 +133,22 @@ def test_data_stage_without_cartopy(local: RunConfig) -> None:
     assert "natural_earth" not in render_stage(Stage.DATA, local).text
 
 
-def test_cece_tests_stage_is_one_sbatch_job_through_the_wrapper(
+def test_cece_tests_stage_submits_its_own_rendered_job_script(
     ursa_with_tests: RunConfig,
 ) -> None:
     config = ursa_with_tests
-    text = render_stage(Stage.CECE_TESTS, config).text
-    assert (
-        f"sbatch --wait -A epic -q debug -p u1-compute -N 1 -n 1 -c 8 -t 30 "
-        f"--chdir {config.clone_dir} {WRAPPER} ctest --test-dir {config.clone_dir}/build "
-        "--output-on-failure"
-    ) in text
-    assert f"export CECE_ROOT_DIR={config.clone_dir}" in text
-    assert "export CECE_MODULEFILE=cece_ursa.intelllvm" in text
+    script = render_stage(Stage.CECE_TESTS, config)
+    job = f"{config.root_dir}/scripts/cece-tests.sbatch"
+    assert f"sbatch --wait --parsable {job}" in script.text
+    assert "cece-tests.sbatch" in script.companions
+    text = script.companions["cece-tests.sbatch"]
+    assert "#SBATCH -A epic" in text and "#SBATCH --time=30" in text
+    assert f"#SBATCH --chdir={config.clone_dir}" in text
+    assert "module load cece_ursa.intelllvm" in text
+    assert text.rstrip().endswith(
+        f"srun --ntasks=1 ctest --test-dir {config.clone_dir}/build --output-on-failure"
+    )
+    assert WRAPPER.name not in script.text  # the wrapper is the native launcher only
 
 
 def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) -> None:
@@ -154,12 +159,11 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "export CECE_RUNTIME=slurm",
         "export CECE_SBATCH_ARGS='-A epic -q debug -p u1-compute -N 1 -n 1 -c 8'",
         "export CECE_MODULEFILE=cece_ursa.intelllvm",
+        "export CECE_JOB_ENV='I_MPI_FABRICS=shm FI_PROVIDER=tcp'",  # the driver jobs' env
         "export CECE_ENABLE_BASELINE_COMPARISONS=false",
         "export CECE_RUN_TIMEOUT_S=300",
         "export CECE_DASK_NWORKERS=2",
         f"export UV_CACHE_DIR={ursa.root_dir}/uv-cache",
-        "export I_MPI_FABRICS=shm",
-        "export FI_PROVIDER=tcp",
         f"cd {HARNESS_ROOT}",
         "uv run --no-sync pytest src/tests/test_driver_combos.py "
         "--suite-config=simple-maccity-suite.yaml "

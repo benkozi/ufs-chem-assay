@@ -19,7 +19,7 @@ from pydantic import ConfigDict, Field
 from cli.run_config import RunConfig
 from models.base import StrictModel
 from platforms import Runtime
-from runner import WRAPPER
+from runner import render_job_script, sbatch_directives
 
 # src/cli/stages.py -> <repo root>: where `uv run pytest` runs from.
 HARNESS_ROOT = Path(__file__).resolve().parents[2]
@@ -45,12 +45,17 @@ class Stage(StrEnum):
 
 
 class ShellScript(StrictModel):
-    """A rendered script: its name and full text."""
+    """A rendered stage script: its name, full text, and any companion files
+    it refers to (written beside it under <root_dir>/scripts/)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    name: str = Field(description="Stage name, or 'batch' for the sbatch wrapper")
+    name: str = Field(description="Stage name")
     text: str = Field(description="Complete bash source, shebang included")
+    companions: dict[str, str] = Field(
+        default_factory=dict,
+        description="Extra files the script uses, filename -> text (e.g. a rendered sbatch job)",
+    )
 
 
 def _q(value: object) -> str:
@@ -177,6 +182,10 @@ def _launcher(config: RunConfig) -> str:
     return f"{config.harness.launcher} " if config.harness.launcher else ""
 
 
+_CECE_TESTS_JOB = "cece-tests.sbatch"
+_CECE_TESTS_MINUTES = 30
+
+
 def _cece_tests(config: RunConfig) -> list[str]:
     clone = config.clone_dir
     build = clone / "build"
@@ -186,12 +195,25 @@ def _cece_tests(config: RunConfig) -> list[str]:
             f"python3 {_q(clone / 'scripts/build-and-test-container.py')} --no-build"
         ]
     if config.runtime is Runtime.SLURM:
-        assert config.slurm is not None, "slurm runtime needs a slurm: section"
-        return [
-            *_cece_env_exports(config),
-            f"sbatch --wait {config.slurm.sbatch_args} -t 30 --chdir {_q(clone)} {_q(WRAPPER)} {ctest}",
-        ]
+        # The job script itself is a companion file (see render_stage).
+        job = config.root_dir / "scripts" / _CECE_TESTS_JOB
+        return [f"sbatch --wait --parsable {_q(job)}"]
     return [f"{_launcher(config)}{ctest}"]
+
+
+def _cece_tests_job(config: RunConfig) -> str:
+    assert config.slurm is not None, "slurm runtime needs a slurm: section"
+    clone = config.clone_dir
+    return render_job_script(
+        job_name="ufs-chem-assay-cece-tests",
+        out_path=config.root_dir / "logs" / "cece-tests-%j.out",
+        root_dir=clone,
+        minutes=_CECE_TESTS_MINUTES,
+        directives=sbatch_directives(config.slurm.sbatch_args),
+        modulefile=config.cece.modulefile,
+        env=config.harness.env,
+        command=f"ctest --test-dir {_q(clone / 'build')} --output-on-failure",
+    )
 
 
 def _harness(config: RunConfig) -> list[str]:
@@ -206,6 +228,10 @@ def _harness(config: RunConfig) -> list[str]:
         exports.append(("CECE_SBATCH_ARGS", _q(config.slurm.sbatch_args)))
         if config.cece.modulefile is not None:
             exports.append(("CECE_MODULEFILE", _q(config.cece.modulefile)))
+        if harness.env:
+            # The driver jobs' environment; the login-node shell never needs it.
+            pairs = " ".join(f"{key}={value}" for key, value in harness.env.items())
+            exports.append(("CECE_JOB_ENV", _q(pairs)))
     elif config.runtime is Runtime.NATIVE and harness.launcher:
         exports.append(("CECE_LAUNCHER", _q(harness.launcher)))
     exports.append(
@@ -221,7 +247,9 @@ def _harness(config: RunConfig) -> list[str]:
         exports.append(("CECE_DASK_NWORKERS", str(harness.dask_nworkers)))
     exports.append(("PATH", '"$HOME/.local/bin:$PATH"'))
     exports.append(("UV_CACHE_DIR", _q(config.uv_cache_dir)))
-    exports += [(key, _q(value)) for key, value in harness.env.items()]
+    if config.runtime is not Runtime.SLURM:
+        # docker/native run the driver as a local process: env applies here.
+        exports += [(key, _q(value)) for key, value in harness.env.items()]
 
     pytest_args = [
         f"--suite-config={harness.suite_config}",
@@ -257,4 +285,9 @@ def render_stage(stage: Stage, config: RunConfig) -> ShellScript:
         f'echo ">>> stage: {stage.value}"',
         *_BODIES[stage](config),
     ]
-    return ShellScript(name=stage.value, text="\n".join(lines) + "\n")
+    companions: dict[str, str] = {}
+    if stage is Stage.CECE_TESTS and config.runtime is Runtime.SLURM:
+        companions[_CECE_TESTS_JOB] = _cece_tests_job(config)
+    return ShellScript(
+        name=stage.value, text="\n".join(lines) + "\n", companions=companions
+    )

@@ -2006,6 +2006,7 @@ source = { editable = "." }
 dependencies = [
     { name = "cartopy" },
     { name = "dask", extra = ["distributed"] },
+    { name = "jinja2" },
     { name = "matplotlib" },
     { name = "netcdf4" },
     { name = "pandas" },
@@ -2034,6 +2035,7 @@ dev = [
 requires-dist = [
     { name = "cartopy", specifier = ">=0.22" },
     { name = "dask", extras = ["distributed"], specifier = ">=2024.1" },
+    { name = "jinja2", specifier = ">=3.1" },
     { name = "matplotlib", specifier = ">=3.8" },
     { name = "netcdf4", specifier = ">=1.6" },
     { name = "pandas", specifier = ">=2.0" },

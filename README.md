@@ -210,15 +210,18 @@ harness runs on a **login node** submitting **one Slurm job per driver
 call** — the **slurm runtime**, selected by `CECE_RUNTIME=slurm` (the
 default once `CECE_PLATFORM` is anything but `local`; the platform is
 detected from the hostname and overridable). Each job is
-`sbatch --wait` with `CECE_SBATCH_ARGS` (account, QOS, partition, cpus),
-the suite's `timeout_s` rounded up to whole minutes as its time limit,
-and `scripts/cece-modules.sh` as the job script, which loads
-`CECE_MODULEFILE` before the driver. Two environments stay apart on
+a rendered script, `<combo_id>.sbatch`, kept beside the combo's `.yaml`
+and `.out` so a failed job is reproducible by hand: `#SBATCH` directives
+from `CECE_SBATCH_ARGS` (account, QOS, partition, cpus) and the suite's
+`timeout_s` rounded up to whole minutes, the `CECE_MODULEFILE` load,
+the `CECE_JOB_ENV` exports, and the driver behind `srun --ntasks=1`
+(MPI inside a batch job needs Slurm's PMI endpoint). Two environments stay apart on
 purpose: the harness venv never sees the modulefile (spack-stack's
 `PYTHONPATH` would shadow its numpy), the driver always does. Analysis
 runs in the pytest process, so cap `CECE_DASK_NWORKERS` on a login node.
 `CECE_RUNTIME=native` remains for a session inside an `salloc` shell,
-with `CECE_LAUNCHER` as the per-driver prefix.
+with `CECE_LAUNCHER` as the per-driver prefix (`scripts/cece-modules.sh`
+loads the modulefile there).
 
 `ufs-chem-assay run` assembles all of that from one YAML run config:
 
@@ -240,8 +243,7 @@ stage under `tmux` — it lives as long as the suite. The CLI never
 deletes anything except the harness output root (`clean_root`), and
 never mutates an existing checkout without `update_source`.
 
-The same steps by hand are in [docs/ursa-runbook.md](docs/ursa-runbook.md);
-`scripts/ursa-harness.sh` is the manual login-node script it runs.
+The same steps by hand are in [docs/ursa-runbook.md](docs/ursa-runbook.md).
 
 ## CI and releases
 
@@ -387,7 +389,8 @@ environment variables override `.env`, and `--cece-root-dir` overrides both.
 | `CECE_LAUNCHER`                 | command prefix for native driver runs (e.g. `srun --ntasks=1`) | empty (run directly) |
 | `CECE_SBATCH_ARGS`              | slurm runtime: sbatch options per driver job (`-A … -q … -p … -N 1 -n 1 -c …`) | empty |
 | `CECE_SLURM_QUEUE_WAIT_S`       | slurm runtime: queue allowance added to the suite timeout for the outer bound | `3600` |
-| `CECE_MODULEFILE`               | CECE modulefile the job script loads before the driver (recorded in `run.yaml`) | unset |
+| `CECE_JOB_ENV`                  | slurm runtime: `NAME=VALUE` pairs exported inside each driver job | empty |
+| `CECE_MODULEFILE`               | CECE modulefile each driver job loads before the driver (recorded in `run.yaml`) | unset |
 | `CECE_DOCKER_IMAGE`             | container image (docker runtime)               | `cece/cece-dev`              |
 | `CECE_ROOT_DIR`                 | host CECE checkout root mounted at /work       | unset — required to run the driver; `--cece-root-dir` overrides |
 | `CECE_DRIVER_PATH`              | driver path inside the container               | `./build/cece_standalone_driver` |

@@ -99,40 +99,62 @@ download runs under the harness venv's Python: CECE's examples tooling
 needs 3.11 or newer, and after `module purge` the only `python3` left is
 the OS one.
 
-## 6. The harness script
+## 6. Configure the run
 
-`scripts/ursa-harness.sh` in the harness checkout runs pytest **on the
-login node** and submits **one Slurm job per driver call** through
-`scripts/cece-modules.sh`, the job script that loads the CECE modulefile
-before the driver. It reads `ROOT` (required) plus optional `MODULEFILE`,
-`SBATCH_ARGS` (default `-A epic -q debug -p u1-compute -N 1 -n 1 -c 8`),
-`SUITE`, and `OUTPUT_ROOT`. Read it once before running.
+Copy the Ursa template and edit `root_dir` (this `$ROOT`), `cece.ref`,
+and the Slurm account if it is not `epic`:
+
+```bash
+cp $ROOT/ufs-chem-assay/config/ursa.yaml $ROOT/my-ursa.yaml
+cd $ROOT/ufs-chem-assay
+uv run ufs-chem-assay run --config-file=$ROOT/my-ursa.yaml --dry-run
+```
+
+The dry run renders every stage to `$ROOT/scripts/<NN>-<stage>.sh` and
+executes nothing; read `05-harness.sh` before running it. It runs pytest
+**on the login node**, and pytest submits **one Slurm job per driver
+call**: each combo gets a rendered `<combo_id>.sbatch` beside its
+`.yaml` and `.out` under the output root, with the `#SBATCH` directives,
+the module load, and the `srun --ntasks=1` launch spelled out. The job's
+time limit is the suite's `timeout_s` rounded up to whole minutes; queue
+time does not count.
 
 Two environments, kept apart: the harness venv must never see the
 modulefile (spack-stack sets `PYTHONPATH` to `python3.11` packages that
-shadow the venv's numpy), so the script starts with `module purge` and
-`unset PYTHONPATH`; the driver needs the modulefile's libraries, so each
-job loads it. Never run steps 2, 5, or 6 from a shell with the modulefile
-loaded without purging first. Each job's time limit is the suite's
-`timeout_s` rounded up to whole minutes; queue time does not count.
-Analysis (stats, plots) runs in the pytest process on the login node, so
-`CECE_DASK_NWORKERS` is pinned to 2.
+shadow the venv's numpy), so the harness script starts with
+`module purge` and `unset PYTHONPATH`; the driver needs the modulefile's
+libraries, so each job loads it. Never run steps 2, 5, or 7 from a shell
+with the modulefile loaded without purging first. Analysis (stats,
+plots) runs in the pytest process on the login node, so the template
+pins `dask_nworkers` to 2.
 
 ## 7. Run and watch
 
 ```bash
 tmux new -s harness            # the session outlives your SSH connection
-export ROOT=<your scratch directory>/ufs-chem-assay
-bash $ROOT/ufs-chem-assay/scripts/ursa-harness.sh 2>&1 | tee $ROOT/logs/harness-$(date +%Y%m%d-%H%M%S).log
+cd $ROOT/ufs-chem-assay
+uv run ufs-chem-assay run --config-file=$ROOT/my-ursa.yaml --stage harness
 ```
 
-In another window, `squeue -u $USER` shows the per-combo jobs come and
-go. Results land in `$ROOT/CECE/ufs-chem-assay-output/`: `run.yaml`
-(with `cece_commit`, `platform: ursa`, `runtime: slurm`, `modulefile`),
-`combos.csv`, `test-report.csv`, per-combo directories with the generated
-config, the job's `.out`, `cece.log`, NetCDF, stats, and plots. The login
-node has network, so the first plot fetches Natural Earth coastlines on
-its own.
+The CLI logs to `$ROOT/logs/05-harness-<timestamp>.log` as it runs. In
+another window, `squeue -u $USER` shows the per-combo jobs
+(`ufs-chem-assay-<combo_id>`) come and go. Results land in
+`$ROOT/CECE/ufs-chem-assay-output/`: `run.yaml` (with `cece_commit`,
+`platform: ursa`, `runtime: slurm`, `modulefile`), `combos.csv`,
+`test-report.csv`, and per combo the generated config, the job script,
+the job's `.out`, `cece.log`, NetCDF, stats, and plots. The login node
+has network, so the first plot fetches Natural Earth coastlines on its
+own.
+
+**Triage.** A failed combo is reproducible by hand:
+
+```bash
+cd $ROOT/CECE && sbatch --wait $ROOT/CECE/ufs-chem-assay-output/<combo_id>/<combo_id>.sbatch
+```
+
+then read the `.out` it rewrites. Edit the script in place to
+experiment (a different modulefile, an extra export); the harness
+regenerates it on the next run.
 
 For an interactive alternative, run the session inside an allocation
 with the driver as a direct process:
@@ -141,10 +163,10 @@ with the driver as a direct process:
 salloc -A epic -q debug -p u1-compute -N 1 -n 1 -c 8 -t 00:30:00
 ```
 
-then the same exports with `CECE_RUNTIME=native` and
-`CECE_LAUNCHER="srun --ntasks=1 $ROOT/ufs-chem-assay/scripts/cece-modules.sh"`
-(the wrapper still loads the modulefile per driver run) and
-`uv run --no-sync pytest src/tests/test_driver_combos.py -x -vs ...`.
+then set `harness.runtime: native` and
+`harness.launcher: srun --ntasks=1 <harness>/scripts/cece-modules.sh`
+in your run config (the wrapper loads the modulefile per driver run) and
+run the harness stage as above.
 
 ## What to record after the first run
 

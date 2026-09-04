@@ -33,5 +33,5 @@ def run_config_file(
         else:
             target[name] = value
     path = tmp_path / f"run-{template}"
-    path.write_text(yaml.safe_dump(data))
+    path.write_text(yaml.safe_dump(data, sort_keys=False))  # keep env order
     return path

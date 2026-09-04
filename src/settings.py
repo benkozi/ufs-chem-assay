@@ -59,6 +59,14 @@ class Settings(BaseSettings):
             "own limit is the suite timeout rounded up to minutes"
         ),
     )
+    job_env: str = Field(
+        default="",
+        description=(
+            "slurm runtime: NAME=VALUE pairs, whitespace-separated, exported "
+            "inside every driver job before the driver (e.g. 'I_MPI_FABRICS=shm "
+            "FI_PROVIDER=tcp'); the login-node shell never needs them"
+        ),
+    )
     modulefile: str | None = Field(
         default=None,
         description=(
@@ -123,6 +131,18 @@ class Settings(BaseSettings):
     @property
     def sbatch_argv(self) -> list[str]:
         return shlex.split(self.sbatch_args)
+
+    @property
+    def job_env_pairs(self) -> dict[str, str]:
+        pairs: dict[str, str] = {}
+        for token in shlex.split(self.job_env):
+            name, sep, value = token.partition("=")
+            if not sep or not name:
+                raise ValueError(
+                    f"CECE_JOB_ENV entries must be NAME=VALUE, got {token!r}"
+                )
+            pairs[name] = value
+        return pairs
 
     @field_validator("suite_config_search_path", mode="before")
     @classmethod

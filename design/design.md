@@ -307,8 +307,10 @@ Three **runtimes** (`settings.runtime`, `src/platforms.py`): `docker`, the
 default on the `local` platform and described first below; `slurm`, the
 default on every other platform (RDHPC machines have no docker) — pytest
 runs on a login node and each driver call is one `sbatch --wait` job
-whose script, `scripts/cece-modules.sh`, loads `CECE_MODULEFILE` before
-the driver, so the harness venv never sees the module environment; and
+from a rendered `<combo_id>.sbatch` (Jinja2 template) kept beside the
+combo's artifacts — directives, `CECE_MODULEFILE` load, `CECE_JOB_ENV`,
+and the driver behind `srun --ntasks=1` — so the harness venv never sees
+the module environment and a failed job is reproducible by hand; and
 `native` — the driver as a host process, `cwd` = the CECE checkout,
 prefixed by the `launcher` setting, for a session inside an allocation. The platform is detected from the
 hostname (`CECE_PLATFORM` overrides; `local` when nothing matches) and
@@ -543,8 +545,7 @@ All code under `src/`; the project is `uv`-managed with its own
   README.md               # user-facing setup + run instructions
   docs/ursa-runbook.md    # manual native run on Ursa (what the CLI automates)
   config/                 # run-config templates: local.yaml (docker), ursa.yaml (native + slurm)
-  scripts/ursa-harness.sh # manual login-node run script (the runbook's step 6-7)
-  scripts/cece-modules.sh # slurm job script: load CECE_MODULEFILE, exec the driver
+  scripts/cece-modules.sh # native launcher wrapper: load CECE_MODULEFILE, exec the driver
   design/design.md
   src/
     models/
@@ -554,6 +555,7 @@ All code under `src/`; the project is `uv`-managed with its own
     cli/                  # `ufs-chem-assay run`: run config model, stage scripts,
                           #   bash/sbatch execution (console script via hatchling)
     platforms.py          # Platform / Runtime enums, hostname detection
+    templates/driver-job.sbatch.j2  # the slurm runtime's per-driver job script
     analysis.py           # descriptive stats (dask distributed), CSV writing
     assertions.py         # post-run assertions (NetCDF file count, filenames)
     combos.py             # sweep → combinations, combo naming, config generation

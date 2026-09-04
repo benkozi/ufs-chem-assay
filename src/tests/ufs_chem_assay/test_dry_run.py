@@ -145,3 +145,68 @@ def test_run_yaml_records_cece_commit_sha(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     manifest = yaml.safe_load((tmp_path / "combo_runs" / "run.yaml").read_text())
     assert manifest["cece_commit"] == head
+
+
+def test_slurm_dry_run_writes_a_job_script_per_combo(tmp_path: Path) -> None:
+    """Under the slurm runtime every combo's job script is a recorded
+    artifact beside its yaml, even when nothing is submitted."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CECE_")}
+    env["CECE_ROOT_DIR"] = str(tmp_path)
+    env["CECE_PLATFORM"] = "ursa"
+    env["CECE_RUNTIME"] = "slurm"
+    env["CECE_SBATCH_ARGS"] = "-A epic -q debug"
+    env["CECE_MODULEFILE"] = "cece_ursa.intelllvm"
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "x",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(_RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"),
+            "--dry-run",
+            "--combo-output-root=combo_runs",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = tmp_path / "combo_runs"
+    combo_dirs = [p for p in root.iterdir() if p.is_dir()]
+    assert len(combo_dirs) == 3
+    for combo_dir in combo_dirs:
+        script = combo_dir / f"{combo_dir.name}.sbatch"
+        assert script.is_file()
+        text = script.read_text()
+        assert f"#SBATCH --output={combo_dir}/{combo_dir.name}.out" in text
+        assert "#SBATCH -A epic" in text and "module load cece_ursa.intelllvm" in text
+        assert text.rstrip().endswith(
+            f"srun --ntasks=1 ./build/cece_standalone_driver {combo_dir}/{combo_dir.name}.yaml"
+        )
+    manifest = yaml.safe_load((root / "run.yaml").read_text())
+    assert (
+        manifest["runtime"] == "slurm"
+        and manifest["modulefile"] == "cece_ursa.intelllvm"
+    )
+    assert not list(root.rglob("*.out"))  # nothing submitted

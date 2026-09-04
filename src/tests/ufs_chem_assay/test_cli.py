@@ -111,9 +111,12 @@ def test_cece_tests_stage_only_when_configured(
         tmp_path, overrides={"cece.run_tests": True, "cece.targets": ["all"]}
     )
     assert main(["run", f"--config-file={path}", "--dry-run"]) == 0
-    assert "04-cece-tests.sh" in _scripts(tmp_path)
-    tests = (tmp_path / "root" / "scripts" / "04-cece-tests.sh").read_text()
-    assert "sbatch --wait" in tests and "ctest" in tests
+    scripts = _scripts(tmp_path)
+    assert "04-cece-tests.sh" in scripts and "cece-tests.sbatch" in scripts
+    stage = (tmp_path / "root" / "scripts" / "04-cece-tests.sh").read_text()
+    assert "sbatch --wait --parsable" in stage and "cece-tests.sbatch" in stage
+    job = (tmp_path / "root" / "scripts" / "cece-tests.sbatch").read_text()
+    assert "srun --ntasks=1 ctest" in job and "#SBATCH -A epic" in job
 
 
 def test_platform_flag_overrides_file(tmp_path: Path, mocker: MockerFixture) -> None:

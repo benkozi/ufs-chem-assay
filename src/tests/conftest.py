@@ -26,7 +26,7 @@ from report import TestReportRow, worst_result, write_test_report_csv
 from ulid import ULID
 from platforms import Runtime
 from resolution import resolve_output_roots, select_suites
-from runner import DriverRunResult, run_driver
+from runner import DriverRunResult, run_driver, write_job_script
 from settings import Settings
 
 if TYPE_CHECKING:
@@ -543,6 +543,7 @@ def generated_combos(
     here keeps the record complete before any driver executes."""
     generated: dict[str, GeneratedCombo] = {}
     entries: list[tuple[str, Combo, CeceConfig]] = []
+    settings = request.config.stash[_SETTINGS]
     for context in request.config.stash[_SUITE_CONTEXTS]:
         for combo in context.combos:
             # Storage carries no semantics: directories and filenames are the
@@ -556,6 +557,16 @@ def generated_combos(
                 config_path=context.suite.config_path,
             )
             config.to_yaml(combo_dir / f"{combo.combo_id}.yaml")
+            if settings.runtime is Runtime.SLURM:
+                # The job script is a recorded artifact like the yaml: written
+                # up front (dry runs included), rewritten identically before
+                # submission.
+                write_job_script(
+                    settings,
+                    driver_dir / f"{combo.combo_id}.yaml",
+                    combo_dir / f"{combo.combo_id}.out",
+                    timeout_s=min(context.suite.timeout_s, settings.run_timeout_s),
+                )
             generated[combo.combo_id] = GeneratedCombo(
                 host_dir=combo_dir,
                 driver_yaml=driver_dir / f"{combo.combo_id}.yaml",

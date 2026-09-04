@@ -1,24 +1,20 @@
 """The user-facing tree (docs/, config/, scripts/): generic, and the manual
 Ursa batch script in step with what the CLI renders."""
 
-import re
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from cli.run_config import RunConfig
-from cli.stages import Stage, render_stage
 from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _RUNBOOK = _REPO_ROOT / "docs" / "ursa-runbook.md"
-_HARNESS_SCRIPT = _REPO_ROOT / "scripts" / "ursa-harness.sh"
 _WRAPPER = _REPO_ROOT / "scripts" / "cece-modules.sh"
 
 
 def _user_facing_files() -> list[Path]:
-    files = [_RUNBOOK, _HARNESS_SCRIPT, _WRAPPER]
+    files = [_RUNBOOK, _WRAPPER]
     files += sorted((_REPO_ROOT / "config").glob("*.yaml"))
     return files
 
@@ -50,20 +46,13 @@ def test_runbook_uses_placeholders_and_ref_variables() -> None:
     assert "HARNESS_REF" in text and "CECE_REF" in text
     assert "feat/run-on-rdhpc" not in text
     assert "fix/all-examples-pass" not in text
-    assert "scripts/ursa-harness.sh" in text and "tmux" in text and "squeue" in text
-    assert "config/ursa.yaml" in text
-
-
-def test_harness_script_is_a_login_node_script() -> None:
-    subprocess.run(["bash", "-n", str(_HARNESS_SCRIPT)], check=True)
-    text = _HARNESS_SCRIPT.read_text()
-    assert text.splitlines()[0] == "#!/bin/bash"
+    assert "tmux" in text and "squeue" in text
+    assert "config/ursa.yaml" in text and "05-harness.sh" in text
+    assert "--stage harness" in text
     assert (
-        "#SBATCH" not in text
-    )  # it runs pytest on the login node; sbatch is per driver
-    assert "${ROOT:?" in text
-    assert "module purge" in text and "unset PYTHONPATH" in text
-    assert "module load" not in text
+        ".sbatch" in text
+    )  # the per-combo job script, and the resubmit-by-hand triage step
+    assert not (_REPO_ROOT / "scripts" / "ursa-harness.sh").exists()
 
 
 def test_wrapper_is_valid_bash_and_execs_without_modules(tmp_path: Path) -> None:
@@ -79,26 +68,3 @@ def test_wrapper_is_valid_bash_and_execs_without_modules(tmp_path: Path) -> None
     assert completed.stdout == "ok\n"
     text = _WRAPPER.read_text()
     assert 'exec "$@"' in text and "module load" in text and "CECE_MODULEFILE" in text
-
-
-def test_harness_script_matches_the_rendered_harness_stage() -> None:
-    """Every CECE_* export the CLI renders for the Ursa template, and the
-    pytest invocation shape, also appear in the manual script — the two
-    are the same commands and must not drift."""
-    config = RunConfig.from_yaml(TEMPLATES_DIR / "ursa.yaml")
-    rendered = render_stage(Stage.HARNESS, config).text
-    script = _HARNESS_SCRIPT.read_text()
-    exported = re.findall(r"^export (CECE_[A-Z_]+)=", rendered, flags=re.M)
-    assert exported  # sanity: the stage does export settings
-    for name in exported:
-        assert re.search(rf"^export {name}=", script, flags=re.M), name
-    for fragment in (
-        "module purge",
-        "unset PYTHONPATH",
-        "uv run --no-sync pytest src/tests/test_driver_combos.py",
-        "--suite-config=",
-        "--combo-output-root=",
-        "--combo-clean-root",
-    ):
-        assert fragment in script, fragment
-    assert "UV_OFFLINE" not in script  # login node: network is available

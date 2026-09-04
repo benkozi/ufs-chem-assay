@@ -7,9 +7,11 @@ Python must never see the driver's module environment)."""
 from __future__ import annotations
 
 import math
+import shlex
 import subprocess
 from pathlib import Path, PurePosixPath
 
+from jinja2 import Environment, StrictUndefined
 from pydantic import BaseModel, ConfigDict, InstanceOf
 
 from combos import Combo
@@ -18,15 +20,114 @@ from platforms import Runtime
 from settings import Settings
 
 
-# The slurm job script: loads CECE_MODULEFILE (when set) and execs its
-# arguments — sbatch takes a script followed by the script's arguments, so
-# the wrapper is the script and the driver command is its argv.
+# The native launcher helper (loads CECE_MODULEFILE, execs its argv) — used
+# inside an salloc shell; the slurm runtime renders its own job scripts.
 WRAPPER = Path(__file__).resolve().parents[1] / "scripts" / "cece-modules.sh"
+# The slurm job-script template: one rendered `<combo_id>.sbatch` per driver
+# call, written beside the combo's yaml and out so a job is reproducible by
+# hand (`sbatch <combo_id>.sbatch`). StrictUndefined: a missing variable
+# fails the render, never the job.
+TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "driver-job.sbatch.j2"
+_JOB_NAME_PREFIX = "ufs-chem-assay-"
 
 
 def slurm_minutes(timeout_s: int) -> int:
     """Slurm time limits are whole minutes: round the suite timeout up, floor 1."""
     return max(1, math.ceil(timeout_s / 60))
+
+
+def sbatch_directives(sbatch_args: str) -> list[str]:
+    """CECE_SBATCH_ARGS as one directive per option: an option followed by a
+    value that is not itself an option pairs with it (`-A epic`); anything
+    else stands alone (`--exclusive`, `--mem=4g`)."""
+    tokens = shlex.split(sbatch_args)
+    directives: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        nxt = tokens[index + 1] if index + 1 < len(tokens) else None
+        if (
+            token.startswith("-")
+            and "=" not in token
+            and nxt is not None
+            and not nxt.startswith("-")
+        ):
+            directives.append(f"{token} {nxt}")
+            index += 2
+        else:
+            directives.append(token)
+            index += 1
+    return directives
+
+
+def render_job_script(
+    *,
+    job_name: str,
+    out_path: Path,
+    root_dir: Path,
+    minutes: int,
+    directives: list[str],
+    modulefile: str | None,
+    env: dict[str, str],
+    command: str,
+    template_text: str | None = None,
+    extra: dict[str, object] | None = None,
+) -> str:
+    """The job script text for one command: every per-job setting as a
+    #SBATCH directive, the module block when a modulefile is given, the
+    exports, then `srun --ntasks=1 <command>` — MPI programs inside a batch
+    job need Slurm's PMI endpoint, which only srun provides."""
+    text = TEMPLATE_PATH.read_text() if template_text is None else template_text
+    template = Environment(
+        undefined=StrictUndefined, keep_trailing_newline=True
+    ).from_string(text)
+    return template.render(
+        job_name=job_name,
+        out_path=str(out_path),
+        root_dir=str(root_dir),
+        minutes=minutes,
+        directives=directives,
+        modulefile=modulefile,
+        env=env,
+        command=command,
+        **(extra or {}),
+    )
+
+
+def driver_command(settings: Settings, driver_yaml: PurePosixPath) -> list[str]:
+    """The driver invocation as the job (or host process) runs it, relative
+    to the checkout it runs in."""
+    return [settings.driver_path, str(driver_yaml)]
+
+
+def job_script_path(out_path: Path) -> Path:
+    """<combo_dir>/<combo_id>.sbatch, beside the .out and .yaml."""
+    return out_path.with_suffix(".sbatch")
+
+
+def write_job_script(
+    settings: Settings, driver_yaml: PurePosixPath, out_path: Path, timeout_s: int
+) -> Path:
+    """Render and write the combo's job script from the settings; returns
+    its path. Idempotent — the dry run writes it as a recorded artifact and
+    the real run writes the same text before submitting."""
+    assert settings.root_dir is not None  # guarded at collection
+    script = job_script_path(out_path)
+    script.write_text(
+        render_job_script(
+            job_name=f"{_JOB_NAME_PREFIX}{out_path.stem}",
+            out_path=out_path,
+            root_dir=settings.root_dir,
+            minutes=slurm_minutes(timeout_s),
+            directives=sbatch_directives(settings.sbatch_args),
+            modulefile=settings.modulefile,
+            env=settings.job_env_pairs,
+            command=" ".join(
+                shlex.quote(part) for part in driver_command(settings, driver_yaml)
+            ),
+        )
+    )
+    return script
 
 
 class DriverRunResult(BaseModel):
@@ -81,48 +182,28 @@ def build_command(
     driver_yaml: PurePosixPath,
     output_mount: tuple[Path, PurePosixPath] | None = None,
     *,
-    out_path: Path | None = None,
-    timeout_s: int | None = None,
+    job_script: Path | None = None,
 ) -> list[str]:
-    """The driver command for one combination, per settings.runtime.
+    """The command the harness runs for one combination, per settings.runtime.
 
     docker: the shared docker prefix, then the driver; driver_yaml is a
     container path.
     native: the launcher prefix, the driver resolved against the checkout,
     and driver_yaml as a host path; output_mount is meaningless and ignored.
-    slurm: `sbatch --wait --parsable` with the job's cwd at the checkout,
-    its stdout+stderr at out_path, its time limit from timeout_s (whole
-    minutes), the configured sbatch args, then the wrapper as the job
-    script and the driver command as its arguments.
+    slurm: the submission of the combo's rendered job script — everything
+    else (cwd, output, time limit, directives, modules, the srun launch)
+    is inside the script.
     """
     if settings.runtime is Runtime.NATIVE:
         assert settings.root_dir is not None  # guarded at collection
         driver = settings.root_dir / settings.driver_path
         return [*settings.launcher_argv, str(driver), str(driver_yaml)]
     if settings.runtime is Runtime.SLURM:
-        assert settings.root_dir is not None  # guarded at collection
-        assert out_path is not None and timeout_s is not None, (
-            "slurm needs out_path/timeout_s"
-        )
-        return [
-            "sbatch",
-            "--wait",
-            "--parsable",
-            "--chdir",
-            str(settings.root_dir),
-            "-o",
-            str(out_path),
-            "-t",
-            str(slurm_minutes(timeout_s)),
-            *settings.sbatch_argv,
-            str(WRAPPER),
-            settings.driver_path,
-            str(driver_yaml),
-        ]
+        assert job_script is not None, "slurm submits a rendered job script"
+        return ["sbatch", "--wait", "--parsable", str(job_script)]
     return [
         *docker_prefix(settings, output_mount),
-        settings.driver_path,
-        str(driver_yaml),
+        *driver_command(settings, driver_yaml),
     ]
 
 
@@ -172,15 +253,16 @@ def run_driver(
 def _run_slurm_job(
     settings: Settings, driver_yaml: PurePosixPath, out_path: Path, timeout_s: int
 ) -> None:
-    """One `sbatch --wait` job for the driver. Slurm writes the job's output
-    to out_path itself; the harness reads it back afterwards. The job's own
+    """One `sbatch --wait` job for the driver, from the combo's rendered job
+    script (`<combo_id>.sbatch`, kept beside the yaml and out so the job is
+    reproducible by hand). Slurm writes the job's output to out_path itself;
+    the harness reads it back afterwards. The job's own
     time limit is timeout_s rounded up to minutes; the outer bound adds the
     queue allowance and, when hit, cancels the job (scancel) before raising
     TimeoutExpired — queue time must not count against the driver, but a
     job stuck forever must not hang the session."""
-    command = build_command(
-        settings, driver_yaml, out_path=out_path, timeout_s=timeout_s
-    )
+    script = write_job_script(settings, driver_yaml, out_path, timeout_s)
+    command = build_command(settings, driver_yaml, job_script=script)
     process = subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
     )

@@ -20,6 +20,8 @@ def write_script(script: ShellScript, scripts_dir: Path, index: int) -> Path:
     path = scripts_dir / f"{index:02d}-{script.name}.sh"
     path.write_text(script.text)
     path.chmod(0o755)
+    for filename, text in script.companions.items():
+        (scripts_dir / filename).write_text(text)
     return path
 
 
