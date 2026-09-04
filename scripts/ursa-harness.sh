@@ -37,6 +37,9 @@ module use "$ROOT/CECE/modulefiles"
 module load "$MODULEFILE"
 module list
 
+echo "PYTHONPATH=$PYTHONPATH"; echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+cd $ROOT/ufs-chem-assay && uv run --no-sync python -c "import numpy._core._multiarray_umath"
+
 # uv from the standalone installer; no network on compute nodes.
 export PATH="$HOME/.local/bin:$PATH"
 export UV_CACHE_DIR="$ROOT/uv-cache"
