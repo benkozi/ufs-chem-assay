@@ -171,3 +171,18 @@ def test_uncreatable_root_dir_is_a_clean_error(
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
     assert len(errors) == 1 and str(blocker / "root") in errors[0]
     assert "root_dir" in errors[0]
+
+
+def test_root_dir_flag_overrides_the_derived_root(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    mocker.patch("cli.main.run_bash")
+    config = run_config_file(tmp_path)  # no root_dir in the template
+    root = tmp_path / "elsewhere"
+    code = main(["run", f"--config-file={config}", f"--root-dir={root}", "--dry-run"])
+    assert code == 0
+    assert (root / "scripts" / "05-harness.sh").is_file()
+    assert (
+        f"export CECE_ROOT_DIR={root}/CECE"
+        in (root / "scripts" / "05-harness.sh").read_text()
+    )

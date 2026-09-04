@@ -1,11 +1,12 @@
 # Run config for Ursa (RDHPCS): native driver build against CECE's own
 # modulefiles; pytest on the login node submitting one Slurm job per driver
-# call (the slurm runtime). Copy, edit the account and paths, then:
+# call (the slurm runtime). Runs as shipped from a runbook-layout checkout:
 #   ufs-chem-assay run --config-file=config/ursa.yaml [--dry-run]
 # Every stage renders to <root_dir>/scripts/<NN>-<stage>.sh and runs with
 # bash where the CLI runs; run the harness stage under tmux.
 platform: ursa  # optional: detected from the hostname when absent; --platform wins
-root_dir: /scratch3/<project>/<user>/ufs-chem-assay  # edit: everything the CLI creates lands here
+# root_dir is derived: the parent of this harness checkout ($ROOT/ufs-chem-assay beside $ROOT/CECE).
+# Set it here, or pass --root-dir, only if your layout differs.
 cece:
   git_url: git@github.com:benkozi/CECE.git
   ref: fix/all-examples-pass  # branch or SHA; the integration workflow's ref

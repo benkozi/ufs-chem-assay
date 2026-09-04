@@ -227,11 +227,12 @@ two environments conflict.
 `ufs-chem-assay run` assembles all of that from one YAML run config:
 
 ```sh
-cp config/ursa.yaml my-ursa.yaml       # edit account, qos, root_dir, ref
-uv run ufs-chem-assay run --config-file=my-ursa.yaml --dry-run   # render only
-uv run ufs-chem-assay run --config-file=my-ursa.yaml             # clone, build,
-                                                                 #   data, harness
-uv run ufs-chem-assay run --config-file=my-ursa.yaml --stage harness
+# the shipped template runs as-is: root_dir is derived as the parent of this
+# checkout ($ROOT/ufs-chem-assay beside $ROOT/CECE); --root-dir overrides it
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --dry-run   # render only
+uv run ufs-chem-assay run --config-file=config/ursa.yaml             # clone, build,
+                                                                     #   data, harness
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage harness
 ```
 
 Stages (`--stage`, repeatable): `source` (clone or fast-forward CECE),

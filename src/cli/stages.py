@@ -12,17 +12,13 @@ from __future__ import annotations
 
 import shlex
 from enum import StrEnum, unique
-from pathlib import Path
 
 from pydantic import ConfigDict, Field
 
-from cli.run_config import RunConfig
+from cli.run_config import HARNESS_ROOT, RunConfig
 from models.base import StrictModel
 from platforms import Runtime
 from runner import render_job_script, sbatch_directives
-
-# src/cli/stages.py -> <repo root>: where `uv run pytest` runs from.
-HARNESS_ROOT = Path(__file__).resolve().parents[2]
 
 _DRIVER_COMBOS = "src/tests/test_driver_combos.py"
 _SHEBANG = "#!/bin/bash"

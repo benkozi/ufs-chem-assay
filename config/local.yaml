@@ -1,10 +1,11 @@
 # Run config for a laptop: the docker runtime, no modules, no Slurm — the
 # CLI equivalent of the integration workflow (CECE's own container build
 # script builds the driver in cece/cece-dev, then the harness runs on the
-# host). Copy, edit root_dir, then:
+# host). Runs as shipped from the checkout:
 #   ufs-chem-assay run --config-file=config/local.yaml [--dry-run]
 platform: local
-root_dir: ~/ufs-chem-assay-runs  # ~ expands; everything the CLI creates lands here
+# root_dir is derived: the parent of this harness checkout. Set it here, or pass
+# --root-dir, only if your layout differs.
 cece:
   git_url: git@github.com:benkozi/CECE.git
   ref: fix/all-examples-pass

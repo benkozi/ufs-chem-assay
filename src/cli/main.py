@@ -45,6 +45,15 @@ def _parser() -> argparse.ArgumentParser:
         help="override the config file's platform (and hostname detection)",
     )
     run.add_argument(
+        "--root-dir",
+        type=Path,
+        default=None,
+        help=(
+            "override the run root (default: the config file's root_dir, else the "
+            "harness checkout's parent directory)"
+        ),
+    )
+    run.add_argument(
         "--stage",
         action="append",
         type=Stage,
@@ -75,7 +84,9 @@ def _selected_stages(config: RunConfig, requested: list[Stage] | None) -> list[S
 
 
 def _run(args: argparse.Namespace) -> int:
-    config = RunConfig.from_yaml(args.config_file, platform=args.platform)
+    config = RunConfig.from_yaml(
+        args.config_file, platform=args.platform, root_dir=args.root_dir
+    )
     scripts_dir = config.root_dir / "scripts"
     logs_dir = config.root_dir / "logs"
     stages = _selected_stages(config, args.stage)

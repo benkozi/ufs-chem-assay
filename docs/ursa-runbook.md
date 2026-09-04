@@ -99,15 +99,18 @@ download runs under the harness venv's Python: CECE's examples tooling
 needs 3.11 or newer, and after `module purge` the only `python3` left is
 the OS one.
 
-## 6. Configure the run
+## 6. Render and read the scripts
 
-Copy the Ursa template and edit `root_dir` (this `$ROOT`), `cece.ref`,
-and the Slurm account if it is not `epic`:
+The shipped `config/ursa.yaml` runs as-is from a checkout laid out like
+this runbook: the CLI derives `root_dir` as the parent of the harness
+checkout (`$ROOT`), so `$ROOT/CECE` is the checkout it uses. Nothing in
+the YAML needs editing; pass `--root-dir` (or set `root_dir` in a copy)
+only if your layout differs, and edit a copy only if your Slurm account
+is not `epic`.
 
 ```bash
-cp $ROOT/ufs-chem-assay/config/ursa.yaml $ROOT/my-ursa.yaml
 cd $ROOT/ufs-chem-assay
-uv run ufs-chem-assay run --config-file=$ROOT/my-ursa.yaml --dry-run
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --dry-run
 ```
 
 The dry run renders every stage to `$ROOT/scripts/<NN>-<stage>.sh` and
@@ -133,7 +136,7 @@ pins `dask_nworkers` to 2.
 ```bash
 tmux new -s harness            # the session outlives your SSH connection
 cd $ROOT/ufs-chem-assay
-uv run ufs-chem-assay run --config-file=$ROOT/my-ursa.yaml --stage harness
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage harness
 ```
 
 The CLI logs to `$ROOT/logs/05-harness-<timestamp>.log` as it runs. In

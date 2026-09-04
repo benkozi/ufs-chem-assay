@@ -45,8 +45,9 @@ def test_runbook_uses_placeholders_and_ref_variables() -> None:
     assert "feat/run-on-rdhpc" not in text
     assert "fix/all-examples-pass" not in text
     assert "tmux" in text and "squeue" in text
-    assert "config/ursa.yaml" in text and "05-harness.sh" in text
-    assert "--stage harness" in text
+    assert "config/ursa.yaml --stage harness" in text  # the template runs as shipped
+    assert "05-harness.sh" in text
+    assert "root_dir" in text  # explains the derived root
     assert (
         ".sbatch" in text
     )  # the per-combo job script, and the resubmit-by-hand triage step

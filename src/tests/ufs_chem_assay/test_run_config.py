@@ -1,11 +1,12 @@
 """RunConfig: the one YAML file `ufs-chem-assay run` assembles a run from."""
 
+import re
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from cli.run_config import RunConfig
+from cli.run_config import HARNESS_ROOT, RunConfig
 from platforms import Platform, Runtime
 from tests.ufs_chem_assay.run_configs import REMOVE, TEMPLATES_DIR, run_config_file
 
@@ -103,3 +104,39 @@ def test_slurm_section_describes_the_per_driver_job(tmp_path: Path) -> None:
         path = run_config_file(tmp_path, overrides={f"slurm.{gone}": "x"})
         with pytest.raises(ValidationError, match=gone):
             RunConfig.from_yaml(path)
+
+
+def test_templates_ship_without_a_root_and_derive_the_harness_parent() -> None:
+    # The runbook layout: $ROOT/ufs-chem-assay beside $ROOT/CECE — so the
+    # harness checkout's parent is the root, and no YAML edit is needed.
+    for name in ("ursa.yaml", "local.yaml"):
+        # no top-level root_dir line (baselines.root_dir is a different key)
+        assert (
+            re.search(r"^root_dir:", (TEMPLATES_DIR / name).read_text(), re.M) is None
+        ), name
+        config = RunConfig.from_yaml(TEMPLATES_DIR / name)
+        assert config.root_dir == HARNESS_ROOT.parent
+        assert config.root_dir.is_absolute() and "<" not in str(config.root_dir)
+        assert config.clone_dir == HARNESS_ROOT.parent / "CECE"
+
+
+def test_root_dir_precedence_flag_file_derived(tmp_path: Path) -> None:
+    in_file = run_config_file(tmp_path, overrides={"root_dir": "/from/file"})
+    assert RunConfig.from_yaml(in_file).root_dir == Path("/from/file")
+    assert RunConfig.from_yaml(in_file, root_dir=Path("/from/flag")).root_dir == Path(
+        "/from/flag"
+    )
+    absent = run_config_file(tmp_path)  # the template carries none
+    assert RunConfig.from_yaml(absent).root_dir == HARNESS_ROOT.parent
+    assert (
+        RunConfig.from_yaml(absent, root_dir=Path("~/x")).root_dir
+        == Path("~/x").expanduser()
+    )
+
+
+def test_root_dir_is_required_on_direct_validation() -> None:
+    # Only from_yaml derives it; the model itself never guesses.
+    with pytest.raises(ValidationError, match="root_dir"):
+        RunConfig.model_validate(
+            {"platform": "local", "cece": {"git_url": "u", "ref": "r"}}
+        )

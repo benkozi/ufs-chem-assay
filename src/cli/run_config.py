@@ -10,6 +10,11 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from models.base import StrictModel
 from platforms import Platform, Runtime, default_runtime, detect_platform
 
+# src/cli/run_config.py -> <repo root>: the harness checkout, where `uv run
+# pytest` runs from. Its parent is the default run root — the runbook's
+# layout is $ROOT/ufs-chem-assay beside $ROOT/CECE.
+HARNESS_ROOT = Path(__file__).resolve().parents[2]
+
 
 class CeceSection(StrictModel):
     git_url: str = Field(description="Repository cloned when clone_dir is missing")
@@ -156,7 +161,11 @@ class RunConfig(StrictModel):
         )
     )
     root_dir: Path = Field(
-        description="Directory holding everything the CLI creates: CECE/, logs/, scripts/, uv caches"
+        description=(
+            "Directory holding everything the CLI creates: CECE/, logs/, "
+            "scripts/, uv caches. Optional in the file: from_yaml resolves "
+            "--root-dir > the file > the harness checkout's parent directory"
+        )
     )
     cece: CeceSection
     data: DataSection = Field(default_factory=DataSection)
@@ -171,18 +180,26 @@ class RunConfig(StrictModel):
     @field_validator("root_dir", mode="before")
     @classmethod
     def _expand_root(cls, value: object) -> object:
-        if isinstance(value, str):
+        if isinstance(value, (str, Path)):
             return Path(value).expanduser()
         return value
 
     @classmethod
-    def from_yaml(cls, path: Path, platform: Platform | None = None) -> RunConfig:
-        """Load a run config; the platform is the `platform` argument
-        (--platform), else the file's, else hostname detection."""
+    def from_yaml(
+        cls, path: Path, platform: Platform | None = None, root_dir: Path | None = None
+    ) -> RunConfig:
+        """Load a run config. The platform is the `platform` argument
+        (--platform), else the file's, else hostname detection; the root is
+        the `root_dir` argument (--root-dir), else the file's, else the
+        harness checkout's parent — so the shipped templates run as-is
+        from a checkout laid out like the runbook."""
         with open(path) as f:
             loaded = yaml.safe_load(f)
         if isinstance(loaded, dict):
             loaded["platform"] = platform or loaded.get("platform") or detect_platform()
+            loaded["root_dir"] = (
+                root_dir or loaded.get("root_dir") or HARNESS_ROOT.parent
+            )
         return cls.model_validate(loaded)
 
     @property
