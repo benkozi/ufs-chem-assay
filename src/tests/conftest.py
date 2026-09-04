@@ -557,10 +557,11 @@ def generated_combos(
                 config_path=context.suite.config_path,
             )
             config.to_yaml(combo_dir / f"{combo.combo_id}.yaml")
-            if settings.runtime is Runtime.SLURM:
+            if settings.runtime is Runtime.SLURM and settings.root_dir is not None:
                 # The job script is a recorded artifact like the yaml: written
                 # up front (dry runs included), rewritten identically before
-                # submission.
+                # submission. A checkout-less dry run has no job to describe
+                # (nothing to --chdir into) and records none.
                 write_job_script(
                     settings,
                     driver_dir / f"{combo.combo_id}.yaml",

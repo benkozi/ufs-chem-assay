@@ -18,6 +18,9 @@ def _run_pytest(
     args: list[str], cwd: Path, env_overrides: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("CECE_")}
+    # Explicit platform: the child cannot inherit the in-process hostname
+    # patch, and on an RDHPC login node detection would pick that machine.
+    env["CECE_PLATFORM"] = "local"
     env |= env_overrides or {}
     return subprocess.run(
         [

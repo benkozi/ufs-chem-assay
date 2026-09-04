@@ -15,6 +15,7 @@ _USAGE_ERROR = 4  # pytest.ExitCode.USAGE_ERROR
 
 def _run_pytest(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("CECE_")}
+    env["CECE_PLATFORM"] = "local"  # the child cannot inherit the hostname patch
     return subprocess.run(
         [
             sys.executable,

@@ -19,6 +19,7 @@ _RUNNER_ROOT = Path(__file__).resolve().parents[3]  # <repo root>/
 def test_dry_run_generates_everything_but_never_executes(tmp_path: Path) -> None:
     env = {k: v for k, v in os.environ.items() if not k.startswith("CECE_")}
     env["CECE_ROOT_DIR"] = str(tmp_path)
+    env["CECE_PLATFORM"] = "local"  # the child cannot inherit the hostname patch
     # A configured root must be a git checkout (the SHA is fatal otherwise).
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(
@@ -99,6 +100,7 @@ def test_run_yaml_records_cece_commit_sha(tmp_path: Path) -> None:
     # A git-checkout CECE root stamps its HEAD SHA into run.yaml.
     env = {k: v for k, v in os.environ.items() if not k.startswith("CECE_")}
     env["CECE_ROOT_DIR"] = str(tmp_path)
+    env["CECE_PLATFORM"] = "local"
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(
         [
@@ -210,3 +212,37 @@ def test_slurm_dry_run_writes_a_job_script_per_combo(tmp_path: Path) -> None:
         and manifest["modulefile"] == "cece_ursa.intelllvm"
     )
     assert not list(root.rglob("*.out"))  # nothing submitted
+
+
+def test_slurm_dry_run_without_a_checkout_writes_no_job_scripts(tmp_path: Path) -> None:
+    """The checkout-less dry run (no CECE_ROOT_DIR) is supported under every
+    runtime: with nothing to --chdir into there is no job to describe, so
+    slurm records no .sbatch and behaves like docker/native. (Third Ursa
+    run: this errored at setup in generated_combos.)"""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CECE_")}
+    env["CECE_PLATFORM"] = "ursa"
+    env["CECE_RUNTIME"] = "slurm"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(_RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"),
+            "--dry-run",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "--basetemp",
+            str(tmp_path / "bt"),
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "21 skipped" in result.stdout
+    assert not list((tmp_path / "bt").rglob("*.sbatch"))
+    manifest = yaml.safe_load(next((tmp_path / "bt").rglob("run.yaml")).read_text())
+    assert manifest["runtime"] == "slurm" and manifest["cece_commit"] is None
