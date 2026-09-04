@@ -16,8 +16,9 @@ from platforms import Platform
 
 logger = get_logger("cli")
 
-# Script file numbering: a stage's position in the canonical order.
-_INDEX = {stage: position + 1 for position, stage in enumerate(Stage)}
+# Script file numbering: fixed slots in the canonical order, so the harness
+# stage is always 05 (slot 04 is held for the CECE-tests stage of issue #9).
+_INDEX = {Stage.SOURCE: 1, Stage.BUILD: 2, Stage.DATA: 3, Stage.HARNESS: 5}
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -25,8 +26,8 @@ def _parser() -> argparse.ArgumentParser:
         prog="ufs-chem-assay",
         description=(
             "Assemble and execute a harness run from one YAML run config: "
-            "CECE source, driver build, data, CECE unit tests, the pytest "
-            "session — directly, or as one Slurm batch job."
+            "CECE source, driver build, data, the pytest session — on this "
+            "node; under the slurm runtime the driver runs are Slurm jobs."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -73,14 +74,11 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _selected_stages(config: RunConfig, requested: list[Stage] | None) -> list[Stage]:
-    if requested is not None:
-        return [stage for stage in Stage if stage in requested]
-    return [
-        stage
-        for stage in Stage
-        if stage is not Stage.CECE_TESTS or config.cece.run_tests
-    ]
+def _selected_stages(requested: list[Stage] | None) -> list[Stage]:
+    """The requested stages in canonical order; all of them when none given."""
+    if requested is None:
+        return list(Stage)
+    return [stage for stage in Stage if stage in requested]
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -89,7 +87,7 @@ def _run(args: argparse.Namespace) -> int:
     )
     scripts_dir = config.root_dir / "scripts"
     logs_dir = config.root_dir / "logs"
-    stages = _selected_stages(config, args.stage)
+    stages = _selected_stages(args.stage)
     logger.info(
         "platform %s / runtime %s; root %s; stages: %s",
         config.platform.value,

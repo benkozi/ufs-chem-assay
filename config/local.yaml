@@ -16,7 +16,6 @@ cece:
   build_jobs: 4
   targets:
     - cece_standalone_driver
-  run_tests: false
 data:
   examples:
     - ex3

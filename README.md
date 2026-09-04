@@ -237,8 +237,8 @@ uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage harness
 
 Stages (`--stage`, repeatable): `source` (clone or fast-forward CECE),
 `build` (modules + cmake, or CECE's container build script locally),
-`data` (example downloads, cartopy cache), `cece-tests` (ctest as one
-Slurm job; only with `cece.run_tests`), `harness` (the pytest session).
+`data` (example downloads, cartopy cache), `harness` (the pytest
+session). Running CECE's own tests is a separate task (issue #9).
 Each renders to `<root_dir>/scripts/<NN>-<stage>.sh` and runs with bash
 where the CLI runs; logs land in `<root_dir>/logs/`. Run the harness
 stage under `tmux` — it lives as long as the suite. The CLI never

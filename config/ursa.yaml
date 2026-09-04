@@ -16,9 +16,8 @@ cece:
   cmake_args:
     - -DCMAKE_BUILD_TYPE=Release
   build_jobs: 8
-  targets:  # `all` to also build the unit-test stack (needed by run_tests)
+  targets:  # `all` also builds CECE's test stack (running it: issue #9)
     - cece_standalone_driver
-  run_tests: false  # ctest under the launcher, in the batch job
 data:
   examples:  # download-example-data.py --example ... (login node)
     - ex3

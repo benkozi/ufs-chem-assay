@@ -30,17 +30,6 @@ def local(tmp_path: Path) -> RunConfig:
     )
 
 
-@pytest.fixture()
-def ursa_with_tests(tmp_path: Path) -> RunConfig:
-    return RunConfig.from_yaml(
-        run_config_file(
-            tmp_path,
-            overrides={"cece.run_tests": True, "cece.targets": ["all"]},
-            root_dir=_URSA_ROOT,
-        )
-    )
-
-
 def test_harness_root_is_the_repository() -> None:
     assert (HARNESS_ROOT / "pyproject.toml").is_file()
     assert (HARNESS_ROOT / "src" / "tests" / "test_driver_combos.py").is_file()
@@ -132,21 +121,10 @@ def test_data_stage_without_cartopy(local: RunConfig) -> None:
     assert "natural_earth" not in render_stage(Stage.DATA, local).text
 
 
-def test_cece_tests_stage_submits_its_own_rendered_job_script(
-    ursa_with_tests: RunConfig,
-) -> None:
-    config = ursa_with_tests
-    script = render_stage(Stage.CECE_TESTS, config)
-    job = f"{config.root_dir}/scripts/cece-tests.sbatch"
-    assert f"sbatch --wait --parsable {job}" in script.text
-    assert "cece-tests.sbatch" in script.companions
-    text = script.companions["cece-tests.sbatch"]
-    assert "#SBATCH -A epic" in text and "#SBATCH --time=30" in text
-    assert f"#SBATCH --chdir={config.clone_dir}" in text
-    assert "module load cece_ursa.intelllvm" in text
-    assert text.rstrip().endswith(
-        f"srun --ntasks=1 ctest --test-dir {config.clone_dir}/build --output-on-failure"
-    )
+def test_cece_tests_is_not_a_stage_of_this_feature() -> None:
+    # Running CECE's own tests is issue #9; the build stage can still build
+    # the test stack (cece.targets) for it.
+    assert [stage.value for stage in Stage] == ["source", "build", "data", "harness"]
 
 
 def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) -> None:

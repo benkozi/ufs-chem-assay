@@ -83,9 +83,6 @@ First-run checks:
 - The `grep` should show `Found MPI` and a netCDF line; a missing
   netCDF line means the spack-stack `*_ROOT` variables were not picked
   up.
-- Add `--target all` (or drop `--target`) to also build the CECE unit
-  tests; run them later from the batch job with
-  `srun --ntasks=1 ctest --test-dir $ROOT/CECE/build --output-on-failure`.
 
 ## 5. Data
 

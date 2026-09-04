@@ -79,10 +79,15 @@ def test_explicit_clone_dir_is_used(tmp_path: Path) -> None:
     assert RunConfig.from_yaml(path).clone_dir == Path("/elsewhere/CECE")
 
 
-def test_run_tests_requires_all_target(tmp_path: Path) -> None:
-    path = run_config_file(tmp_path, overrides={"cece.run_tests": True})
-    with pytest.raises(ValidationError, match="all"):
-        RunConfig.from_yaml(path)
+def test_run_tests_knob_is_gone_but_targets_stay(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="run_tests"):
+        RunConfig.from_yaml(
+            run_config_file(tmp_path, overrides={"cece.run_tests": True})
+        )
+    config = RunConfig.from_yaml(
+        run_config_file(tmp_path, overrides={"cece.targets": ["all"]})
+    )
+    assert config.cece.targets == ["all"]  # builds the test stack for issue #9
 
 
 def test_slurm_account_defaults_to_epic(tmp_path: Path) -> None:

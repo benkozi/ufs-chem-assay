@@ -103,20 +103,18 @@ def test_local_config_runs_the_same_stages(
     assert ran == ["01-source.sh", "02-build.sh", "03-data.sh", "05-harness.sh"]
 
 
-def test_cece_tests_stage_only_when_configured(
+def test_harness_keeps_slot_05_without_a_04(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
+    # Slot 04 is held for the CECE-tests stage of issue #9; nothing else renumbers.
     mocker.patch("cli.main.run_bash")
-    path = _config(
-        tmp_path, overrides={"cece.run_tests": True, "cece.targets": ["all"]}
-    )
-    assert main(["run", f"--config-file={path}", "--dry-run"]) == 0
-    scripts = _scripts(tmp_path)
-    assert "04-cece-tests.sh" in scripts and "cece-tests.sbatch" in scripts
-    stage = (tmp_path / "root" / "scripts" / "04-cece-tests.sh").read_text()
-    assert "sbatch --wait --parsable" in stage and "cece-tests.sbatch" in stage
-    job = (tmp_path / "root" / "scripts" / "cece-tests.sbatch").read_text()
-    assert "srun --ntasks=1 ctest" in job and "#SBATCH -A epic" in job
+    assert main(["run", f"--config-file={_config(tmp_path)}", "--dry-run"]) == 0
+    assert _scripts(tmp_path) == [
+        "01-source.sh",
+        "02-build.sh",
+        "03-data.sh",
+        "05-harness.sh",
+    ]
 
 
 def test_platform_flag_overrides_file(tmp_path: Path, mocker: MockerFixture) -> None:

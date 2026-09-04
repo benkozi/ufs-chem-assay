@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from models.base import StrictModel
 from platforms import Platform, Runtime, default_runtime, detect_platform
@@ -50,20 +50,11 @@ class CeceSection(StrictModel):
     build_jobs: int = Field(default=8, gt=0, description="cmake --build --parallel N")
     targets: list[str] = Field(
         default_factory=lambda: ["cece_standalone_driver"],
-        description="CMake targets to build; `all` includes the unit-test stack",
+        description=(
+            "CMake targets to build; `all` also builds CECE's test stack "
+            "(running it is issue #9)"
+        ),
     )
-    run_tests: bool = Field(
-        default=False,
-        description="Run CECE's ctest suite under the launcher (needs the `all` target)",
-    )
-
-    @model_validator(mode="after")
-    def _tests_need_all(self) -> CeceSection:
-        if self.run_tests and "all" not in self.targets:
-            raise ValueError(
-                "run_tests needs the CECE test stack: add `all` to cece.targets"
-            )
-        return self
 
 
 class DataSection(StrictModel):
