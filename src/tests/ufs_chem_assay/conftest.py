@@ -1,8 +1,23 @@
-"""Harness-test fixtures: paths to the checked-in maccity configs."""
+"""Harness-test fixtures: paths to the checked-in maccity configs, and the
+machine-independence guard every test runs under."""
 
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def hermetic_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every harness test starts from platform local / runtime docker
+    wherever the suite runs: the hostname is pinned (the first Ursa run
+    resolved `ursa` from the login node's name and turned docker-shaped
+    assertions native) and the platform variables are scrubbed, like the
+    settings tests scrub CECE_ROOT_DIR. A test that wants another hostname
+    patches it itself — a test-level setattr overrides this one."""
+    monkeypatch.setattr("platforms.socket.gethostname", lambda: "localhost")
+    for key in ("CECE_PLATFORM", "CECE_RUNTIME", "CECE_LAUNCHER"):
+        monkeypatch.delenv(key, raising=False)
+
 
 _CONFIG_ROOT = Path(__file__).resolve().parents[1] / "config"
 

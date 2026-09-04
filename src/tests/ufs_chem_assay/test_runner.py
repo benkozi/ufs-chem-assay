@@ -4,6 +4,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 from pytest_mock import MockerFixture
 
+from platforms import Platform
 from runner import build_command, run_driver
 from settings import Settings
 
@@ -11,6 +12,7 @@ from settings import Settings
 def _settings() -> Settings:
     # Explicit values so ambient CECE_* env vars cannot influence assertions.
     return Settings(
+        platform=Platform.LOCAL,  # the docker shape is the point of these tests
         root_dir=Path("/host/cece"),
         docker_image="img:tag",
         driver_path="./build/cece_standalone_driver",

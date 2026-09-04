@@ -97,7 +97,9 @@ def test_native_example_command_runs_entrypoint_with_harness_python() -> None:
 def test_docker_prefix_is_shared_by_driver_and_examples_commands() -> None:
     # One docker preamble (mounts, cwd, MPI-as-root env, image) serves both
     # the driver and the examples entrypoint; only the tail differs.
-    settings = Settings(root_dir=Path("/host/cece"), docker_image="img:tag")
+    settings = Settings(
+        platform=Platform.LOCAL, root_dir=Path("/host/cece"), docker_image="img:tag"
+    )
     prefix = docker_prefix(settings)
     assert prefix[0:3] == ["docker", "run", "--rm"] and prefix[-1] == "img:tag"
     driver = build_command(settings, PurePosixPath("/work/x.yaml"))

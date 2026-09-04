@@ -9,6 +9,7 @@ from assertions import assert_nc_file_count, assert_nc_filenames
 from combos import build_config, enumerate_combos, write_combos_csv
 from models.cece_config import CeceConfig
 from models.suite_config import SuiteConfig
+from platforms import Platform
 from runner import run_driver
 from settings import Settings
 
@@ -23,7 +24,7 @@ def test_maccity_pipeline_runs_all_combos_mocked(
         "runner.subprocess.check_output",
         return_value=b"INFO: CECE Finalize completed successfully\n",
     )
-    settings = Settings(root_dir=tmp_path)
+    settings = Settings(platform=Platform.LOCAL, root_dir=tmp_path)
     suite = SuiteConfig.from_yaml(suite_path)
     base_config = CeceConfig.from_yaml(suite.config_path)
     combos = enumerate_combos(suite.sweep, base_config)

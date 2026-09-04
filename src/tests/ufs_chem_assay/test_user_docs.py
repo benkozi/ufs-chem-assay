@@ -24,7 +24,10 @@ def _user_facing_files() -> list[Path]:
 
 def test_templates_live_in_config() -> None:
     assert TEMPLATES_DIR == _REPO_ROOT / "config"
-    assert sorted(p.name for p in TEMPLATES_DIR.glob("*.yaml")) == ["local.yaml", "ursa.yaml"]
+    assert sorted(p.name for p in TEMPLATES_DIR.glob("*.yaml")) == [
+        "local.yaml",
+        "ursa.yaml",
+    ]
     assert not list((_REPO_ROOT / "scripts").glob("*.yaml"))
 
 
@@ -43,7 +46,7 @@ def test_runbook_never_mentions_the_design() -> None:
 def test_runbook_uses_placeholders_and_ref_variables() -> None:
     text = _RUNBOOK.read_text()
     assert "ROOT=<" in text  # a placeholder, set once
-    assert 'HARNESS_REF' in text and 'CECE_REF' in text
+    assert "HARNESS_REF" in text and "CECE_REF" in text
     assert "feat/run-on-rdhpc" not in text
     assert "fix/all-examples-pass" not in text
     assert "sbatch" in text and "scripts/ursa-harness.sh" in text
@@ -56,7 +59,15 @@ def test_batch_script_is_valid_bash_with_sbatch_directives() -> None:
     assert lines[0] == "#!/bin/bash"
     directives = [line for line in lines if line.startswith("#SBATCH")]
     joined = " ".join(directives)
-    for flag in ("-A epic", "-q debug", "-p u1-compute", "-N 1", "-n 1", "-c 8", "-t 00:30:00"):
+    for flag in (
+        "-A epic",
+        "-q debug",
+        "-p u1-compute",
+        "-N 1",
+        "-n 1",
+        "-c 8",
+        "-t 00:30:00",
+    ):
         assert flag in joined, flag
     assert "-o " not in joined  # the log path is given on the sbatch command line
     assert "${ROOT:?" in _BATCH_SCRIPT.read_text()
