@@ -87,3 +87,20 @@ def test_run_manifest_records_platform_and_runtime(
     recorded = yaml.safe_load((tmp_path / "run.yaml").read_text())
     assert recorded["platform"] == "ursa"
     assert recorded["runtime"] == "native"
+
+
+def test_explicit_local_platform_beats_an_ursa_hostname(
+    clean_env: pytest.MonkeyPatch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first Ursa run: tests that name no platform picked up the login
+    node's hostname. An explicit platform must win regardless of where the
+    suite runs, and the docker command shape must follow it."""
+    from pathlib import PurePosixPath
+
+    from runner import build_command
+
+    monkeypatch.setattr("platforms.socket.gethostname", lambda: "ufe01")
+    settings = Settings(platform=Platform.LOCAL, root_dir=Path("/host/cece"))
+    assert settings.runtime is Runtime.DOCKER
+    command = build_command(settings, PurePosixPath("/work/x.yaml"))
+    assert command[:3] == ["docker", "run", "--rm"]
