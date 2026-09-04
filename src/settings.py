@@ -70,9 +70,8 @@ class Settings(BaseSettings):
     modulefile: str | None = Field(
         default=None,
         description=(
-            "CECE modulefile the job script loads before the driver (slurm "
-            "runtime); read by scripts/cece-modules.sh from the environment, "
-            "recorded in run.yaml"
+            "CECE modulefile each rendered job script loads before the driver "
+            "(slurm runtime); recorded in run.yaml"
         ),
     )
     docker_image: str = "cece/cece-dev"

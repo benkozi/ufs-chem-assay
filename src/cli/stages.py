@@ -90,7 +90,7 @@ def _clean_python_env(config: RunConfig) -> list[str]:
 
 
 def _cece_env_exports(config: RunConfig) -> list[str]:
-    """What the job script (scripts/cece-modules.sh) reads."""
+    """What the rendered job scripts read from the environment."""
     lines = [f"export CECE_ROOT_DIR={_q(config.clone_dir)}"]
     if config.cece.modulefile is not None:
         lines.append(f"export CECE_MODULEFILE={_q(config.cece.modulefile)}")

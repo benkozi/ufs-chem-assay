@@ -545,7 +545,6 @@ All code under `src/`; the project is `uv`-managed with its own
   README.md               # user-facing setup + run instructions
   docs/ursa-runbook.md    # manual native run on Ursa (what the CLI automates)
   config/                 # run-config templates: local.yaml (docker), ursa.yaml (native + slurm)
-  scripts/cece-modules.sh # native launcher wrapper: load CECE_MODULEFILE, exec the driver
   design/design.md
   src/
     models/

@@ -20,9 +20,6 @@ from platforms import Runtime
 from settings import Settings
 
 
-# The native launcher helper (loads CECE_MODULEFILE, execs its argv) — used
-# inside an salloc shell; the slurm runtime renders its own job scripts.
-WRAPPER = Path(__file__).resolve().parents[1] / "scripts" / "cece-modules.sh"
 # The slurm job-script template: one rendered `<combo_id>.sbatch` per driver
 # call, written beside the combo's yaml and out so a job is reproducible by
 # hand (`sbatch <combo_id>.sbatch`). StrictUndefined: a missing variable

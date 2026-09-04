@@ -8,7 +8,6 @@ import pytest
 
 from cli.run_config import RunConfig
 from cli.stages import HARNESS_ROOT, Stage, render_stage
-from runner import WRAPPER
 from platforms import Platform
 from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR, run_config_file
 
@@ -148,7 +147,6 @@ def test_cece_tests_stage_submits_its_own_rendered_job_script(
     assert text.rstrip().endswith(
         f"srun --ntasks=1 ctest --test-dir {config.clone_dir}/build --output-on-failure"
     )
-    assert WRAPPER.name not in script.text  # the wrapper is the native launcher only
 
 
 def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) -> None:

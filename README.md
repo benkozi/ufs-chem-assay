@@ -219,9 +219,10 @@ the `CECE_JOB_ENV` exports, and the driver behind `srun --ntasks=1`
 purpose: the harness venv never sees the modulefile (spack-stack's
 `PYTHONPATH` would shadow its numpy), the driver always does. Analysis
 runs in the pytest process, so cap `CECE_DASK_NWORKERS` on a login node.
-`CECE_RUNTIME=native` remains for a session inside an `salloc` shell,
-with `CECE_LAUNCHER` as the per-driver prefix (`scripts/cece-modules.sh`
-loads the modulefile there).
+`CECE_RUNTIME=native` runs the driver as a direct host process with
+`CECE_LAUNCHER` as an optional prefix — for a docker-less machine whose
+shell already suits both the harness and the driver; not Ursa, where the
+two environments conflict.
 
 `ufs-chem-assay run` assembles all of that from one YAML run config:
 

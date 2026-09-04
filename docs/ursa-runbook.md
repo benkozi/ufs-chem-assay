@@ -156,17 +156,9 @@ then read the `.out` it rewrites. Edit the script in place to
 experiment (a different modulefile, an extra export); the harness
 regenerates it on the next run.
 
-For an interactive alternative, run the session inside an allocation
-with the driver as a direct process:
-
-```bash
-salloc -A epic -q debug -p u1-compute -N 1 -n 1 -c 8 -t 00:30:00
-```
-
-then set `harness.runtime: native` and
-`harness.launcher: srun --ntasks=1 <harness>/scripts/cece-modules.sh`
-in your run config (the wrapper loads the modulefile per driver run) and
-run the harness stage as above.
+The `native` runtime (the driver as a direct host process) is not a
+supported path on Ursa: the harness venv and the driver need conflicting
+environments, and only a per-job script reconciles them.
 
 ## What to record after the first run
 
