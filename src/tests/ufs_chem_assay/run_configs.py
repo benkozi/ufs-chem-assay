@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-TEMPLATES_DIR = Path(__file__).resolve().parents[3] / "scripts"
+TEMPLATES_DIR = Path(__file__).resolve().parents[3] / "config"
 
 # Sentinel for run_config_file overrides: delete the key instead of setting it.
 REMOVE = object()

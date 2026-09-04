@@ -18,9 +18,15 @@ from platforms import Platform
 from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR, run_config_file
 
 
+# The shipped template's root_dir is a placeholder with shell-special
+# characters (`/scratch3/<project>/<user>/…`, quoted when rendered); the
+# golden lines below use a plain root instead.
+_URSA_ROOT = Path("/scratch/ursa-run")
+
+
 @pytest.fixture()
-def ursa() -> RunConfig:
-    return RunConfig.from_yaml(TEMPLATES_DIR / "ursa.yaml")
+def ursa(tmp_path: Path) -> RunConfig:
+    return RunConfig.from_yaml(run_config_file(tmp_path, root_dir=_URSA_ROOT))
 
 
 @pytest.fixture()
@@ -34,7 +40,9 @@ def local(tmp_path: Path) -> RunConfig:
 def ursa_with_tests(tmp_path: Path) -> RunConfig:
     return RunConfig.from_yaml(
         run_config_file(
-            tmp_path, overrides={"cece.run_tests": True, "cece.targets": ["all"]}
+            tmp_path,
+            overrides={"cece.run_tests": True, "cece.targets": ["all"]},
+            root_dir=_URSA_ROOT,
         )
     )
 
@@ -73,7 +81,9 @@ def test_source_stage_clones_when_missing_and_guards_submodules(
 
 def test_source_stage_update_source_fast_forwards(tmp_path: Path) -> None:
     config = RunConfig.from_yaml(
-        run_config_file(tmp_path, overrides={"cece.update_source": True})
+        run_config_file(
+            tmp_path, overrides={"cece.update_source": True}, root_dir=_URSA_ROOT
+        )
     )
     script = render_stage(Stage.SOURCE, config)
     assert "git -C" in script.text and "fetch origin" in script.text

@@ -205,3 +205,20 @@ def test_bad_stage_name_is_a_usage_error(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as excinfo:
         main(["run", f"--config-file={_config(tmp_path)}", "--stage", "bogus"])
     assert excinfo.value.code == 2
+
+
+def test_uncreatable_root_dir_is_a_clean_error(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An unedited template (placeholder root_dir) must not end in a
+    traceback: one ERROR line naming the root, exit 1, nothing executed."""
+    mocker.patch("cli.main.run_bash")
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    path = run_config_file(tmp_path, root_dir=blocker / "root")
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["run", f"--config-file={path}", "--dry-run"])
+    assert code == 1
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1 and str(blocker / "root") in errors[0]
+    assert "root_dir" in errors[0]

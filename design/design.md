@@ -540,7 +540,8 @@ All code under `src/`; the project is `uv`-managed with its own
   pyproject.toml          # uv project: pytest, pytest-mock, pydantic>=2, pydantic-settings, pyyaml
   README.md               # user-facing setup + run instructions
   docs/ursa-runbook.md    # manual native run on Ursa (what the CLI automates)
-  scripts/                # run-config templates: local.yaml (docker), ursa.yaml (native + slurm)
+  config/                 # run-config templates: local.yaml (docker), ursa.yaml (native + slurm)
+  scripts/ursa-harness.sh # manual sbatch script (the runbook's step 6-7)
   design/design.md
   src/
     models/

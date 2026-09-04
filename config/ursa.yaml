@@ -1,12 +1,12 @@
 # Run config for Ursa (RDHPCS): native driver build against CECE's own
 # modulefiles, the harness session as one Slurm batch job. Copy, edit the
 # account and paths, then:
-#   ufs-chem-assay run --config-file=scripts/ursa.yaml [--dry-run]
+#   ufs-chem-assay run --config-file=config/ursa.yaml [--dry-run]
 # Every stage renders to <root_dir>/scripts/<NN>-<stage>.sh; the login-node
 # stages (source, build, data) run with bash, the compute stages
 # (cece-tests, harness) go into one sbatch script.
 platform: ursa  # optional: detected from the hostname when absent; --platform wins
-root_dir: /scratch3/NCEPDEV/stmp/Benjamin.Koziol/my_stmp/ufs-chem-assay  # everything the CLI creates lands here
+root_dir: /scratch3/<project>/<user>/ufs-chem-assay  # edit: everything the CLI creates lands here
 cece:
   git_url: git@github.com:benkozi/CECE.git
   ref: fix/all-examples-pass  # branch or SHA; the integration workflow's ref

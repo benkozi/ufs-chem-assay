@@ -217,7 +217,7 @@ login node; the pytest session runs as one batch job.
 `ufs-chem-assay run` assembles all of that from one YAML run config:
 
 ```sh
-cp scripts/ursa.yaml my-ursa.yaml      # edit account, qos, root_dir, ref
+cp config/ursa.yaml my-ursa.yaml       # edit account, qos, root_dir, ref
 uv run ufs-chem-assay run --config-file=my-ursa.yaml --dry-run   # render only
 uv run ufs-chem-assay run --config-file=my-ursa.yaml             # clone, build,
                                                                  #   data, sbatch
@@ -230,13 +230,13 @@ Stages (`--stage`, repeatable): `source` (clone or fast-forward CECE),
 launcher; only with `cece.run_tests`), `harness` (the pytest session).
 Each renders to `<root_dir>/scripts/<NN>-<stage>.sh`; the compute stages
 become one `<NN>-batch.sbatch` when a `slurm:` section is configured,
-and run directly with bash otherwise (`scripts/local.yaml` is the laptop
+and run directly with bash otherwise (`config/local.yaml` is the laptop
 equivalent). Logs land in `<root_dir>/logs/`. The CLI never deletes
 anything except the harness output root (`clean_root`), and never
 mutates an existing checkout without `update_source`.
 
-The same steps by hand, with the batch script spelled out, are in
-[docs/ursa-runbook.md](docs/ursa-runbook.md).
+The same steps by hand are in [docs/ursa-runbook.md](docs/ursa-runbook.md);
+`scripts/ursa-harness.sh` is the manual batch script it submits.
 
 ## CI and releases
 

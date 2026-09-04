@@ -34,7 +34,10 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     run = subparsers.add_parser("run", help="render the stage scripts and execute them")
     run.add_argument(
-        "--config-file", required=True, type=Path, help="run config YAML (see scripts/)"
+        "--config-file",
+        required=True,
+        type=Path,
+        help="run config YAML (templates in config/)",
     )
     run.add_argument(
         "--platform",
@@ -90,6 +93,18 @@ def _run(args: argparse.Namespace) -> int:
         config.root_dir,
         ", ".join(stage.value for stage in stages),
     )
+
+    # An unedited template carries a placeholder root_dir: say so instead
+    # of tracing back from mkdir.
+    try:
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.error(
+            "cannot create root_dir %s: %s (edit root_dir in the run config)",
+            config.root_dir,
+            exc.strerror,
+        )
+        return 1
 
     # Render and write everything first so a bad config fails before any
     # stage runs. Compute stages fold into one batch script under Slurm.

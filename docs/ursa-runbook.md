@@ -2,24 +2,29 @@
 
 Manual steps to build the CECE driver against its own Ursa modulefiles
 and run `simple-maccity-suite.yaml` through the harness inside one Slurm
-job. `ufs-chem-assay run --config-file=scripts/ursa.yaml` automates
-exactly this sequence (each stage renders to a script under
-`<root_dir>/scripts/`, so the two must stay the same commands); the
-design record is `design/feat/20260903-1453-run-on-rdhpc.md`.
+job. `ufs-chem-assay run --config-file=config/ursa.yaml` automates the
+same sequence (each stage renders to a script under `<root_dir>/scripts/`,
+so the two are the same commands).
+
+Set these once in your shell; every step below uses them:
+
+```bash
+export ROOT=<your scratch directory>/ufs-chem-assay   # holds ufs-chem-assay/ and CECE/
+export HARNESS_REF=develop                             # harness branch or tag
+export CECE_REF=<branch or SHA>                        # CECE ref to build (config/ursa.yaml: cece.ref)
+```
 
 Conventions:
 
-- `ROOT` is one scratch directory holding everything this runbook
-  creates: `ROOT=/scratch3/NCEPDEV/stmp/Benjamin.Koziol/my_stmp/ufs-chem-assay`.
 - `epic` / `debug` / `u1-compute` are the Slurm account, QOS, and
   partition used in the examples; substitute your own. `debug` caps
   jobs at 30 minutes, which fits `simple-maccity`; use `batch` (8 h)
   for the exhaustive suites.
-- Steps 1–6 run on a **login node**: editing, compiling, downloads,
+- Steps 1–5 run on a **login node**: editing, compiling, downloads,
   and job submission are the allowed uses there. Nothing that needs
   network runs in the batch job (compute nodes are network-restricted).
 - `$HOME` is quota-limited: caches, interpreters, and clones go under
-  `ROOT`.
+  `$ROOT`.
 
 ## 1. uv (once)
 
@@ -31,13 +36,13 @@ export UV_CACHE_DIR=$ROOT/uv-cache UV_PYTHON_INSTALL_DIR=$ROOT/uv-python
 
 No root, no conda, no `rdhpcs-python` module needed. Put the three
 `export`s in your shell profile (or a small `source`-able file under
-`ROOT`) so batch scripts and later logins see them.
+`$ROOT`) so batch scripts and later logins see them.
 
 ## 2. The harness
 
 ```bash
-git clone git@github.com:benkozi/ufs-chem-assay.git $ROOT/ufs-chem-assay
-cd $ROOT/ufs-chem-assay && git checkout feat/run-on-rdhpc
+git clone --branch "$HARNESS_REF" git@github.com:benkozi/ufs-chem-assay.git $ROOT/ufs-chem-assay
+cd $ROOT/ufs-chem-assay
 UV_PYTHON=3.13 uv sync --frozen        # downloads CPython 3.13 + wheels
 uv run pytest src/tests/ufs_chem_assay # harness suite: hermetic, login-node safe
 uv run pytest src/tests/test_driver_combos.py --dry-run   # no CECE needed
@@ -49,12 +54,9 @@ Python 3.13 rather than 3.14: every dependency has Linux wheels for
 ## 3. CECE source
 
 ```bash
-git clone --recurse-submodules -b fix/all-examples-pass \
+git clone --recurse-submodules --branch "$CECE_REF" \
     git@github.com:benkozi/CECE.git $ROOT/CECE
 ```
-
-The branch is the one the integration workflow uses
-(`.github/workflows/integration.yaml`, `CECE_REF`).
 
 ## 4. Driver build (native, modules from the checkout)
 
@@ -97,28 +99,14 @@ download runs under the harness venv's Python: CECE's examples tooling
 needs 3.11 or newer, and after `module purge` the only `python3` left is
 the OS one.
 
-## 6. Batch script
+## 6. The batch script
 
-Save as `$ROOT/scripts/harness.sbatch` (create `$ROOT/scripts` and
-`$ROOT/logs` first):
-
-```bash
-#!/bin/bash
-#SBATCH -A epic -q debug -p u1-compute -N 1 -n 1 -c 8 -t 00:30:00
-#SBATCH -J ufs-chem-assay -o /scratch3/NCEPDEV/stmp/Benjamin.Koziol/my_stmp/ufs-chem-assay/logs/slurm-%j.out
-set -euo pipefail
-ROOT=/scratch3/NCEPDEV/stmp/Benjamin.Koziol/my_stmp/ufs-chem-assay
-source "$MODULESHOME/init/bash"
-module purge; module use $ROOT/CECE/modulefiles; module load cece_ursa.intelllvm
-export PATH="$HOME/.local/bin:$PATH" UV_CACHE_DIR=$ROOT/uv-cache UV_OFFLINE=1
-export CECE_ROOT_DIR=$ROOT/CECE CECE_PLATFORM=ursa CECE_RUNTIME=native
-export CECE_LAUNCHER="srun --ntasks=1" CECE_ENABLE_BASELINE_COMPARISONS=false
-export CECE_DASK_NWORKERS=${SLURM_CPUS_PER_TASK} I_MPI_FABRICS=shm FI_PROVIDER=tcp
-cd $ROOT/ufs-chem-assay
-uv run --no-sync pytest src/tests/test_driver_combos.py \
-    --suite-config=simple-maccity-suite.yaml \
-    --combo-output-root=ufs-chem-assay-output --combo-clean-root
-```
+`scripts/ursa-harness.sh` in the harness checkout is the job: it loads
+the modulefile, exports the native-runtime settings, and runs one suite.
+It reads `ROOT` (required) plus optional `MODULEFILE`, `SUITE`, and
+`OUTPUT_ROOT`; its `#SBATCH` directives (`-A epic -q debug -p u1-compute
+-N 1 -n 1 -c 8 -t 00:30:00`) are defaults you can override on the
+`sbatch` command line. Read it once before submitting.
 
 What the exports do: `UV_OFFLINE=1` and `--no-sync` keep uv from
 touching the network; `CECE_RUNTIME=native` runs the driver as a host
@@ -133,18 +121,19 @@ along cannot silently win.
 ## 7. Submit and watch
 
 ```bash
-sbatch $ROOT/scripts/harness.sbatch
+mkdir -p $ROOT/logs
+sbatch --export=ALL,ROOT=$ROOT -o $ROOT/logs/slurm-%j.out $ROOT/ufs-chem-assay/scripts/ursa-harness.sh
 squeue -u $USER
 less $ROOT/logs/slurm-<jobid>.out
 ```
 
 Results land in `$ROOT/CECE/ufs-chem-assay-output/`: `run.yaml`
-(with `cece_commit` and, once the native runtime lands, `platform:
-ursa`), `combos.csv`, `test-report.csv`, per-combo directories with
-the generated config, `.out`, `cece.log`, NetCDF, stats, and plots.
-Plots may warn about missing coastlines the first time: Natural Earth
-data cannot download on a compute node, and the maps degrade to
-data-only. Warm the cache once on a login node from the harness venv:
+(with `cece_commit`, `platform: ursa`, `runtime: native`), `combos.csv`,
+`test-report.csv`, per-combo directories with the generated config,
+`.out`, `cece.log`, NetCDF, stats, and plots. Plots may warn about
+missing coastlines the first time: Natural Earth data cannot download on
+a compute node, and the maps degrade to data-only. Warm the cache once
+on a login node from the harness venv:
 
 ```bash
 uv run python -c "import cartopy.io.shapereader as s; [s.natural_earth(resolution=r, category='physical', name='coastline') for r in ('110m', '50m')]"
@@ -156,12 +145,12 @@ For an interactive loop instead of `sbatch`:
 salloc -A epic -q debug -p u1-compute -N 1 -n 1 -c 8 -t 00:30:00
 ```
 
-then the same `module` and `export` lines as the batch script and
+then the same `module` and `export` lines as the script and
 `uv run --no-sync pytest src/tests/test_driver_combos.py -x -vs ...`.
 
 ## What to record after the first run
 
-These feed the implementation notes of the design doc:
+Worth capturing for whoever maintains the harness:
 
 - `hostname` on a login node and inside the allocation (platform
   detection table).

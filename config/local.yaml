@@ -2,7 +2,7 @@
 # CLI equivalent of the integration workflow (CECE's own container build
 # script builds the driver in cece/cece-dev, then the harness runs on the
 # host). Copy, edit root_dir, then:
-#   ufs-chem-assay run --config-file=scripts/local.yaml [--dry-run]
+#   ufs-chem-assay run --config-file=config/local.yaml [--dry-run]
 platform: local
 root_dir: ~/ufs-chem-assay-runs  # ~ expands; everything the CLI creates lands here
 cece:
