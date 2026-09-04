@@ -1,5 +1,5 @@
-"""Writing and executing rendered scripts: bash on this node, sbatch for the
-batch script; every real run tees to a timestamped log under <root>/logs/."""
+"""Writing and executing rendered scripts with bash on this node; every real
+run tees to a timestamped log under <root>/logs/."""
 
 from __future__ import annotations
 
@@ -15,11 +15,9 @@ logger = get_logger("cli")
 
 
 def write_script(script: ShellScript, scripts_dir: Path, index: int) -> Path:
-    """<scripts_dir>/<NN>-<name>.sh (or .sbatch for the batch script),
-    executable, overwritten per invocation."""
+    """<scripts_dir>/<NN>-<name>.sh, executable, overwritten per invocation."""
     scripts_dir.mkdir(parents=True, exist_ok=True)
-    suffix = ".sbatch" if script.name == "batch" else ".sh"
-    path = scripts_dir / f"{index:02d}-{script.name}{suffix}"
+    path = scripts_dir / f"{index:02d}-{script.name}.sh"
     path.write_text(script.text)
     path.chmod(0o755)
     return path
@@ -49,16 +47,3 @@ def run_bash(path: Path, logs_dir: Path) -> int:
             sys.stdout.buffer.write(chunk)
             sys.stdout.buffer.flush()
         return process.wait()
-
-
-def submit_sbatch(path: Path) -> int:
-    """sbatch the batch script; prints Slurm's response (the job id)."""
-    logger.info("sbatch %s", path)
-    completed = subprocess.run(
-        ["sbatch", str(path)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    logger.info("sbatch: %s", completed.stdout.strip())
-    return completed.returncode

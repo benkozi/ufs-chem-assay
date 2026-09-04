@@ -414,7 +414,10 @@ class RunManifest(StrictModel):
         description="Machine the session ran on (settings.platform)"
     )
     runtime: Runtime = Field(
-        description="How the driver was spawned: docker or native (settings.runtime)"
+        description="How the driver was spawned: docker, native, or slurm (settings.runtime)"
+    )
+    modulefile: str | None = Field(
+        description="CECE modulefile the driver jobs loaded (slurm runtime); null otherwise"
     )
     suites: list[SuiteConfig]
 

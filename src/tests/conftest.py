@@ -508,10 +508,10 @@ def combo_roots(
         # bind-mounted into the container at a fixed path under docker, seen
         # directly by the driver natively.
         host = tmp_path_factory.mktemp("combo_runs")
-        if request.config.stash[_SETTINGS].runtime is Runtime.NATIVE:
-            roots = ComboRoots(host=host, driver=PurePosixPath(host), needs_mount=False)
-        else:
+        if request.config.stash[_SETTINGS].runtime is Runtime.DOCKER:
             roots = ComboRoots(host=host, driver=_CONTAINER_TMP_ROOT, needs_mount=True)
+        else:  # native / slurm: the driver sees the host filesystem
+            roots = ComboRoots(host=host, driver=PurePosixPath(host), needs_mount=False)
     # Stash the realized roots for pytest_sessionfinish (hooks cannot request
     # fixtures; the tmp-default root only exists once this fixture has run).
     request.config.stash[_REALIZED_ROOTS] = roots
@@ -526,6 +526,7 @@ def combo_roots(
         cece_commit=request.config.stash[_CECE_COMMIT],
         platform=settings.platform,
         runtime=settings.runtime,
+        modulefile=settings.modulefile,
         suites=[context.suite for context in request.config.stash[_SUITE_CONTEXTS]],
     )
     manifest.to_yaml(roots.host / "run.yaml")

@@ -3,8 +3,9 @@
 The scripts are the deliverable as much as their execution: they are written
 under <root_dir>/scripts/ for review, `--dry-run` stops after rendering, and
 the Ursa runbook (docs/ursa-runbook.md) is the same commands by hand — when
-one changes, the other does. Paths and values are shell-quoted; the only
-unquoted expansions are Slurm's own variables inside the batch job.
+one changes, the other does. Every stage runs where the CLI runs; under the
+slurm runtime the driver and ctest stages submit their own jobs. Paths and
+values are shell-quoted.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from pydantic import ConfigDict, Field
 from cli.run_config import RunConfig
 from models.base import StrictModel
 from platforms import Runtime
+from runner import WRAPPER
 
 # src/cli/stages.py -> <repo root>: where `uv run pytest` runs from.
 HARNESS_ROOT = Path(__file__).resolve().parents[2]
@@ -33,14 +35,13 @@ class Stage(StrEnum):
     SOURCE = "source"  # clone / update the CECE checkout
     BUILD = "build"  # configure + build the driver (and optionally the tests)
     DATA = "data"  # example data + cartopy cache
-    CECE_TESTS = "cece-tests"  # ctest under the launcher
-    HARNESS = "harness"  # the pytest session
+    CECE_TESTS = "cece-tests"  # ctest: one Slurm job (slurm), launcher (native), container (docker)
+    HARNESS = "harness"  # the pytest session, on this node; driver calls per runtime
 
 
-# Compute stages need MPI and cores and run inside the Slurm job when one is
-# configured; the earlier stages need network (clone, FetchContent,
-# downloads) and stay on the login node.
-COMPUTE_STAGES: tuple[Stage, ...] = (Stage.CECE_TESTS, Stage.HARNESS)
+# Every stage runs where the CLI runs (a login node on RDHPC): the stages
+# that need compiled code — driver runs, ctest — submit Slurm jobs
+# themselves under the slurm runtime.
 
 
 class ShellScript(StrictModel):
@@ -56,22 +57,38 @@ def _q(value: object) -> str:
     return shlex.quote(str(value))
 
 
-def _env(config: RunConfig) -> list[str]:
-    """Strict mode plus the module environment (when the config names a
-    modulefile): every stage runs in the same environment as the build, and
-    `module purge` keeps the login shell's own modules out of it."""
-    lines = ["set -euo pipefail"]
+_LMOD_INIT = 'if [ -n "${MODULESHOME:-}" ]; then source "$MODULESHOME/init/bash"; fi'
+
+
+def _module_block(config: RunConfig) -> list[str]:
+    """Load CECE's modulefile in this shell — only where compiled code runs
+    in-process (the build stage). Non-interactive bash has no `module`
+    function until the Lmod init is sourced; the guard keeps the script
+    runnable where Lmod is absent."""
+    assert config.cece.modulefile is not None
+    return [
+        _LMOD_INIT,
+        "module purge",
+        f"module use {_q(config.clone_dir)}/modulefiles",
+        f"module load {_q(config.cece.modulefile)}",
+        "module list",
+    ]
+
+
+def _clean_python_env(config: RunConfig) -> list[str]:
+    """The harness venv must never see the module environment (spack-stack
+    sets PYTHONPATH to python3.11 site-packages that shadow the venv's
+    numpy): undo any modules the calling shell had loaded."""
+    if config.cece.modulefile is None:
+        return []
+    return [_LMOD_INIT, "module purge", "unset PYTHONPATH"]
+
+
+def _cece_env_exports(config: RunConfig) -> list[str]:
+    """What the job script (scripts/cece-modules.sh) reads."""
+    lines = [f"export CECE_ROOT_DIR={_q(config.clone_dir)}"]
     if config.cece.modulefile is not None:
-        # Non-interactive bash has no `module` function until the Lmod init
-        # is sourced; the guard keeps the script runnable where Lmod is
-        # absent (a local dry-run inspection, for instance).
-        lines += [
-            'if [ -n "${MODULESHOME:-}" ]; then source "$MODULESHOME/init/bash"; fi',
-            "module purge",
-            f"module use {_q(config.clone_dir)}/modulefiles",
-            f"module load {_q(config.cece.modulefile)}",
-            "module list",
-        ]
+        lines.append(f"export CECE_MODULEFILE={_q(config.cece.modulefile)}")
     return lines
 
 
@@ -116,6 +133,7 @@ def _build(config: RunConfig) -> list[str]:
         ]
     build = clone / "build"
     log = build / "configure.log"
+    modules = _module_block(config) if config.cece.modulefile is not None else []
     configure = " ".join(
         [
             f"cmake -S {_q(clone)} -B {_q(build)}",
@@ -123,6 +141,7 @@ def _build(config: RunConfig) -> list[str]:
         ]
     )
     return [
+        *modules,
         "which cmake ${CC:-} ${CXX:-} ${FC:-}",
         f"mkdir -p {_q(build)}",
         f"{configure} 2>&1 | tee {_q(log)}",
@@ -138,7 +157,7 @@ def _data(config: RunConfig) -> list[str]:
     # tooling needs Python >= 3.11 (StrEnum), and after `module purge` the
     # only python3 on an RDHPC login node is the OS one.
     clone = config.clone_dir
-    lines = [f"cd {_q(HARNESS_ROOT)}"]
+    lines = [*_clean_python_env(config), f"cd {_q(HARNESS_ROOT)}"]
     if config.data.examples:
         lines.append(
             f"uv run --no-sync python {_q(clone / 'examples/download-example-data.py')} "
@@ -159,8 +178,20 @@ def _launcher(config: RunConfig) -> str:
 
 
 def _cece_tests(config: RunConfig) -> list[str]:
-    build = config.clone_dir / "build"
-    return [f"{_launcher(config)}ctest --test-dir {_q(build)} --output-on-failure"]
+    clone = config.clone_dir
+    build = clone / "build"
+    ctest = f"ctest --test-dir {_q(build)} --output-on-failure"
+    if config.runtime is Runtime.DOCKER:
+        return [
+            f"python3 {_q(clone / 'scripts/build-and-test-container.py')} --no-build"
+        ]
+    if config.runtime is Runtime.SLURM:
+        assert config.slurm is not None, "slurm runtime needs a slurm: section"
+        return [
+            *_cece_env_exports(config),
+            f"sbatch --wait {config.slurm.sbatch_args} -t 30 --chdir {_q(clone)} {_q(WRAPPER)} {ctest}",
+        ]
+    return [f"{_launcher(config)}{ctest}"]
 
 
 def _harness(config: RunConfig) -> list[str]:
@@ -170,7 +201,12 @@ def _harness(config: RunConfig) -> list[str]:
         ("CECE_PLATFORM", config.platform.value),
         ("CECE_RUNTIME", config.runtime.value),
     ]
-    if config.runtime is Runtime.NATIVE and harness.launcher:
+    if config.runtime is Runtime.SLURM:
+        assert config.slurm is not None, "slurm runtime needs a slurm: section"
+        exports.append(("CECE_SBATCH_ARGS", _q(config.slurm.sbatch_args)))
+        if config.cece.modulefile is not None:
+            exports.append(("CECE_MODULEFILE", _q(config.cece.modulefile)))
+    elif config.runtime is Runtime.NATIVE and harness.launcher:
         exports.append(("CECE_LAUNCHER", _q(harness.launcher)))
     exports.append(
         (
@@ -183,12 +219,8 @@ def _harness(config: RunConfig) -> list[str]:
     exports.append(("CECE_RUN_TIMEOUT_S", str(harness.run_timeout_s)))
     if harness.dask_nworkers is not None:
         exports.append(("CECE_DASK_NWORKERS", str(harness.dask_nworkers)))
-    elif config.slurm is not None:
-        exports.append(("CECE_DASK_NWORKERS", '"${SLURM_CPUS_PER_TASK}"'))
     exports.append(("PATH", '"$HOME/.local/bin:$PATH"'))
     exports.append(("UV_CACHE_DIR", _q(config.uv_cache_dir)))
-    if config.slurm is not None:
-        exports.append(("UV_OFFLINE", "1"))  # compute nodes have no network
     exports += [(key, _q(value)) for key, value in harness.env.items()]
 
     pytest_args = [
@@ -199,6 +231,7 @@ def _harness(config: RunConfig) -> list[str]:
         pytest_args.append("--combo-clean-root")
     pytest_args += harness.pytest_args
     return [
+        *_clean_python_env(config),
         *(f"export {key}={value}" for key, value in exports),
         f"cd {_q(HARNESS_ROOT)}",
         f"uv run --no-sync pytest {_DRIVER_COMBOS} "
@@ -215,33 +248,13 @@ _BODIES = {
 }
 
 
-def _body(stage: Stage, config: RunConfig) -> list[str]:
-    return [f'echo ">>> stage: {stage.value}"', *_BODIES[stage](config)]
-
-
 def render_stage(stage: Stage, config: RunConfig) -> ShellScript:
-    """The stand-alone script for one stage: shebang, environment, body."""
-    lines = [_SHEBANG, *_env(config), *_body(stage, config)]
-    return ShellScript(name=stage.value, text="\n".join(lines) + "\n")
-
-
-def render_batch(config: RunConfig, stages: list[Stage]) -> ShellScript:
-    """One sbatch script running the given compute stages in order: the
-    Slurm header, the environment once, then each stage's body."""
-    if config.slurm is None:
-        raise ValueError("render_batch needs a slurm section in the run config")
-    login = [stage.value for stage in stages if stage not in COMPUTE_STAGES]
-    if login:
-        raise ValueError(f"login-node stage(s) cannot go in the batch job: {login}")
-    slurm = config.slurm
-    logs = config.root_dir / "logs"
+    """The stand-alone script for one stage: shebang, strict mode, banner,
+    body. Modules are loaded only by the build body and by the job script."""
     lines = [
         _SHEBANG,
-        f"#SBATCH -A {slurm.account} -q {slurm.qos} -p {slurm.partition} "
-        f"-N 1 -n 1 -c {slurm.cpus} -t {slurm.time}",
-        f"#SBATCH -J ufs-chem-assay -o {logs}/slurm-%j.out",
-        *_env(config),
+        "set -euo pipefail",
+        f'echo ">>> stage: {stage.value}"',
+        *_BODIES[stage](config),
     ]
-    for stage in stages:
-        lines += _body(stage, config)
-    return ShellScript(name="batch", text="\n".join(lines) + "\n")
+    return ShellScript(name=stage.value, text="\n".join(lines) + "\n")

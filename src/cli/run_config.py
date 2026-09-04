@@ -98,9 +98,16 @@ class HarnessSection(StrictModel):
         default_factory=list,
         description="Extra pytest arguments, e.g. [-x, -k, map-consd]",
     )
+    runtime: Runtime | None = Field(
+        default=None,
+        description=(
+            "Override the platform's default runtime (docker on local, slurm "
+            "elsewhere): e.g. native for a session inside an salloc shell"
+        ),
+    )
     launcher: str = Field(
         default="",
-        description="CECE_LAUNCHER: prefix for native driver runs (e.g. 'srun --ntasks=1')",
+        description="CECE_LAUNCHER: prefix for native driver runs (e.g. 'srun --ntasks=1'); ignored otherwise",
     )
     env: dict[str, str] = Field(
         default_factory=dict,
@@ -109,25 +116,27 @@ class HarnessSection(StrictModel):
     dask_nworkers: int | None = Field(
         default=None,
         gt=0,
-        description="CECE_DASK_NWORKERS; null means the Slurm allocation's cpus, or unset locally",
+        description="CECE_DASK_NWORKERS; null leaves dask to size itself (cap it on a login node)",
     )
     run_timeout_s: int = Field(default=300, gt=0, description="CECE_RUN_TIMEOUT_S")
 
 
 class SlurmSection(StrictModel):
+    """The per-driver Slurm job (slurm runtime): one `sbatch --wait` per
+    driver call, from the login node where pytest runs. The time limit is
+    the suite timeout, not configured here."""
+
     account: str = Field(
         default="epic", description="sbatch -A (the Slurm project to charge)"
     )
     qos: str = Field(default="batch", description="sbatch -q")
     partition: str = Field(default="u1-compute", description="sbatch -p")
-    time: str = Field(default="00:30:00", description="sbatch -t (HH:MM:SS)")
-    cpus: int = Field(
-        default=8, gt=0, description="sbatch -c; also CECE_DASK_NWORKERS by default"
-    )
-    submit: bool = Field(
-        default=True,
-        description="Submit the rendered batch script; false writes it and prints the sbatch command",
-    )
+    cpus: int = Field(default=8, gt=0, description="sbatch -c for each driver job")
+
+    @property
+    def sbatch_args(self) -> str:
+        """CECE_SBATCH_ARGS: one node, one task, the configured cpus."""
+        return f"-A {self.account} -q {self.qos} -p {self.partition} -N 1 -n 1 -c {self.cpus}"
 
 
 class UvSection(StrictModel):
@@ -178,7 +187,7 @@ class RunConfig(StrictModel):
 
     @property
     def runtime(self) -> Runtime:
-        return default_runtime(self.platform)
+        return self.harness.runtime or default_runtime(self.platform)
 
     @property
     def clone_dir(self) -> Path:

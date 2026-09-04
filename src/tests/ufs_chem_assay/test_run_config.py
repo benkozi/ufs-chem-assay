@@ -13,11 +13,13 @@ from tests.ufs_chem_assay.run_configs import REMOVE, TEMPLATES_DIR, run_config_f
 def test_ursa_template_loads() -> None:
     config = RunConfig.from_yaml(TEMPLATES_DIR / "ursa.yaml")
     assert config.platform is Platform.URSA
-    assert config.runtime is Runtime.NATIVE
+    assert config.runtime is Runtime.SLURM
     assert config.cece.modulefile == "cece_ursa.intelllvm"
     assert config.clone_dir == config.root_dir / "CECE"
     assert config.slurm is not None and config.slurm.account == "epic"
-    assert config.harness.launcher == "srun --ntasks=1"
+    assert config.slurm.sbatch_args == "-A epic -q debug -p u1-compute -N 1 -n 1 -c 8"
+    assert config.harness.launcher == ""  # ignored under slurm; not set by the template
+    assert config.harness.dask_nworkers == 2  # analysis runs on the login node
     assert config.uv_cache_dir == config.root_dir / "uv-cache"
 
 
@@ -94,3 +96,10 @@ def test_uv_python_is_not_a_knob(tmp_path: Path) -> None:
     path = run_config_file(tmp_path, overrides={"uv.python": "3.13"})
     with pytest.raises(ValidationError, match="python"):
         RunConfig.from_yaml(path)
+
+
+def test_slurm_section_describes_the_per_driver_job(tmp_path: Path) -> None:
+    for gone in ("time", "submit"):
+        path = run_config_file(tmp_path, overrides={f"slurm.{gone}": "x"})
+        with pytest.raises(ValidationError, match=gone):
+            RunConfig.from_yaml(path)

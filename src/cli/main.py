@@ -1,6 +1,6 @@
-"""`ufs-chem-assay run --config-file=X`: render the stages, run the
-login-node ones with bash, and hand the compute stages to Slurm (or bash
-when no slurm section is configured)."""
+"""`ufs-chem-assay run --config-file=X`: render the stage scripts and run
+them in order with bash, on this node. Under the slurm runtime the harness
+itself submits one Slurm job per driver call."""
 
 from __future__ import annotations
 
@@ -9,17 +9,15 @@ import os
 from pathlib import Path
 
 from cli.run_config import RunConfig
-from cli.shell import run_bash, submit_sbatch, write_script
-from cli.stages import COMPUTE_STAGES, Stage, render_batch, render_stage
+from cli.shell import run_bash, write_script
+from cli.stages import Stage, render_stage
 from logs import configure_logging, get_logger
 from platforms import Platform
 
 logger = get_logger("cli")
 
-# Script file numbering: a stage's position in the canonical order; the
-# batch script takes the slot of the first compute stage it replaces.
+# Script file numbering: a stage's position in the canonical order.
 _INDEX = {stage: position + 1 for position, stage in enumerate(Stage)}
-_BATCH_INDEX = _INDEX[COMPUTE_STAGES[0]]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -63,11 +61,6 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="write every script under <root_dir>/scripts/ and stop: nothing executes",
     )
-    run.add_argument(
-        "--no-submit",
-        action="store_true",
-        help="write the batch script and log the sbatch command instead of submitting",
-    )
     return parser
 
 
@@ -107,42 +100,21 @@ def _run(args: argparse.Namespace) -> int:
         return 1
 
     # Render and write everything first so a bad config fails before any
-    # stage runs. Compute stages fold into one batch script under Slurm.
-    compute = [stage for stage in stages if stage in COMPUTE_STAGES]
-    bash_paths = [
+    # stage runs.
+    paths = [
         write_script(render_stage(stage, config), scripts_dir, _INDEX[stage])
         for stage in stages
-        if stage not in COMPUTE_STAGES or config.slurm is None
     ]
-    batch_path: Path | None = None
-    if compute and config.slurm is not None:
-        batch_path = write_script(
-            render_batch(config, compute), scripts_dir, _BATCH_INDEX
-        )
-    for path in [*bash_paths, *([batch_path] if batch_path else [])]:
+    for path in paths:
         logger.info("wrote %s", path)
-
     if args.dry_run:
         logger.info("dry run: nothing executed")
-        if batch_path is not None:
-            logger.info("to submit: sbatch %s", batch_path)
         return 0
-
-    for path in bash_paths:
+    for path in paths:
         code = run_bash(path, logs_dir)
         if code != 0:
             logger.error("stage %s failed with exit %s", path.stem, code)
             return code
-    if batch_path is not None and config.slurm is not None:
-        if args.no_submit or not config.slurm.submit:
-            logger.info("batch script written; submit with: sbatch %s", batch_path)
-            return 0
-        logs_dir.mkdir(parents=True, exist_ok=True)  # the sbatch -o target must exist
-        code = submit_sbatch(batch_path)
-        if code != 0:
-            logger.error("sbatch failed with exit %s", code)
-            return code
-        logger.info("watch: squeue -u $USER; logs: %s/slurm-<jobid>.out", logs_dir)
     return 0
 
 

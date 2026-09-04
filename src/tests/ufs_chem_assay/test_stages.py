@@ -7,13 +7,7 @@ from pathlib import Path
 import pytest
 
 from cli.run_config import RunConfig
-from cli.stages import (
-    COMPUTE_STAGES,
-    HARNESS_ROOT,
-    Stage,
-    render_batch,
-    render_stage,
-)
+from cli.stages import HARNESS_ROOT, WRAPPER, Stage, render_stage
 from platforms import Platform
 from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR, run_config_file
 
@@ -50,10 +44,6 @@ def ursa_with_tests(tmp_path: Path) -> RunConfig:
 def test_harness_root_is_the_repository() -> None:
     assert (HARNESS_ROOT / "pyproject.toml").is_file()
     assert (HARNESS_ROOT / "src" / "tests" / "test_driver_combos.py").is_file()
-
-
-def test_compute_stages_are_the_last_two() -> None:
-    assert COMPUTE_STAGES == (Stage.CECE_TESTS, Stage.HARNESS)
 
 
 def test_every_stage_script_starts_with_shebang_and_strict_mode(
@@ -142,12 +132,18 @@ def test_data_stage_without_cartopy(local: RunConfig) -> None:
     assert "natural_earth" not in render_stage(Stage.DATA, local).text
 
 
-def test_cece_tests_stage_runs_ctest_under_launcher(ursa_with_tests: RunConfig) -> None:
-    script = render_stage(Stage.CECE_TESTS, ursa_with_tests)
+def test_cece_tests_stage_is_one_sbatch_job_through_the_wrapper(
+    ursa_with_tests: RunConfig,
+) -> None:
+    config = ursa_with_tests
+    text = render_stage(Stage.CECE_TESTS, config).text
     assert (
-        f"srun --ntasks=1 ctest --test-dir {ursa_with_tests.clone_dir}/build "
+        f"sbatch --wait -A epic -q debug -p u1-compute -N 1 -n 1 -c 8 -t 30 "
+        f"--chdir {config.clone_dir} {WRAPPER} ctest --test-dir {config.clone_dir}/build "
         "--output-on-failure"
-    ) in script.text
+    ) in text
+    assert f"export CECE_ROOT_DIR={config.clone_dir}" in text
+    assert "export CECE_MODULEFILE=cece_ursa.intelllvm" in text
 
 
 def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) -> None:
@@ -155,13 +151,13 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
     for line in (
         f"export CECE_ROOT_DIR={ursa.clone_dir}",
         "export CECE_PLATFORM=ursa",
-        "export CECE_RUNTIME=native",
-        "export CECE_LAUNCHER='srun --ntasks=1'",
+        "export CECE_RUNTIME=slurm",
+        "export CECE_SBATCH_ARGS='-A epic -q debug -p u1-compute -N 1 -n 1 -c 8'",
+        "export CECE_MODULEFILE=cece_ursa.intelllvm",
         "export CECE_ENABLE_BASELINE_COMPARISONS=false",
         "export CECE_RUN_TIMEOUT_S=300",
-        'export CECE_DASK_NWORKERS="${SLURM_CPUS_PER_TASK}"',
+        "export CECE_DASK_NWORKERS=2",
         f"export UV_CACHE_DIR={ursa.root_dir}/uv-cache",
-        "export UV_OFFLINE=1",
         "export I_MPI_FABRICS=shm",
         "export FI_PROVIDER=tcp",
         f"cd {HARNESS_ROOT}",
@@ -170,8 +166,32 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "--combo-output-root=ufs-chem-assay-output --combo-clean-root",
     ):
         assert line in text, line
-    assert "CECE_BASELINE_ROOT_DIR" not in text
-    assert "UV_PYTHON" not in text
+    for absent in (
+        "CECE_BASELINE_ROOT_DIR",
+        "UV_PYTHON",
+        "UV_OFFLINE",
+        "CECE_LAUNCHER",
+        "SLURM_CPUS_PER_TASK",
+    ):
+        assert absent not in text, absent
+
+
+def test_native_harness_stage_keeps_the_launcher(tmp_path: Path) -> None:
+    # Inside an salloc shell: CECE_RUNTIME=native with a plain launcher.
+    config = RunConfig.from_yaml(
+        run_config_file(
+            tmp_path,
+            overrides={
+                "harness.launcher": "srun --ntasks=1",
+                "harness.runtime": "native",
+            },
+            root_dir=_URSA_ROOT,
+        )
+    )
+    text = render_stage(Stage.HARNESS, config).text
+    assert "export CECE_RUNTIME=native" in text
+    assert "export CECE_LAUNCHER='srun --ntasks=1'" in text
+    assert "CECE_SBATCH_ARGS" not in text
 
 
 def test_local_harness_stage_has_no_slurm_or_offline_bits(local: RunConfig) -> None:
@@ -182,43 +202,6 @@ def test_local_harness_stage_has_no_slurm_or_offline_bits(local: RunConfig) -> N
     assert "UV_OFFLINE" not in text
     assert "SLURM" not in text
     assert "module" not in text
-
-
-def test_batch_script_wraps_compute_stages(ursa_with_tests: RunConfig) -> None:
-    config = ursa_with_tests
-    batch = render_batch(config, [Stage.CECE_TESTS, Stage.HARNESS])
-    lines = batch.text.splitlines()
-    assert lines[0] == "#!/bin/bash"
-    assert "#SBATCH -A epic -q debug -p u1-compute -N 1 -n 1 -c 8 -t 00:30:00" in lines
-    assert f"#SBATCH -J ufs-chem-assay -o {config.root_dir}/logs/slurm-%j.out" in lines
-    assert lines.count("module load cece_ursa.intelllvm") == 1  # one preamble
-    assert lines.count("set -euo pipefail") == 1
-    ctest = next(
-        i for i, line in enumerate(lines) if line.startswith("srun --ntasks=1 ctest")
-    )
-    assert lines.index("module load cece_ursa.intelllvm") < ctest
-    assert (
-        lines.index('echo ">>> stage: cece-tests"')
-        < ctest
-        < lines.index('echo ">>> stage: harness"')
-    )
-    assert any(line.startswith("uv run --no-sync pytest") for line in lines)
-    # Stand-alone and batch renderings share the same stage body.
-    body = render_stage(Stage.HARNESS, config).text.splitlines()
-    pytest_line = next(
-        line for line in body if line.startswith("uv run --no-sync pytest")
-    )
-    assert pytest_line in lines
-
-
-def test_batch_needs_slurm(local: RunConfig) -> None:
-    with pytest.raises(ValueError, match="slurm"):
-        render_batch(local, [Stage.HARNESS])
-
-
-def test_batch_rejects_login_stages(ursa: RunConfig) -> None:
-    with pytest.raises(ValueError, match="login"):
-        render_batch(ursa, [Stage.BUILD])
 
 
 def test_platform_override_changes_runtime_exports() -> None:

@@ -20,12 +20,12 @@ def resolve_output_roots(
     docker: relative paths resolve against /work (host: under cece_root);
     absolute paths must lie under /work (ValueError otherwise), and the
     driver-side path is the container one.
-    native: relative paths resolve against the checkout too — the same host
-    location on every platform — and any absolute host path is accepted;
-    the driver sees host paths, so both sides are the same path.
+    native / slurm: relative paths resolve against the checkout too — the
+    same host location on every platform — and any absolute host path is
+    accepted; the driver sees host paths, so both sides are the same path.
     """
     given = PurePosixPath(option)
-    if runtime is Runtime.NATIVE:
+    if runtime is not Runtime.DOCKER:
         host = Path(option) if given.is_absolute() else cece_root / option
         return host, PurePosixPath(host)
     if given.is_absolute():

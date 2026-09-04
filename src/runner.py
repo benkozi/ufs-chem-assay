@@ -1,9 +1,12 @@
 """One cece_standalone_driver invocation per combination: docker run against
-the cece/cece-dev image (local), or a host process behind an optional
-launcher prefix (native — RDHPC machines have no docker)."""
+the cece/cece-dev image (local); a host process behind an optional launcher
+prefix (native, inside an allocation); or one `sbatch --wait` job submitted
+from a login node (slurm — RDHPC machines have no docker, and the harness's
+Python must never see the driver's module environment)."""
 
 from __future__ import annotations
 
+import math
 import subprocess
 from pathlib import Path, PurePosixPath
 
@@ -13,6 +16,17 @@ from combos import Combo
 from models.cece_config import CeceConfig
 from platforms import Runtime
 from settings import Settings
+
+
+# The slurm job script: loads CECE_MODULEFILE (when set) and execs its
+# arguments — sbatch takes a script followed by the script's arguments, so
+# the wrapper is the script and the driver command is its argv.
+WRAPPER = Path(__file__).resolve().parents[1] / "scripts" / "cece-modules.sh"
+
+
+def slurm_minutes(timeout_s: int) -> int:
+    """Slurm time limits are whole minutes: round the suite timeout up, floor 1."""
+    return max(1, math.ceil(timeout_s / 60))
 
 
 class DriverRunResult(BaseModel):
@@ -66,6 +80,9 @@ def build_command(
     settings: Settings,
     driver_yaml: PurePosixPath,
     output_mount: tuple[Path, PurePosixPath] | None = None,
+    *,
+    out_path: Path | None = None,
+    timeout_s: int | None = None,
 ) -> list[str]:
     """The driver command for one combination, per settings.runtime.
 
@@ -73,11 +90,35 @@ def build_command(
     container path.
     native: the launcher prefix, the driver resolved against the checkout,
     and driver_yaml as a host path; output_mount is meaningless and ignored.
+    slurm: `sbatch --wait --parsable` with the job's cwd at the checkout,
+    its stdout+stderr at out_path, its time limit from timeout_s (whole
+    minutes), the configured sbatch args, then the wrapper as the job
+    script and the driver command as its arguments.
     """
     if settings.runtime is Runtime.NATIVE:
         assert settings.root_dir is not None  # guarded at collection
         driver = settings.root_dir / settings.driver_path
         return [*settings.launcher_argv, str(driver), str(driver_yaml)]
+    if settings.runtime is Runtime.SLURM:
+        assert settings.root_dir is not None  # guarded at collection
+        assert out_path is not None and timeout_s is not None, (
+            "slurm needs out_path/timeout_s"
+        )
+        return [
+            "sbatch",
+            "--wait",
+            "--parsable",
+            "--chdir",
+            str(settings.root_dir),
+            "-o",
+            str(out_path),
+            "-t",
+            str(slurm_minutes(timeout_s)),
+            *settings.sbatch_argv,
+            str(WRAPPER),
+            settings.driver_path,
+            str(driver_yaml),
+        ]
     return [
         *docker_prefix(settings, output_mount),
         settings.driver_path,
@@ -100,7 +141,8 @@ def run_driver(
     timeout_s: int,
     output_mount: tuple[Path, PurePosixPath] | None = None,
 ) -> None:
-    """Run one driver invocation (a fresh container, or a host process).
+    """Run one driver invocation (a fresh container, a host process, or a
+    Slurm job).
 
     Combined stdout/stderr is written to out_path and printed whether the run
     passes or fails; a nonzero exit re-raises CalledProcessError to fail the
@@ -108,8 +150,11 @@ def run_driver(
     Natively the process runs in the checkout (cwd = root_dir), so the
     relative driver path and cwd-relative data paths resolve as they do
     under docker's -w /work; the environment is inherited as-is (modules,
-    MPI hints are the caller's job).
+    MPI hints are the caller's job). Under slurm see _run_slurm_job.
     """
+    if settings.runtime is Runtime.SLURM:
+        _run_slurm_job(settings, driver_yaml, out_path, timeout_s)
+        return
     command = build_command(settings, driver_yaml, output_mount=output_mount)
     cwd = settings.root_dir if settings.runtime is Runtime.NATIVE else None
     try:
@@ -122,3 +167,38 @@ def run_driver(
         raise
     out_path.write_bytes(output)
     _print_output(out_path, output)
+
+
+def _run_slurm_job(
+    settings: Settings, driver_yaml: PurePosixPath, out_path: Path, timeout_s: int
+) -> None:
+    """One `sbatch --wait` job for the driver. Slurm writes the job's output
+    to out_path itself; the harness reads it back afterwards. The job's own
+    time limit is timeout_s rounded up to minutes; the outer bound adds the
+    queue allowance and, when hit, cancels the job (scancel) before raising
+    TimeoutExpired — queue time must not count against the driver, but a
+    job stuck forever must not hang the session."""
+    command = build_command(
+        settings, driver_yaml, out_path=out_path, timeout_s=timeout_s
+    )
+    process = subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+    )
+    assert process.stdout is not None
+    submission = process.stdout.readline()  # --parsable: the job id
+    job_id = submission.decode("utf-8", errors="replace").strip().split(";")[0]
+    try:
+        returncode = process.wait(timeout=timeout_s + settings.slurm_queue_wait_s)
+    except subprocess.TimeoutExpired:
+        if job_id:
+            subprocess.run(["scancel", job_id], check=False)
+        process.kill()
+        raise
+    if not out_path.is_file():
+        # The job never wrote (rejected submission, failed before start):
+        # keep whatever sbatch said so the .out exists and explains itself.
+        out_path.write_bytes(submission + process.stdout.read())
+    output = out_path.read_bytes()
+    _print_output(out_path, output)
+    if returncode != 0:
+        raise subprocess.CalledProcessError(returncode, command, output=output)

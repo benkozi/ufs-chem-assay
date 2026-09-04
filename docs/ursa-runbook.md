@@ -1,8 +1,8 @@
 # Ursa runbook: running the harness natively
 
 Manual steps to build the CECE driver against its own Ursa modulefiles
-and run `simple-maccity-suite.yaml` through the harness inside one Slurm
-job. `ufs-chem-assay run --config-file=config/ursa.yaml` automates the
+and run `simple-maccity-suite.yaml` through the harness from a login
+node, one Slurm job per driver call. `ufs-chem-assay run --config-file=config/ursa.yaml` automates the
 same sequence (each stage renders to a script under `<root_dir>/scripts/`,
 so the two are the same commands).
 
@@ -99,53 +99,51 @@ download runs under the harness venv's Python: CECE's examples tooling
 needs 3.11 or newer, and after `module purge` the only `python3` left is
 the OS one.
 
-## 6. The batch script
+## 6. The harness script
 
-`scripts/ursa-harness.sh` in the harness checkout is the job: it loads
-the modulefile, exports the native-runtime settings, and runs one suite.
-It reads `ROOT` (required) plus optional `MODULEFILE`, `SUITE`, and
-`OUTPUT_ROOT`; its `#SBATCH` directives (`-A epic -q debug -p u1-compute
--N 1 -n 1 -c 8 -t 00:30:00`) are defaults you can override on the
-`sbatch` command line. Read it once before submitting.
+`scripts/ursa-harness.sh` in the harness checkout runs pytest **on the
+login node** and submits **one Slurm job per driver call** through
+`scripts/cece-modules.sh`, the job script that loads the CECE modulefile
+before the driver. It reads `ROOT` (required) plus optional `MODULEFILE`,
+`SBATCH_ARGS` (default `-A epic -q debug -p u1-compute -N 1 -n 1 -c 8`),
+`SUITE`, and `OUTPUT_ROOT`. Read it once before running.
 
-What the exports do: `UV_OFFLINE=1` and `--no-sync` keep uv from
-touching the network; `CECE_RUNTIME=native` runs the driver as a host
-process with `CECE_LAUNCHER` as its prefix (each combo becomes an
-`srun` job step inside the allocation); `CECE_DASK_NWORKERS` matches
-the stats cluster to the allocated cores on a shared node; the two
-MPI variables are the single-node hints CECE's own ctest uses;
-baselines are off because the baseline store has no public home yet.
-Environment variables beat a `.env` file, so a laptop `.env` copied
-along cannot silently win.
+Two environments, kept apart: the harness venv must never see the
+modulefile (spack-stack sets `PYTHONPATH` to `python3.11` packages that
+shadow the venv's numpy), so the script starts with `module purge` and
+`unset PYTHONPATH`; the driver needs the modulefile's libraries, so each
+job loads it. Never run steps 2, 5, or 6 from a shell with the modulefile
+loaded without purging first. Each job's time limit is the suite's
+`timeout_s` rounded up to whole minutes; queue time does not count.
+Analysis (stats, plots) runs in the pytest process on the login node, so
+`CECE_DASK_NWORKERS` is pinned to 2.
 
-## 7. Submit and watch
-
-```bash
-mkdir -p $ROOT/logs
-sbatch --export=ALL,ROOT=$ROOT -o $ROOT/logs/slurm-%j.out $ROOT/ufs-chem-assay/scripts/ursa-harness.sh
-squeue -u $USER
-less $ROOT/logs/slurm-<jobid>.out
-```
-
-Results land in `$ROOT/CECE/ufs-chem-assay-output/`: `run.yaml`
-(with `cece_commit`, `platform: ursa`, `runtime: native`), `combos.csv`,
-`test-report.csv`, per-combo directories with the generated config,
-`.out`, `cece.log`, NetCDF, stats, and plots. Plots may warn about
-missing coastlines the first time: Natural Earth data cannot download on
-a compute node, and the maps degrade to data-only. Warm the cache once
-on a login node from the harness venv:
+## 7. Run and watch
 
 ```bash
-uv run python -c "import cartopy.io.shapereader as s; [s.natural_earth(resolution=r, category='physical', name='coastline') for r in ('110m', '50m')]"
+tmux new -s harness            # the session outlives your SSH connection
+export ROOT=<your scratch directory>/ufs-chem-assay
+bash $ROOT/ufs-chem-assay/scripts/ursa-harness.sh 2>&1 | tee $ROOT/logs/harness-$(date +%Y%m%d-%H%M%S).log
 ```
 
-For an interactive loop instead of `sbatch`:
+In another window, `squeue -u $USER` shows the per-combo jobs come and
+go. Results land in `$ROOT/CECE/ufs-chem-assay-output/`: `run.yaml`
+(with `cece_commit`, `platform: ursa`, `runtime: slurm`, `modulefile`),
+`combos.csv`, `test-report.csv`, per-combo directories with the generated
+config, the job's `.out`, `cece.log`, NetCDF, stats, and plots. The login
+node has network, so the first plot fetches Natural Earth coastlines on
+its own.
+
+For an interactive alternative, run the session inside an allocation
+with the driver as a direct process:
 
 ```bash
 salloc -A epic -q debug -p u1-compute -N 1 -n 1 -c 8 -t 00:30:00
 ```
 
-then the same `module` and `export` lines as the script and
+then the same exports with `CECE_RUNTIME=native` and
+`CECE_LAUNCHER="srun --ntasks=1 $ROOT/ufs-chem-assay/scripts/cece-modules.sh"`
+(the wrapper still loads the modulefile per driver run) and
 `uv run --no-sync pytest src/tests/test_driver_combos.py -x -vs ...`.
 
 ## What to record after the first run
@@ -156,6 +154,6 @@ Worth capturing for whoever maintains the harness:
   detection table).
 - Whether `cece_ursa.intelllvm` loads on today's `/contrib`
   spack-stack, and the configure-log lines for MPI, netCDF, and Kokkos.
-- Driver wall time per combo under `srun` (whether
-  `simple-maccity`'s `timeout_s: 10` needs raising on Ursa).
+- Queue wait and wall time per driver job (`sacct -j <id>`), and whether
+  the one-minute job limit (`timeout_s: 10` rounded up) ever trips.
 - Whether the driver's MPI singleton needs the `I_MPI_FABRICS=shm` hint.

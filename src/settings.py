@@ -42,6 +42,31 @@ class Settings(BaseSettings):
             "(e.g. 'srun --ntasks=1'); empty runs the driver directly"
         ),
     )
+    sbatch_args: str = Field(
+        default="",
+        description=(
+            "slurm runtime: sbatch options for every driver job, word-split "
+            "like a shell (e.g. '-A epic -q debug -p u1-compute -N 1 -n 1 -c 8'); "
+            "the time limit comes from the suite timeout"
+        ),
+    )
+    slurm_queue_wait_s: int = Field(
+        default=3600,
+        gt=0,
+        description=(
+            "slurm runtime: seconds allowed for a driver job to wait in the "
+            "queue, added to the suite timeout for the outer bound; the job's "
+            "own limit is the suite timeout rounded up to minutes"
+        ),
+    )
+    modulefile: str | None = Field(
+        default=None,
+        description=(
+            "CECE modulefile the job script loads before the driver (slurm "
+            "runtime); read by scripts/cece-modules.sh from the environment, "
+            "recorded in run.yaml"
+        ),
+    )
     docker_image: str = "cece/cece-dev"
     root_dir: Path | None = Field(
         None,
@@ -94,6 +119,10 @@ class Settings(BaseSettings):
     @property
     def launcher_argv(self) -> list[str]:
         return shlex.split(self.launcher)
+
+    @property
+    def sbatch_argv(self) -> list[str]:
+        return shlex.split(self.sbatch_args)
 
     @field_validator("suite_config_search_path", mode="before")
     @classmethod

@@ -117,6 +117,12 @@ def run_example_command(settings: Settings, eid: str) -> list[str]:
     here: docker run locally; natively the harness's own interpreter, the
     one guaranteed to be >= 3.11 (the entrypoint uses StrEnum) once modules
     have replaced the login node's python3."""
+    if settings.runtime is Runtime.SLURM:
+        raise NotImplementedError(
+            "--run-examples is not supported under the slurm runtime yet "
+            "(each example would need its own job and output file); use "
+            "CECE_RUNTIME=native inside an allocation"
+        )
     if settings.runtime is Runtime.NATIVE:
         assert settings.root_dir is not None  # guarded at collection
         return [

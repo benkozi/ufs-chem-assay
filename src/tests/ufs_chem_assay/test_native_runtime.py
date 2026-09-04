@@ -17,6 +17,7 @@ def _native(launcher: str = "") -> Settings:
     return Settings(
         root_dir=Path("/host/cece"),
         platform=Platform.URSA,
+        runtime=Runtime.NATIVE,  # ursa now defaults to slurm; native is explicit
         launcher=launcher,
         driver_path="./build/cece_standalone_driver",
     )

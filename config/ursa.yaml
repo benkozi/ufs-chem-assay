@@ -1,10 +1,9 @@
 # Run config for Ursa (RDHPCS): native driver build against CECE's own
-# modulefiles, the harness session as one Slurm batch job. Copy, edit the
-# account and paths, then:
+# modulefiles; pytest on the login node submitting one Slurm job per driver
+# call (the slurm runtime). Copy, edit the account and paths, then:
 #   ufs-chem-assay run --config-file=config/ursa.yaml [--dry-run]
-# Every stage renders to <root_dir>/scripts/<NN>-<stage>.sh; the login-node
-# stages (source, build, data) run with bash, the compute stages
-# (cece-tests, harness) go into one sbatch script.
+# Every stage renders to <root_dir>/scripts/<NN>-<stage>.sh and runs with
+# bash where the CLI runs; run the harness stage under tmux.
 platform: ursa  # optional: detected from the hostname when absent; --platform wins
 root_dir: /scratch3/<project>/<user>/ufs-chem-assay  # edit: everything the CLI creates lands here
 cece:
@@ -31,18 +30,15 @@ harness:
   output_root: ufs-chem-assay-output  # relative: under the CECE checkout
   clean_root: true
   pytest_args: []  # e.g. [-x, -k, map-consd]
-  launcher: srun --ntasks=1  # CECE_LAUNCHER: prefix for every native driver run
   env:  # exported before pytest; the single-node MPI hints CECE's ctest uses
     I_MPI_FABRICS: shm
     FI_PROVIDER: tcp
-  dask_nworkers:  # null: the Slurm allocation's cpus
+  dask_nworkers: 2  # analysis runs in the pytest process on the login node: stay small
   run_timeout_s: 300
-slurm:  # null: the compute stages run directly with bash (the local path)
+slurm:  # the per-driver job (CECE_SBATCH_ARGS); time limit = the suite timeout
   account: epic  # sbatch -A; the default when omitted
-  qos: debug  # 30 min cap; `batch` (8 h) for the exhaustive suites
+  qos: debug  # 30 min cap per job; `batch` (8 h) for long drivers
   partition: u1-compute
-  time: 00:30:00
   cpus: 8
-  submit: true  # false: write the sbatch script and print the command
 uv:
   cache_dir:  # UV_CACHE_DIR; default <root_dir>/uv-cache

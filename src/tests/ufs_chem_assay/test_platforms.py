@@ -47,7 +47,7 @@ def test_settings_detects_ursa_from_hostname(
     monkeypatch.setattr("platforms.socket.gethostname", lambda: "ufe02")
     settings = Settings()
     assert settings.platform is Platform.URSA
-    assert settings.runtime is Runtime.NATIVE
+    assert settings.runtime is Runtime.SLURM
 
 
 def test_explicit_platform_beats_detection(
@@ -62,7 +62,7 @@ def test_explicit_platform_beats_detection(
 def test_runtime_derives_from_platform_but_env_wins(
     clean_env: pytest.MonkeyPatch,
 ) -> None:
-    assert Settings(platform=Platform.URSA).runtime is Runtime.NATIVE
+    assert Settings(platform=Platform.URSA).runtime is Runtime.SLURM
     clean_env.setenv("CECE_RUNTIME", "docker")
     assert Settings(platform=Platform.URSA).runtime is Runtime.DOCKER
 
@@ -80,13 +80,15 @@ def test_run_manifest_records_platform_and_runtime(
         run_id="01JZZZZZZZZZZZZZZZZZZZZZZZ",
         cece_commit=None,
         platform=Platform.URSA,
-        runtime=Runtime.NATIVE,
+        runtime=Runtime.SLURM,
+        modulefile="cece_ursa.intelllvm",
         suites=[SuiteConfig.from_yaml(suite_path)],
     )
     manifest.to_yaml(tmp_path / "run.yaml")
     recorded = yaml.safe_load((tmp_path / "run.yaml").read_text())
     assert recorded["platform"] == "ursa"
-    assert recorded["runtime"] == "native"
+    assert recorded["runtime"] == "slurm"
+    assert recorded["modulefile"] == "cece_ursa.intelllvm"
 
 
 def test_explicit_local_platform_beats_an_ursa_hostname(

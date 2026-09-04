@@ -392,6 +392,7 @@ def test_expanded_regex_recorded_in_run_manifest(
         cece_commit=None,
         platform=Platform.LOCAL,
         runtime=Runtime.DOCKER,
+        modulefile=None,
         suites=[suite],
     )
     manifest_path = tmp_path / "run.yaml"
@@ -464,6 +465,7 @@ def test_run_manifest_round_trips_through_yaml(
         cece_commit=None,
         platform=Platform.LOCAL,
         runtime=Runtime.DOCKER,
+        modulefile=None,
         suites=[suite],
     )
     manifest_path = tmp_path / "run.yaml"
@@ -487,5 +489,6 @@ def test_run_manifest_requires_explicit_cece_commit(suite_path: Path) -> None:
             run_id="01JZZZZZZZZZZZZZZZZZZZZZZZ",
             platform=Platform.LOCAL,
             runtime=Runtime.DOCKER,
+            modulefile=None,
             suites=[suite],
         )

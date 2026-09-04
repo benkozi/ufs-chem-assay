@@ -36,7 +36,6 @@ def test_dry_run_renders_every_script_and_executes_nothing(
     tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
     run_bash = mocker.patch("cli.main.run_bash")
-    submit = mocker.patch("cli.main.submit_sbatch")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(["run", f"--config-file={_config(tmp_path)}", "--dry-run"])
     assert code == 0
@@ -44,12 +43,10 @@ def test_dry_run_renders_every_script_and_executes_nothing(
         "01-source.sh",
         "02-build.sh",
         "03-data.sh",
-        "04-batch.sbatch",
+        "05-harness.sh",
     ]
     run_bash.assert_not_called()
-    submit.assert_not_called()
     messages = [record.getMessage() for record in caplog.records]
-    assert any("sbatch " in m and "04-batch.sbatch" in m for m in messages)
     assert any("dry run" in m for m in messages)
     # Nothing but scripts/ under the root.
     assert sorted(p.name for p in (tmp_path / "root").iterdir()) == ["scripts"]
@@ -59,7 +56,6 @@ def test_stage_selection_renders_only_those(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
     mocker.patch("cli.main.run_bash")
-    mocker.patch("cli.main.submit_sbatch")
     code = main(
         [
             "run",
@@ -72,113 +68,63 @@ def test_stage_selection_renders_only_those(
         ]
     )
     assert code == 0
-    assert _scripts(tmp_path) == ["02-build.sh", "04-batch.sbatch"]
+    assert _scripts(tmp_path) == ["02-build.sh", "05-harness.sh"]
 
 
-def test_login_stages_run_with_bash_in_order_and_batch_submits(
+def test_all_stages_run_with_bash_in_order(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
     run_bash = mocker.patch("cli.main.run_bash", return_value=0)
-    submit = mocker.patch("cli.main.submit_sbatch", return_value=0)
     code = main(["run", f"--config-file={_config(tmp_path)}"])
     assert code == 0
     ran = [call.args[0].name for call in run_bash.call_args_list]
-    assert ran == ["01-source.sh", "02-build.sh", "03-data.sh"]
-    submit.assert_called_once()
-    assert submit.call_args.args[0].name == "04-batch.sbatch"
-    assert (tmp_path / "root" / "logs").is_dir()  # sbatch -o target exists
+    assert ran == ["01-source.sh", "02-build.sh", "03-data.sh", "05-harness.sh"]
 
 
 def test_failed_stage_stops_the_run_and_logs_at_error(
     tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
     run_bash = mocker.patch("cli.main.run_bash", side_effect=[0, 2])
-    submit = mocker.patch("cli.main.submit_sbatch")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(["run", f"--config-file={_config(tmp_path)}"])
     assert code == 2
     assert run_bash.call_count == 2
-    submit.assert_not_called()
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert len(errors) == 1 and "02-build" in errors[0].getMessage()
 
 
-def test_no_submit_writes_batch_and_logs_command(
-    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
-) -> None:
-    mocker.patch("cli.main.run_bash", return_value=0)
-    submit = mocker.patch("cli.main.submit_sbatch")
-    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
-        code = main(
-            [
-                "run",
-                f"--config-file={_config(tmp_path)}",
-                "--stage",
-                "harness",
-                "--no-submit",
-            ]
-        )
-    assert code == 0
-    submit.assert_not_called()
-    assert any("sbatch " in record.getMessage() for record in caplog.records)
-
-
-def test_submit_false_in_config_behaves_like_no_submit(
-    tmp_path: Path, mocker: MockerFixture
-) -> None:
-    mocker.patch("cli.main.run_bash", return_value=0)
-    submit = mocker.patch("cli.main.submit_sbatch")
-    path = _config(tmp_path, overrides={"slurm.submit": False})
-    assert main(["run", f"--config-file={path}", "--stage", "harness"]) == 0
-    submit.assert_not_called()
-
-
-def test_failed_sbatch_is_the_exit_code(tmp_path: Path, mocker: MockerFixture) -> None:
-    mocker.patch("cli.main.run_bash", return_value=0)
-    mocker.patch("cli.main.submit_sbatch", return_value=1)
-    assert (
-        main(["run", f"--config-file={_config(tmp_path)}", "--stage", "harness"]) == 1
-    )
-
-
-def test_local_config_runs_compute_stages_with_bash(
+def test_local_config_runs_the_same_stages(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
     run_bash = mocker.patch("cli.main.run_bash", return_value=0)
-    submit = mocker.patch("cli.main.submit_sbatch")
     code = main(["run", f"--config-file={_config(tmp_path, 'local.yaml')}"])
     assert code == 0
     ran = [call.args[0].name for call in run_bash.call_args_list]
     assert ran == ["01-source.sh", "02-build.sh", "03-data.sh", "05-harness.sh"]
-    submit.assert_not_called()
 
 
 def test_cece_tests_stage_only_when_configured(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
     mocker.patch("cli.main.run_bash")
-    mocker.patch("cli.main.submit_sbatch")
     path = _config(
         tmp_path, overrides={"cece.run_tests": True, "cece.targets": ["all"]}
     )
     assert main(["run", f"--config-file={path}", "--dry-run"]) == 0
-    batch = (tmp_path / "root" / "scripts" / "04-batch.sbatch").read_text()
-    assert "ctest" in batch
-    assert "uv run --no-sync pytest" in batch
+    assert "04-cece-tests.sh" in _scripts(tmp_path)
+    tests = (tmp_path / "root" / "scripts" / "04-cece-tests.sh").read_text()
+    assert "sbatch --wait" in tests and "ctest" in tests
 
 
 def test_platform_flag_overrides_file(tmp_path: Path, mocker: MockerFixture) -> None:
     mocker.patch("cli.main.run_bash")
-    mocker.patch("cli.main.submit_sbatch")
     path = _config(tmp_path)
     assert (
         main(["run", f"--config-file={path}", "--platform", "local", "--dry-run"]) == 0
     )
-    # slurm is still configured, so compute stages still go to the batch
-    # script; the exports inside follow the overridden platform.
-    batch = tmp_path / "root" / "scripts" / "04-batch.sbatch"
-    assert batch.is_file()
-    assert "export CECE_RUNTIME=docker" in batch.read_text()
+    # The exports follow the overridden platform (local -> docker runtime).
+    harness = tmp_path / "root" / "scripts" / "05-harness.sh"
+    assert "export CECE_RUNTIME=docker" in harness.read_text()
 
 
 def test_python_m_cli_entrypoint(tmp_path: Path) -> None:

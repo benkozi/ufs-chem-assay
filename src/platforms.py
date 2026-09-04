@@ -2,7 +2,7 @@
 
 The platform is a per-machine fact — detected from the hostname, overridable
 through CECE_PLATFORM — and the runtime derives from it: docker locally,
-a native host process everywhere else (RDHPC machines have no docker).
+a Slurm job per driver call everywhere else (RDHPC machines have no docker).
 Detection is a convenience, never load-bearing: run configs for a machine
 set the platform explicitly.
 """
@@ -26,6 +26,7 @@ class Runtime(StrEnum):
 
     DOCKER = "docker"  # docker run against the cece/cece-dev image
     NATIVE = "native"  # a host process, optionally behind a launcher (srun)
+    SLURM = "slurm"  # one `sbatch --wait` job per driver call, from a login node
 
 
 # Hostname patterns (fullmatch) per platform. Ursa login nodes are ufe01-04;
@@ -45,5 +46,7 @@ def detect_platform(hostname: str | None = None) -> Platform:
 
 
 def default_runtime(platform: Platform) -> Runtime:
-    """docker on a laptop, native anywhere else."""
-    return Runtime.DOCKER if platform is Platform.LOCAL else Runtime.NATIVE
+    """docker on a laptop; one Slurm job per driver call on an RDHPC machine
+    (native — a direct host process — is the explicit choice inside an
+    allocation)."""
+    return Runtime.DOCKER if platform is Platform.LOCAL else Runtime.SLURM

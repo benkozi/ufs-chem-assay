@@ -205,14 +205,20 @@ Options:
 ## Running on RDHPC (Ursa)
 
 RDHPCS machines have no docker, so the driver is built natively against
-CECE's own modulefiles (`<CECE>/modulefiles/cece_ursa.*.lua`) and the
-harness runs it as a host process — the **native runtime**, selected by
-`CECE_RUNTIME=native` (the default once `CECE_PLATFORM` is anything but
-`local`; the platform is detected from the hostname and overridable).
-`CECE_LAUNCHER` prefixes every driver run, so inside a Slurm allocation
-each combination is an `srun` job step. Everything that needs network
-(clone, cmake's FetchContent, data downloads, `uv sync`) happens on a
-login node; the pytest session runs as one batch job.
+CECE's own modulefiles (`<CECE>/modulefiles/cece_ursa.*.lua`), and the
+harness runs on a **login node** submitting **one Slurm job per driver
+call** — the **slurm runtime**, selected by `CECE_RUNTIME=slurm` (the
+default once `CECE_PLATFORM` is anything but `local`; the platform is
+detected from the hostname and overridable). Each job is
+`sbatch --wait` with `CECE_SBATCH_ARGS` (account, QOS, partition, cpus),
+the suite's `timeout_s` rounded up to whole minutes as its time limit,
+and `scripts/cece-modules.sh` as the job script, which loads
+`CECE_MODULEFILE` before the driver. Two environments stay apart on
+purpose: the harness venv never sees the modulefile (spack-stack's
+`PYTHONPATH` would shadow its numpy), the driver always does. Analysis
+runs in the pytest process, so cap `CECE_DASK_NWORKERS` on a login node.
+`CECE_RUNTIME=native` remains for a session inside an `salloc` shell,
+with `CECE_LAUNCHER` as the per-driver prefix.
 
 `ufs-chem-assay run` assembles all of that from one YAML run config:
 
@@ -220,23 +226,22 @@ login node; the pytest session runs as one batch job.
 cp config/ursa.yaml my-ursa.yaml       # edit account, qos, root_dir, ref
 uv run ufs-chem-assay run --config-file=my-ursa.yaml --dry-run   # render only
 uv run ufs-chem-assay run --config-file=my-ursa.yaml             # clone, build,
-                                                                 #   data, sbatch
-uv run ufs-chem-assay run --config-file=my-ursa.yaml --stage harness --no-submit
+                                                                 #   data, harness
+uv run ufs-chem-assay run --config-file=my-ursa.yaml --stage harness
 ```
 
 Stages (`--stage`, repeatable): `source` (clone or fast-forward CECE),
 `build` (modules + cmake, or CECE's container build script locally),
-`data` (example downloads, cartopy cache), `cece-tests` (ctest under the
-launcher; only with `cece.run_tests`), `harness` (the pytest session).
-Each renders to `<root_dir>/scripts/<NN>-<stage>.sh`; the compute stages
-become one `<NN>-batch.sbatch` when a `slurm:` section is configured,
-and run directly with bash otherwise (`config/local.yaml` is the laptop
-equivalent). Logs land in `<root_dir>/logs/`. The CLI never deletes
-anything except the harness output root (`clean_root`), and never
-mutates an existing checkout without `update_source`.
+`data` (example downloads, cartopy cache), `cece-tests` (ctest as one
+Slurm job; only with `cece.run_tests`), `harness` (the pytest session).
+Each renders to `<root_dir>/scripts/<NN>-<stage>.sh` and runs with bash
+where the CLI runs; logs land in `<root_dir>/logs/`. Run the harness
+stage under `tmux` — it lives as long as the suite. The CLI never
+deletes anything except the harness output root (`clean_root`), and
+never mutates an existing checkout without `update_source`.
 
 The same steps by hand are in [docs/ursa-runbook.md](docs/ursa-runbook.md);
-`scripts/ursa-harness.sh` is the manual batch script it submits.
+`scripts/ursa-harness.sh` is the manual login-node script it runs.
 
 ## CI and releases
 
@@ -378,8 +383,11 @@ environment variables override `.env`, and `--cece-root-dir` overrides both.
 | Env var                         | Meaning                                        | Default                          |
 |---------------------------------|------------------------------------------------|----------------------------------|
 | `CECE_PLATFORM`                 | machine the harness runs on (`local`, `ursa`)  | detected from the hostname, else `local` |
-| `CECE_RUNTIME`                  | how the driver is spawned (`docker`, `native`) | `docker` on `local`, `native` elsewhere |
+| `CECE_RUNTIME`                  | how the driver is spawned (`docker`, `native`, `slurm`) | `docker` on `local`, `slurm` elsewhere |
 | `CECE_LAUNCHER`                 | command prefix for native driver runs (e.g. `srun --ntasks=1`) | empty (run directly) |
+| `CECE_SBATCH_ARGS`              | slurm runtime: sbatch options per driver job (`-A … -q … -p … -N 1 -n 1 -c …`) | empty |
+| `CECE_SLURM_QUEUE_WAIT_S`       | slurm runtime: queue allowance added to the suite timeout for the outer bound | `3600` |
+| `CECE_MODULEFILE`               | CECE modulefile the job script loads before the driver (recorded in `run.yaml`) | unset |
 | `CECE_DOCKER_IMAGE`             | container image (docker runtime)               | `cece/cece-dev`              |
 | `CECE_ROOT_DIR`                 | host CECE checkout root mounted at /work       | unset — required to run the driver; `--cece-root-dir` overrides |
 | `CECE_DRIVER_PATH`              | driver path inside the container               | `./build/cece_standalone_driver` |
