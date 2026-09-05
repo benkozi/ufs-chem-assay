@@ -1,0 +1,44 @@
+# Run config for Ursa (RDHPCS): native driver build against CECE's own
+# modulefiles; pytest on the login node submitting one Slurm job per driver
+# call (the slurm runtime). Runs as shipped from a runbook-layout checkout:
+#   ufs-chem-assay run --config-file=config/ursa.yaml [--dry-run]
+# Every stage renders to <root_dir>/scripts/<NN>-<stage>.sh and runs with
+# bash where the CLI runs; run the harness stage under tmux.
+platform: ursa  # optional: detected from the hostname when absent; --platform wins
+# root_dir is derived: the parent of this harness checkout ($ROOT/ufs-chem-assay beside $ROOT/CECE).
+# Set it here, or pass --root-dir, only if your layout differs.
+cece:
+  git_url: git@github.com:benkozi/CECE.git
+  ref: fix/all-examples-pass  # branch or SHA; the integration workflow's ref
+  clone_dir:  # default <root_dir>/CECE; an existing checkout is used as-is
+  update_source: false  # fetch + checkout + pull --ff-only an existing clone
+  modulefile: cece_ursa.intelllvm  # from <clone>/modulefiles after `module purge`
+  cmake_args:
+    - -DCMAKE_BUILD_TYPE=Release
+  build_jobs: 8
+  targets:  # `all` also builds CECE's test stack (running it: issue #9)
+    - cece_standalone_driver
+data:
+  examples:  # download-example-data.py --example ... (login node)
+    - ex3
+  warm_cartopy: true  # fetch Natural Earth coastlines on the login node
+baselines:
+  root_dir:  # CECE_BASELINE_ROOT_DIR
+  enabled: false  # CECE_ENABLE_BASELINE_COMPARISONS; no public store yet
+harness:
+  suite_config: simple-maccity-suite.yaml
+  output_root: ufs-chem-assay-output  # relative: under the CECE checkout
+  clean_root: true
+  pytest_args: []  # e.g. [-x, -k, map-consd]
+  env:  # exported before pytest; the single-node MPI hints CECE's ctest uses
+    I_MPI_FABRICS: shm
+    FI_PROVIDER: tcp
+  dask_nworkers: 2  # analysis runs in the pytest process on the login node: stay small
+  run_timeout_s: 300
+slurm:  # the per-driver job (CECE_SBATCH_ARGS); time limit = the suite timeout
+  account: epic  # sbatch -A; the default when omitted
+  qos: debug  # 30 min cap per job; `batch` (8 h) for long drivers
+  partition: u1-compute
+  cpus: 8
+uv:
+  cache_dir:  # UV_CACHE_DIR; default <root_dir>/uv-cache

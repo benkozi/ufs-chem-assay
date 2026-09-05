@@ -9,6 +9,7 @@ import yaml
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from models.base import StrictModel
+from platforms import Platform, Runtime
 from models.cece_config import (
     Category,
     Mapalgo,
@@ -408,6 +409,15 @@ class RunManifest(StrictModel):
             "null only when no checkout is configured (a configured root "
             "without a resolvable SHA fails the session at start)"
         ),
+    )
+    platform: Platform = Field(
+        description="Machine the session ran on (settings.platform)"
+    )
+    runtime: Runtime = Field(
+        description="How the driver was spawned: docker, native, or slurm (settings.runtime)"
+    )
+    modulefile: str | None = Field(
+        description="CECE modulefile the driver jobs loaded (slurm runtime); null otherwise"
     )
     suites: list[SuiteConfig]
 

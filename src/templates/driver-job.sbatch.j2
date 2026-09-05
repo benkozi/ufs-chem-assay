@@ -1,0 +1,14 @@
+#!/bin/bash
+#SBATCH --job-name={{ job_name }}
+#SBATCH --output={{ out_path }}
+#SBATCH --chdir={{ root_dir }}
+#SBATCH --time={{ minutes }}
+{% for directive in directives %}#SBATCH {{ directive }}
+{% endfor %}set -euo pipefail
+{% if modulefile %}if [ -n "${MODULESHOME:-}" ]; then source "$MODULESHOME/init/bash"; fi
+module purge
+module use {{ root_dir }}/modulefiles
+module load {{ modulefile }}
+module list
+{% endif %}{% for name, value in env.items() %}export {{ name }}={{ value }}
+{% endfor %}srun --ntasks=1 {{ command }}

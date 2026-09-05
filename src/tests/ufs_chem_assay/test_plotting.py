@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -221,3 +222,39 @@ def test_render_combo_bias_plots_pngs_and_gif(tmp_path: Path) -> None:
     with Image.open(gif) as image:
         assert isinstance(image, GifImagePlugin.GifImageFile)
         assert image.n_frames == 2  # gif always accompanies the bias plots
+
+
+def test_render_combo_plots_skips_bounds_variables(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """CF cell bounds written as data variables (lon_bnds/lat_bnds, no lat×lon
+    dims) are not fields: no plot attempt, no error logged."""
+    combo_dir = tmp_path / "3f9a1c2b7d4e8a01"
+    combo_dir.mkdir()
+    path = combo_dir / "cece_20100101_010000.nc"
+    _write_nc(path, np.random.default_rng(3).random((1, 4, 5)), hour=1)
+    with xr.open_dataset(path) as ds:
+        dataset = ds.load()
+    lon = dataset["lon"].values
+    lat = dataset["lat"].values
+    dataset["lon_bnds"] = (
+        ("lon", "lon_bnds_dim1"),
+        np.stack([lon - 1, lon + 1], axis=1),
+    )
+    dataset["lat_bnds"] = (
+        ("lat", "lon_bnds_dim1"),
+        np.stack([lat - 1, lat + 1], axis=1),
+    )
+    dataset.to_netcdf(path, engine="netcdf4")
+    scales = {
+        "co": VariableScale(variable="co", vmin=0.0, vmax=1.0),
+        "lon_bnds": VariableScale(variable="lon_bnds", vmin=-181.0, vmax=181.0),
+        "lat_bnds": VariableScale(variable="lat_bnds", vmin=-91.0, vmax=91.0),
+    }
+
+    with caplog.at_level(logging.WARNING, logger="ufs-chem-assay.plotting"):
+        render_combo_plots(combo_dir, scales, gif_enabled=False)
+
+    plots = combo_dir / "plots-overview"
+    assert sorted(p.name for p in plots.iterdir()) == ["co__cece_20100101_010000.png"]
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]

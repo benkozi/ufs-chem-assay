@@ -28,7 +28,7 @@ from cartopy.mpl.ticker import LatitudeFormatter, LongitudeFormatter  # noqa: E4
 from PIL import Image  # noqa: E402
 from pydantic import BaseModel, ConfigDict  # noqa: E402
 
-from analysis import _file_time  # noqa: E402
+from analysis import _file_time, spatial_variables  # noqa: E402
 from logs import HARNESS_NAME, get_logger  # noqa: E402
 
 logger = get_logger("plotting")
@@ -176,7 +176,7 @@ def render_combo_plots(
     pngs_by_variable: dict[str, list[Path]] = {}
     for nc_path in nc_files:
         with xr.open_dataset(nc_path, engine="netcdf4") as ds:
-            variables = [str(name) for name in ds.data_vars]
+            variables = spatial_variables(ds)
         for variable in variables:
             scale = scales.get(variable)
             if scale is None:
@@ -331,7 +331,7 @@ def render_combo_bias_plots(
     pngs_by_variable: dict[str, list[Path]] = {}
     for name in pair_names:
         with xr.open_dataset(combo_dir / name, engine="netcdf4") as ds:
-            variables = [str(v) for v in ds.data_vars]
+            variables = spatial_variables(ds)
         for variable in variables:
             scale = scales.get(variable)
             if scale is None:

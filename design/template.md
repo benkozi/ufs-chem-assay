@@ -9,8 +9,11 @@
 - use a test-driven development, red-green-refactor approach for all fixes and features (when possible)
 - maintain original design sections when refining design docs - create an appendix
   - summarize conversational updates in the appendix following original refinement target
+  - refinements never create files. they only edit the target document that is being refined.
+  - `design.md` may be updated during the _implementation_ phase only.
 - when using python `typing`, avoid `Any` as much as possible
-- **never, ever, ever** commit code - the user always commits
+- **never, ever, ever** commit code or use git actions that perform updates - the user always updates
+- always prefer the harness's logging implementation over raw python print statements
 
 ## testing
 

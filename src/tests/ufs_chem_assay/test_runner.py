@@ -4,6 +4,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 from pytest_mock import MockerFixture
 
+from platforms import Platform
 from runner import build_command, run_driver
 from settings import Settings
 
@@ -11,6 +12,7 @@ from settings import Settings
 def _settings() -> Settings:
     # Explicit values so ambient CECE_* env vars cannot influence assertions.
     return Settings(
+        platform=Platform.LOCAL,  # the docker shape is the point of these tests
         root_dir=Path("/host/cece"),
         docker_image="img:tag",
         driver_path="./build/cece_standalone_driver",
@@ -55,7 +57,7 @@ def test_run_driver_success_writes_out(mocker: MockerFixture, tmp_path: Path) ->
 
     run_driver(
         _settings(),
-        container_yaml=PurePosixPath("/work/x.yaml"),
+        driver_yaml=PurePosixPath("/work/x.yaml"),
         out_path=out_path,
         timeout_s=7,
     )
@@ -76,7 +78,7 @@ def test_run_driver_nonzero_exit_writes_out_and_reraises(
     with pytest.raises(subprocess.CalledProcessError):
         run_driver(
             _settings(),
-            container_yaml=PurePosixPath("/work/x.yaml"),
+            driver_yaml=PurePosixPath("/work/x.yaml"),
             out_path=out_path,
             timeout_s=7,
         )
@@ -94,7 +96,7 @@ def test_run_driver_timeout_writes_out_and_reraises(
     with pytest.raises(subprocess.TimeoutExpired):
         run_driver(
             _settings(),
-            container_yaml=PurePosixPath("/work/x.yaml"),
+            driver_yaml=PurePosixPath("/work/x.yaml"),
             out_path=out_path,
             timeout_s=7,
         )

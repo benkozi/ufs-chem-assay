@@ -7,16 +7,27 @@ converts errors to pytest.UsageError at the boundary.
 import re
 from pathlib import Path, PurePosixPath
 
+from platforms import Runtime
+
 CONTAINER_WORK = PurePosixPath("/work")
 
 
-def resolve_output_roots(option: str, cece_root: Path) -> tuple[Path, PurePosixPath]:
-    """Map an explicit --combo-output-root to (host path, container path).
+def resolve_output_roots(
+    option: str, cece_root: Path, runtime: Runtime = Runtime.DOCKER
+) -> tuple[Path, PurePosixPath]:
+    """Map an explicit --combo-output-root to (host path, driver-side path).
 
-    Relative paths resolve against /work; absolute paths must lie under
-    /work (ValueError otherwise).
+    docker: relative paths resolve against /work (host: under cece_root);
+    absolute paths must lie under /work (ValueError otherwise), and the
+    driver-side path is the container one.
+    native / slurm: relative paths resolve against the checkout too — the
+    same host location on every platform — and any absolute host path is
+    accepted; the driver sees host paths, so both sides are the same path.
     """
     given = PurePosixPath(option)
+    if runtime is not Runtime.DOCKER:
+        host = Path(option) if given.is_absolute() else cece_root / option
+        return host, PurePosixPath(host)
     if given.is_absolute():
         if not given.is_relative_to(CONTAINER_WORK):
             raise ValueError(

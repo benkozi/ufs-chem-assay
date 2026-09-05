@@ -1,0 +1,37 @@
+# Run config for a laptop: the docker runtime, no modules, no Slurm — the
+# CLI equivalent of the integration workflow (CECE's own container build
+# script builds the driver in cece/cece-dev, then the harness runs on the
+# host). Runs as shipped from the checkout:
+#   ufs-chem-assay run --config-file=config/local.yaml [--dry-run]
+platform: local
+# root_dir is derived: the parent of this harness checkout. Set it here, or pass
+# --root-dir, only if your layout differs.
+cece:
+  git_url: git@github.com:benkozi/CECE.git
+  ref: fix/all-examples-pass
+  clone_dir:  # default <root_dir>/CECE; point at your sandbox checkout instead
+  update_source: false
+  modulefile:  # none locally
+  cmake_args: []  # unused: the container build script owns the configure
+  build_jobs: 4
+  targets:
+    - cece_standalone_driver
+data:
+  examples:
+    - ex3
+  warm_cartopy: false
+baselines:
+  root_dir:
+  enabled: false
+harness:
+  suite_config: simple-maccity-suite.yaml
+  output_root: ufs-chem-assay-output
+  clean_root: true
+  pytest_args: []
+  launcher: ''  # unused under docker
+  env: {}
+  dask_nworkers:
+  run_timeout_s: 300
+slurm:  # direct execution
+uv:
+  cache_dir:

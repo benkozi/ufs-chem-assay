@@ -1,10 +1,13 @@
 import os
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+from platforms import Platform, Runtime, default_runtime, detect_platform
 
 
 class Settings(BaseSettings):
@@ -17,6 +20,60 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="CECE_", frozen=True, env_file=".env")
 
+    platform: Platform = Field(
+        description=(
+            "Machine the harness runs on: an explicit value (CECE_PLATFORM or "
+            "init kwarg) beats hostname detection, which falls back to local "
+            "(filled in by the model validator below, never required)"
+        ),
+    )
+    runtime: Runtime = Field(
+        default=Runtime.DOCKER,
+        description=(
+            "How the driver is spawned: docker (the cece/cece-dev image) or "
+            "native (a host process). Defaults from the platform — docker on "
+            "local, native elsewhere — unless CECE_RUNTIME says otherwise"
+        ),
+    )
+    launcher: str = Field(
+        default="",
+        description=(
+            "Command prefix for native driver runs, word-split like a shell "
+            "(e.g. 'srun --ntasks=1'); empty runs the driver directly"
+        ),
+    )
+    sbatch_args: str = Field(
+        default="",
+        description=(
+            "slurm runtime: sbatch options for every driver job, word-split "
+            "like a shell (e.g. '-A epic -q debug -p u1-compute -N 1 -n 1 -c 8'); "
+            "the time limit comes from the suite timeout"
+        ),
+    )
+    slurm_queue_wait_s: int = Field(
+        default=3600,
+        gt=0,
+        description=(
+            "slurm runtime: seconds allowed for a driver job to wait in the "
+            "queue, added to the suite timeout for the outer bound; the job's "
+            "own limit is the suite timeout rounded up to minutes"
+        ),
+    )
+    job_env: str = Field(
+        default="",
+        description=(
+            "slurm runtime: NAME=VALUE pairs, whitespace-separated, exported "
+            "inside every driver job before the driver (e.g. 'I_MPI_FABRICS=shm "
+            "FI_PROVIDER=tcp'); the login-node shell never needs them"
+        ),
+    )
+    modulefile: str | None = Field(
+        default=None,
+        description=(
+            "CECE modulefile each rendered job script loads before the driver "
+            "(slurm runtime); recorded in run.yaml"
+        ),
+    )
     docker_image: str = "cece/cece-dev"
     root_dir: Path | None = Field(
         None,
@@ -52,6 +109,39 @@ class Settings(BaseSettings):
             "directory is always searched last"
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_platform_and_runtime(cls, data: object) -> object:
+        # The model is frozen, so the detected platform and the
+        # platform-derived runtime are filled in before construction; explicit
+        # values (env, .env, or init kwarg) are left alone. Sources are merged
+        # before validation, so `data` carries the env/.env values too.
+        if isinstance(data, dict):
+            data = dict(data)
+            data.setdefault("platform", detect_platform())
+            data.setdefault("runtime", default_runtime(Platform(data["platform"])))
+        return data
+
+    @property
+    def launcher_argv(self) -> list[str]:
+        return shlex.split(self.launcher)
+
+    @property
+    def sbatch_argv(self) -> list[str]:
+        return shlex.split(self.sbatch_args)
+
+    @property
+    def job_env_pairs(self) -> dict[str, str]:
+        pairs: dict[str, str] = {}
+        for token in shlex.split(self.job_env):
+            name, sep, value = token.partition("=")
+            if not sep or not name:
+                raise ValueError(
+                    f"CECE_JOB_ENV entries must be NAME=VALUE, got {token!r}"
+                )
+            pairs[name] = value
+        return pairs
 
     @field_validator("suite_config_search_path", mode="before")
     @classmethod

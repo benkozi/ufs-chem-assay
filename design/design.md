@@ -24,7 +24,11 @@ the harness test package `src/tests/ufs_chem_assay/`. See
 
 ## Non-goals
 
-- No standalone CLI — pytest's command line is the only entry point.
+- pytest's command line is the *test* entry point. The `ufs-chem-assay
+  run` command (`src/cli/`, 2026-09-03) orchestrates environment, CECE
+  build, data, and the pytest invocation from one run config — it never
+  re-implements test logic (see
+  `design/feat/20260903-1453-run-on-rdhpc.md`).
 - No dependency on existing CECE Python infrastructure; the runner lives in
   its **own repository** with its own `uv`-managed environment. The CECE
   checkout (driver build, input data) is external, located via the
@@ -299,7 +303,26 @@ session and can never pre-exist.
 
 ## Execution model
 
-Each combination runs independently in a fresh container using the image built
+Three **runtimes** (`settings.runtime`, `src/platforms.py`): `docker`, the
+default on the `local` platform and described first below; `slurm`, the
+default on every other platform (RDHPC machines have no docker) — pytest
+runs on a login node and each driver call is one `sbatch --wait` job
+from a rendered `<combo_id>.sbatch` (Jinja2 template) kept beside the
+combo's artifacts — directives, `CECE_MODULEFILE` load, `CECE_JOB_ENV`,
+and the driver behind `srun --ntasks=1` — so the harness venv never sees
+the module environment and a failed job is reproducible by hand; and
+`native` — the driver as a host process, `cwd` = the CECE checkout,
+prefixed by the `launcher` setting, for a session inside an allocation. The platform is detected from the
+hostname (`CECE_PLATFORM` overrides; `local` when nothing matches) and
+`run.yaml` records `platform`, `runtime`, and `modulefile`. The path model is one
+abstraction: `ComboRoots.driver` is the output root *as the driver sees
+it* — a container path under docker, the host path natively — and
+generated configs carry it in `output.directory` and `driver.log_file`.
+The base config's data path is cwd-relative (`data/MACCity_4x5.nc`) so
+it resolves under both runtimes. See
+`design/feat/20260903-1453-run-on-rdhpc.md`.
+
+Under docker each combination runs independently in a fresh container using the image built
 by `setup.sh` (`cece/cece-dev`, assumed already built — the runner never
 builds it). One driver invocation per container, container removed on exit
 (`--rm`):
@@ -520,12 +543,18 @@ All code under `src/`; the project is `uv`-managed with its own
 <repo root>/
   pyproject.toml          # uv project: pytest, pytest-mock, pydantic>=2, pydantic-settings, pyyaml
   README.md               # user-facing setup + run instructions
+  docs/ursa-runbook.md    # manual native run on Ursa (what the CLI automates)
+  config/                 # run-config templates: local.yaml (docker), ursa.yaml (native + slurm)
   design/design.md
   src/
     models/
       base.py             # StrictModel: extra="forbid" base for all config models
       cece_config.py      # existing pydantic model of the driver config
       suite_config.py     # SuiteConfig / Sweep / RunManifest models + YAML loader
+    cli/                  # `ufs-chem-assay run`: run config model, stage scripts,
+                          #   bash/sbatch execution (console script via hatchling)
+    platforms.py          # Platform / Runtime enums, hostname detection
+    templates/driver-job.sbatch.j2  # the slurm runtime's per-driver job script
     analysis.py           # descriptive stats (dask distributed), CSV writing
     assertions.py         # post-run assertions (NetCDF file count, filenames)
     combos.py             # sweep → combinations, combo naming, config generation
@@ -534,8 +563,8 @@ All code under `src/`; the project is `uv`-managed with its own
     plotting.py           # session-end spatial plots + GIFs (cartopy/matplotlib)
     report.py             # test-report.csv: row model, outcome precedence, writer
     resolution.py         # pure path-resolution rules (suite path, output roots)
-    runner.py             # docker run construction, check_output, .out writing,
-                          #   DriverRunResult
+    runner.py             # driver command per runtime (docker run / native +
+                          #   launcher), check_output, .out writing, DriverRunResult
     settings.py           # pydantic-settings
     tests/
       config/

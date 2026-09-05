@@ -27,8 +27,10 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
 
 WORKDIR /app
 
+# --no-install-project: the project is a package (console script) but the
+# context carries no source; CI's in-repo `uv sync --frozen` installs it.
 COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-install-project
 
 # Bake the isolated hook environments (pre-commit-hooks,
 # conventional-pre-commit) so CI jobs need no network for pre-commit; the

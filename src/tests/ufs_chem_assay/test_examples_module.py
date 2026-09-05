@@ -24,6 +24,7 @@ from examples import (
     write_examples_report,
 )
 from logs import LOGGER_NAME
+from platforms import Platform
 from settings import Settings
 
 
@@ -125,7 +126,9 @@ def test_download_timeout_recorded_not_raised(
 
 
 def test_run_example_command_wraps_entrypoint_in_docker() -> None:
-    settings = Settings(root_dir=Path("/host/cece"), docker_image="img:tag")
+    settings = Settings(
+        platform=Platform.LOCAL, root_dir=Path("/host/cece"), docker_image="img:tag"
+    )
     assert run_example_command(settings, "ex3") == [
         "docker",
         "run",
