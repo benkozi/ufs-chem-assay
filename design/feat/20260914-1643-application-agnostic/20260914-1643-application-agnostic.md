@@ -1,0 +1,31 @@
+# always do
+
+- include updating design.md as part of the implementation
+- update the harness tests (`src/tests/ufs_chem_assay`) in addition to any changes to test_driver_combos.py
+- update README.md with any necessary documentation changes in case of an api adjustment
+- use pydantic models as opposed to dataclasses
+  - all pydantic fields should include a description like `... = Field(description="<description content here>", ...`
+- do *not* add driver bugs to known bugs in `README.md` unless explicitly told to do so
+- use a test-driven development, red-green-refactor approach for all fixes and features (when possible)
+- maintain original design sections when refining design docs - create an appendix
+  - summarize conversational updates in the appendix following original refinement target
+  - refinements never create files. they only edit the target document that is being refined.
+  - `design.md` may be updated during the _implementation_ phase only.
+- when using python `typing`, avoid `Any` as much as possible
+- **never, ever, ever** commit code or use git actions that perform updates - the user always updates
+- always prefer the harness's logging implementation over raw python print statements
+- no need for wrapping when writing to the `./design` folder. wrapping will be handled by the user's ide
+
+## testing
+
+- not necessary for design documents in the `spike` folder - code *should not* change for spikes
+- *all* suites should pass `--dry-run`
+- run `simple-maccity-suite.yaml` without `--dry-run` for integration testing with the driver
+- only run examples when requested to do so
+- no need to run tests for spikes/documentation-only tasks
+- pre-commit hooks pass
+
+# requirements
+
+- refine from: https://github.com/benkozi/ufs-chem-assay/issues/12
+- as a todo, remind me to confirm that a test runs successfully on ursa for the maccity cece example
