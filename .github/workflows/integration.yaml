@@ -8,7 +8,7 @@
 # The push trigger exists to create develop-scoped caches PR runs can
 # restore — a pull_request-only workflow never shares caches across PRs.
 #
-# Baselines are OFF (CECE_ENABLE_BASELINE_COMPARISONS=false): the baseline
+# Baselines are OFF (ASSAY_ENABLE_BASELINE_COMPARISONS=false): the baseline
 # store has no public home yet. TODO: re-enable once it does (see
 # design/feat/20260727-1633-simple-maccity-ci/20260727-1633-simple-maccity-ci.md).
 #

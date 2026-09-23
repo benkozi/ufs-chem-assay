@@ -393,7 +393,7 @@ from a rendered `<combo_id>.sbatch` (Jinja2 template) kept beside the
 combo's artifacts — directives, `CECE_MODULEFILE` load, `ASSAY_JOB_ENV`,
 and the driver behind `srun --ntasks=1` — so the harness venv never sees
 the module environment and a failed job is reproducible by hand; and
-`native` — the driver as a host process, `cwd` = the CECE checkout,
+`native` — the driver as a host process, `cwd` = the application checkout,
 prefixed by the `launcher` setting, for a session inside an allocation. The platform is detected from the
 hostname (`ASSAY_PLATFORM` overrides; `local` when nothing matches) and
 `run.yaml` records `platform`, `runtime`, and `modulefile`. The path model is one
@@ -427,7 +427,7 @@ repository, so there is no derivable default: driver execution without a
 configured `root_dir` (or with one that is not an existing directory)
 fails at collection time with a `UsageError`, before any test runs. The
 `-w` flag takes a container path only — it sets the driver's working
-directory to the mounted CECE root, so the relative `./build/...` driver
+directory to the mounted application root, so the relative `./build/...` driver
 path and `/work`-relative config paths resolve correctly.
 
 When the output root is the default pytest temp directory, it lies outside
@@ -499,7 +499,7 @@ exit is the failure condition. The environment variables mirror `setup.sh`
     client never starts). Validates any suite — notably the exhaustive
     one — before paying for containers. With the default temp output root
     it needs no environment at all — no CECE checkout required.
-  - `--run-examples` — flag, off by default; runs the CECE checkout's
+  - `--run-examples` — flag, off by default; runs the application checkout's (CECE's)
     shipped `examples/config/cece_config_ex*.yaml` through the checkout's
     own `examples/run-example.py` entrypoint, wrapped in docker by this
     runner (the entrypoint is container-agnostic and never spawns docker
@@ -705,7 +705,7 @@ Dependencies: `pytest`, `pytest-mock`, `pydantic>=2`, `pydantic-settings`,
 `python-ulid`, `pyyaml`, the analysis stack (`pandas`, `xarray`, `netcdf4`,
 `dask[distributed]`), and the plotting stack (`matplotlib`, `cartopy`,
 `pillow`). Nothing
-imported from the CECE repo outside this repository.
+imported from any application repository outside this one.
 
 ## README (user documentation)
 

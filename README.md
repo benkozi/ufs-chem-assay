@@ -70,7 +70,7 @@ uv run pre-commit run --all-files  # everything the commit hook runs: ruff check
 # everything except driver execution (no docker needed); all combo tests skip
 uv run pytest src/tests/test_driver_combos.py --dry-run
 
-# the CECE checkout's shipped examples, verbatim (off by default; downloads
+# the application checkout's shipped examples (CECE's), verbatim (off by default; downloads
 # data via the checkout's scripts/data_download first — all seven pass;
 # CAMS-TEMPO inputs need local copies until a public source exists)
 uv run pytest src/tests/test_examples.py --run-examples
@@ -127,7 +127,7 @@ cell bounds and other auxiliary tables are skipped — written to
 `test_baseline_comparison` (nccmp-style comparison against a per-combination
 baseline: each `baseline_comparisons` entry carries a `sweep_selector` —
 mirroring the sweep structure with regexes at the leaves — that must select
-exactly one combination, a baseline `ulid` under `CECE_BASELINE_ROOT_DIR`,
+exactly one combination, a baseline `ulid` under `ASSAY_BASELINE_ROOT_DIR`,
 an optional per-entry `atol`, and a `plot` switch for bias plots; structure
 and attributes exact, data bit-for-bit or within `atol`; RMSE and
 difference statistics recorded per file x variable in
@@ -150,7 +150,7 @@ Options:
 - `--suite-config=SELECTOR` — selects the suites to run. The selector
   is a regex fullmatched against each discovered suite's file name or its
   search-root-relative path; candidates are every `*.yaml` found
-  recursively under the `CECE_SUITE_CONFIG_SEARCH_PATH` directories plus
+  recursively under the `ASSAY_SUITE_CONFIG_SEARCH_PATH` directories plus
   the built-in `src/tests/config/suite/` (always searched last). A literal
   filename is its own selector (`--suite-config=exhaustive-maccity-run-only-suite.yaml`);
   an existing file path is used verbatim. **Every match runs**: one match
@@ -208,7 +208,7 @@ Options:
   harness root (one with `run.yaml` at its top) is ever removed; any other
   existing directory is refused, since an absolute root under the native
   or slurm runtime can point anywhere.
-- `--run-examples` — run the CECE checkout's shipped
+- `--run-examples` — run the application checkout's shipped (for CECE:
   `examples/config/cece_config_ex*.yaml` via the checkout's
   `examples/run-example.py` entrypoint, docker-wrapped by this runner
   (exit 0 = pass), after one session pass of
@@ -382,7 +382,7 @@ uv tool run --from 'python-semantic-release>=10,<11' semantic-release --noop ver
 By default results land in a pytest temp directory (printed paths in test
 failures point there; pytest keeps the last few runs under e.g.
 `/tmp/pytest-of-<user>/`). With `--combo-output-root=combo_runs` they land in
-`combo_runs/` at the CECE checkout root (`CECE_ROOT_DIR`). Either way, one
+`combo_runs/` at the application checkout root (`CECE_ROOT_DIR`). Either way, one
 directory per combination:
 
 ```

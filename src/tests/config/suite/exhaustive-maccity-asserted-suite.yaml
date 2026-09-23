@@ -5,7 +5,7 @@
 # Output-content checks (species attributes, stats, plots) stay off.
 name: exhaustive-maccity-asserted
 config_path: ../cece/simple-maccity.yaml
-timeout_s: 10  # per combination; capped by CECE_RUN_TIMEOUT_S when smaller
+timeout_s: 10  # per combination; capped by ASSAY_RUN_TIMEOUT_S when smaller
 # assertions: defaults apply — validate_file_count and validate_filenames
 # true, expected_nc_file_count null (derived: 3 for the 3-hour base config),
 # no species block.
