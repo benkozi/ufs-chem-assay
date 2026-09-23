@@ -2,9 +2,8 @@
 
 import logging
 
-# The harness name: the one place code names it (logger namespace, plot
-# footer). Kept identical to the repository name for consistency.
-HARNESS_NAME = "ufs-chem-assay"
+from identity import HARNESS_NAME
+
 LOGGER_NAME = HARNESS_NAME
 
 _FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"

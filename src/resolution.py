@@ -9,34 +9,37 @@ from pathlib import Path, PurePosixPath
 
 from platforms import Runtime
 
-CONTAINER_WORK = PurePosixPath("/work")
-
 
 def resolve_output_roots(
-    option: str, cece_root: Path, runtime: Runtime = Runtime.DOCKER
+    option: str,
+    root_dir: Path,
+    runtime: Runtime = Runtime.DOCKER,
+    *,
+    container_workdir: PurePosixPath,
 ) -> tuple[Path, PurePosixPath]:
     """Map an explicit --combo-output-root to (host path, driver-side path).
 
-    docker: relative paths resolve against /work (host: under cece_root);
-    absolute paths must lie under /work (ValueError otherwise), and the
-    driver-side path is the container one.
+    docker: relative paths resolve against the application's container
+    workdir (host: under root_dir, the checkout); absolute paths must lie
+    under that workdir (ValueError otherwise), and the driver-side path is
+    the container one.
     native / slurm: relative paths resolve against the checkout too — the
     same host location on every platform — and any absolute host path is
     accepted; the driver sees host paths, so both sides are the same path.
     """
     given = PurePosixPath(option)
     if runtime is not Runtime.DOCKER:
-        host = Path(option) if given.is_absolute() else cece_root / option
+        host = Path(option) if given.is_absolute() else root_dir / option
         return host, PurePosixPath(host)
     if given.is_absolute():
-        if not given.is_relative_to(CONTAINER_WORK):
+        if not given.is_relative_to(container_workdir):
             raise ValueError(
-                f"--combo-output-root must be relative or under {CONTAINER_WORK}, got {option!r}"
+                f"--combo-output-root must be relative or under {container_workdir}, got {option!r}"
             )
-        relative = given.relative_to(CONTAINER_WORK)
+        relative = given.relative_to(container_workdir)
     else:
         relative = given
-    return cece_root / relative, CONTAINER_WORK / relative
+    return root_dir / relative, container_workdir / relative
 
 
 def select_suites(option: str, search_paths: list[Path]) -> list[Path]:

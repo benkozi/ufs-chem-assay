@@ -5,15 +5,17 @@ from pathlib import Path
 import pytest
 import yaml
 
-from models.suite_config import RunManifest, SuiteConfig
+from applications.registry import load_suite
+from models.suite_config import RunManifest
 from platforms import Platform, Runtime, detect_platform
 from settings import Settings
 
 
 @pytest.fixture()
 def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> pytest.MonkeyPatch:
-    for key in ("CECE_PLATFORM", "CECE_RUNTIME", "CECE_LAUNCHER", "CECE_ROOT_DIR"):
-        monkeypatch.delenv(key, raising=False)
+    for prefix in ("ASSAY_", "CECE_"):
+        for key in ("PLATFORM", "RUNTIME", "LAUNCHER"):
+            monkeypatch.delenv(f"{prefix}{key}", raising=False)
     monkeypatch.chdir(tmp_path)
     return monkeypatch
 
@@ -54,7 +56,7 @@ def test_explicit_platform_beats_detection(
     clean_env: pytest.MonkeyPatch, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("platforms.socket.gethostname", lambda: "ufe02")
-    clean_env.setenv("CECE_PLATFORM", "local")
+    clean_env.setenv("ASSAY_PLATFORM", "local")
     assert Settings().platform is Platform.LOCAL
     assert Settings().runtime is Runtime.DOCKER
 
@@ -63,12 +65,14 @@ def test_runtime_derives_from_platform_but_env_wins(
     clean_env: pytest.MonkeyPatch,
 ) -> None:
     assert Settings(platform=Platform.URSA).runtime is Runtime.SLURM
-    clean_env.setenv("CECE_RUNTIME", "docker")
+    clean_env.setenv("ASSAY_RUNTIME", "docker")
     assert Settings(platform=Platform.URSA).runtime is Runtime.DOCKER
 
 
 def test_launcher_is_split_with_shlex(clean_env: pytest.MonkeyPatch) -> None:
-    clean_env.setenv("CECE_LAUNCHER", "srun --ntasks=1 --comment='a b'")
+    clean_env.setenv(
+        "CECE_LAUNCHER", "srun --ntasks=1 --comment='a b'"
+    )  # legacy spelling
     assert Settings().launcher_argv == ["srun", "--ntasks=1", "--comment=a b"]
     assert Settings(launcher="").launcher_argv == []
 
@@ -78,11 +82,14 @@ def test_run_manifest_records_platform_and_runtime(
 ) -> None:
     manifest = RunManifest(
         run_id="01JZZZZZZZZZZZZZZZZZZZZZZZ",
-        cece_commit=None,
+        application="cece",
+        application_commit=None,
+        harness_version="0.1.0",
+        harness_commit=None,
         platform=Platform.URSA,
         runtime=Runtime.SLURM,
         modulefile="cece_ursa.intelllvm",
-        suites=[SuiteConfig.from_yaml(suite_path)],
+        suites=[load_suite(suite_path)],
     )
     manifest.to_yaml(tmp_path / "run.yaml")
     recorded = yaml.safe_load((tmp_path / "run.yaml").read_text())
@@ -99,10 +106,17 @@ def test_explicit_local_platform_beats_an_ursa_hostname(
     suite runs, and the docker command shape must follow it."""
     from pathlib import PurePosixPath
 
+    from applications.cece.settings import CeceSettings
+    from applications.registry import get_application
     from runner import build_command
 
     monkeypatch.setattr("platforms.socket.gethostname", lambda: "ufe01")
-    settings = Settings(platform=Platform.LOCAL, root_dir=Path("/host/cece"))
+    settings = Settings(platform=Platform.LOCAL)
     assert settings.runtime is Runtime.DOCKER
-    command = build_command(settings, PurePosixPath("/work/x.yaml"))
+    command = build_command(
+        settings,
+        get_application("cece"),
+        CeceSettings(root_dir=Path("/host/cece")),
+        PurePosixPath("/work/x.yaml"),
+    )
     assert command[:3] == ["docker", "run", "--rm"]

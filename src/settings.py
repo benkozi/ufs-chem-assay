@@ -1,28 +1,59 @@
+"""Harness-wide settings: everything that is about the machine, the runtime,
+and the session — never about one application. Application settings (the
+checkout, image, driver, modulefile) live on each adapter's
+ApplicationSettings subclass under its own prefix (CECE_*).
+
+Environment prefix ASSAY_, with the historical CECE_ spellings accepted as
+fallbacks until the second adapter lands (Phase C): ASSAY_X beats CECE_X
+within a source, and the environment beats a cwd-relative .env file as
+before (init kwargs > ASSAY_ env > CECE_ env > ASSAY_ .env > CECE_ .env >
+field default). Frozen: constructed once at sessionstart and read-only
+thereafter.
+"""
+
 import os
 import shlex
-import subprocess
 from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    EnvSettingsSource,
+    NoDecode,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 from platforms import Platform, Runtime, default_runtime, detect_platform
 
+ENV_PREFIX = "ASSAY_"
+LEGACY_ENV_PREFIX = "CECE_"  # accepted as a fallback for every harness setting
+_ENV_FILE = ".env"
+
 
 class Settings(BaseSettings):
-    """Environment-derived configuration. The CECE_ prefix is deliberately not
-    runner-specific so this class can host other variable groups later.
-    Frozen: constructed once at sessionstart and read-only thereafter, so
-    root_dir resolution (--cece-root-dir flag over CECE_ROOT_DIR env) happens
-    at exactly one point. A cwd-relative .env file supplies per-machine
-    values below real environment variables (init kwargs > env > .env)."""
+    """Harness-wide, environment-derived configuration (see the module
+    docstring for the prefixes and precedence)."""
 
-    model_config = SettingsConfigDict(env_prefix="CECE_", frozen=True, env_file=".env")
+    # extra="ignore": the .env file also carries the applications' keys
+    # (cece_root_dir, ...), which are not this model's business.
+    model_config = SettingsConfigDict(
+        env_prefix=ENV_PREFIX, frozen=True, env_file=_ENV_FILE, extra="ignore"
+    )
 
+    application: str | None = Field(
+        None,
+        description=(
+            "Registry name of the application this session runs (ASSAY_APPLICATION "
+            "or --application, the flag winning); unset infers it from the selected "
+            "suites, which must then agree"
+        ),
+    )
     platform: Platform = Field(
         description=(
-            "Machine the harness runs on: an explicit value (CECE_PLATFORM or "
+            "Machine the harness runs on: an explicit value (ASSAY_PLATFORM or "
             "init kwarg) beats hostname detection, which falls back to local "
             "(filled in by the model validator below, never required)"
         ),
@@ -30,9 +61,10 @@ class Settings(BaseSettings):
     runtime: Runtime = Field(
         default=Runtime.DOCKER,
         description=(
-            "How the driver is spawned: docker (the cece/cece-dev image) or "
-            "native (a host process). Defaults from the platform — docker on "
-            "local, native elsewhere — unless CECE_RUNTIME says otherwise"
+            "How the driver is spawned: docker (the application's image), native "
+            "(a host process), or slurm (one job per driver call). Defaults from "
+            "the platform — docker on local, slurm elsewhere — unless "
+            "ASSAY_RUNTIME says otherwise"
         ),
     )
     launcher: str = Field(
@@ -67,25 +99,12 @@ class Settings(BaseSettings):
             "FI_PROVIDER=tcp'); the login-node shell never needs them"
         ),
     )
-    modulefile: str | None = Field(
-        default=None,
-        description=(
-            "CECE modulefile each rendered job script loads before the driver "
-            "(slurm runtime); recorded in run.yaml"
-        ),
+    run_timeout_s: int = Field(
+        300, gt=0, description="Caps every suite's timeout_s when smaller"
     )
-    docker_image: str = "cece/cece-dev"
-    root_dir: Path | None = Field(
-        None,
-        description=(
-            "Host path of the CECE repository root, mounted at /work in the "
-            "driver container; required to execute the driver. Unset means "
-            "not configured — never a guessed path."
-        ),
+    log_level: str = Field(
+        "INFO", description="Harness logger level (DEBUG, INFO, ...)"
     )
-    driver_path: str = "./build/cece_standalone_driver"
-    run_timeout_s: int = 300
-    log_level: str = "INFO"
     baseline_root_dir: Path | None = Field(
         None,
         description="Directory holding baselines as <root>/<ulid>/; None means the current working directory",
@@ -94,11 +113,18 @@ class Settings(BaseSettings):
         True,
         description="Global switch for baseline comparisons; false skips every test_baseline_comparison regardless of suite config",
     )
-    # None -> LocalCluster sizes itself to all available cores.
-    dask_nworkers: int | None = Field(None, gt=0)
-    # When set, prepended to relative config paths (kept whole, so nested and
-    # ../ paths work); absolute provided paths are always used as-is.
-    config_search_path: Path | None = None  # applies to the suite's config_path
+    dask_nworkers: int | None = Field(
+        None,
+        gt=0,
+        description="Workers for the stats dask cluster; None sizes it to all available cores",
+    )
+    config_search_path: Path | None = Field(
+        None,
+        description=(
+            "When set, prepended to a suite's relative config_path (kept whole, "
+            "so nested and ../ paths work); absolute config paths are used as-is"
+        ),
+    )
     # NoDecode: pydantic-settings would otherwise JSON-decode the env value
     # for a complex type; the validator splits on os.pathsep instead.
     suite_config_search_path: Annotated[list[Path], NoDecode] = Field(
@@ -109,6 +135,29 @@ class Settings(BaseSettings):
             "directory is always searched last"
         ),
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # Highest first. The legacy sources read the same environment and the
+        # same .env file under the CECE_ prefix; a value present under both
+        # spellings resolves to ASSAY_ within a source.
+        return (
+            init_settings,
+            env_settings,
+            EnvSettingsSource(settings_cls, env_prefix=LEGACY_ENV_PREFIX),
+            dotenv_settings,
+            DotEnvSettingsSource(
+                settings_cls, env_file=_ENV_FILE, env_prefix=LEGACY_ENV_PREFIX
+            ),
+            file_secret_settings,
+        )
 
     @model_validator(mode="before")
     @classmethod
@@ -138,7 +187,7 @@ class Settings(BaseSettings):
             name, sep, value = token.partition("=")
             if not sep or not name:
                 raise ValueError(
-                    f"CECE_JOB_ENV entries must be NAME=VALUE, got {token!r}"
+                    f"{ENV_PREFIX}JOB_ENV entries must be NAME=VALUE, got {token!r}"
                 )
             pairs[name] = value
         return pairs
@@ -149,34 +198,3 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [Path(part) for part in value.split(os.pathsep) if part]
         return value
-
-    def get_cece_commit_sha(self) -> str | None:
-        """HEAD commit SHA of the CECE checkout, for the run.yaml record.
-
-        None when no checkout is configured (root_dir unset). A session
-        always runs against a checked-out CECE, so a configured root whose
-        SHA cannot be determined (not a git repository, no commits, git
-        missing or failing) is a fatal misconfiguration: ValueError,
-        converted to a usage error at sessionstart before any work runs."""
-        if self.root_dir is None:
-            return None
-        try:
-            completed = subprocess.run(
-                ["git", "-C", str(self.root_dir), "rev-parse", "HEAD"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise ValueError(
-                f"cannot determine the CECE commit for {self.root_dir}: {exc}"
-            ) from exc
-        sha = completed.stdout.strip()
-        if completed.returncode != 0 or not sha:
-            detail = completed.stderr.strip() or "git produced no output"
-            raise ValueError(
-                f"cannot determine the CECE commit for {self.root_dir}: git "
-                f"rev-parse HEAD failed ({detail}); the CECE root must be a "
-                "git checkout"
-            )
-        return sha

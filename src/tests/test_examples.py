@@ -1,14 +1,13 @@
-"""Opt-in execution of the CECE driver's shipped examples (--run-examples).
+"""Opt-in execution of the application's shipped examples (--run-examples).
 
-Each examples/config/cece_config_ex*.yaml in the CECE checkout runs via the
-checkout's own examples/run-example.py entrypoint, wrapped in docker by this
-suite (the entrypoint is container-agnostic; exit 0 = pass). Input data is
-fetched once per session through examples/download-example-data.py, invoked
-per example. Gating lives in the session download fixture so nothing
-(downloads included) runs when disabled: no --run-examples -> skip;
---dry-run -> skip. Failures are honest — examples are external artifacts
-under test, never masked, and the session writes examples/examples-report.md
-under the output root.
+Each example the adapter discovers in the checkout runs through the
+checkout's own tooling (CECE: examples/run-example.py, wrapped in docker by
+this suite; exit 0 = pass). Input data is fetched once per session through
+the adapter's download support. Gating lives in the session download
+fixture so nothing (downloads included) runs when disabled: no
+--run-examples -> skip; --dry-run -> skip. Failures are honest — examples
+are external artifacts under test, never masked, and the session writes
+examples/examples-report.md under the output root.
 """
 
 import subprocess
@@ -18,14 +17,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from examples import (
-    DownloadResult,
-    ExampleRunResult,
-    download_example_data,
-    example_id,
-    run_example_command,
-    write_examples_report,
-)
+from applications.base import Application, ApplicationSettings, ExamplesSupport
+from examples import DownloadResult, ExampleRunResult, write_examples_report
 from settings import Settings
 
 if TYPE_CHECKING:
@@ -35,8 +28,19 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(scope="session")
+def examples_support(application: Application) -> ExamplesSupport:
+    """The adapter's examples support; the collection guard already refused
+    --run-examples for an application without it."""
+    assert application.examples is not None
+    return application.examples
+
+
+@pytest.fixture(scope="session")
 def example_downloads(
-    request: pytest.FixtureRequest, settings: Settings
+    request: pytest.FixtureRequest,
+    settings: Settings,
+    app_settings: ApplicationSettings,
+    examples_support: ExamplesSupport,
 ) -> list[DownloadResult]:
     """Gate keeper + one download pass per session. Requested only by
     example tests, so combo-only sessions never pay for it."""
@@ -44,8 +48,10 @@ def example_downloads(
         pytest.skip("examples disabled; pass --run-examples")
     if request.config.getoption("--dry-run"):
         pytest.skip("dry run: driver execution skipped")
-    assert settings.root_dir is not None  # collection guard guarantees this
-    return download_example_data(settings.root_dir, timeout_s=settings.run_timeout_s)
+    assert app_settings.root_dir is not None  # collection guard guarantees this
+    return examples_support.download(
+        app_settings.root_dir, timeout_s=settings.run_timeout_s
+    )
 
 
 @pytest.fixture(scope="session")
@@ -59,29 +65,38 @@ def examples_root(combo_roots: "ComboRoots") -> Path:
 
 @pytest.fixture(scope="session")
 def example_results(
-    examples_root: Path, example_downloads: list[DownloadResult]
+    application: Application,
+    examples_root: Path,
+    example_downloads: list[DownloadResult],
 ) -> Iterator[list[ExampleRunResult]]:
     """Collects every execution outcome; teardown writes the session
     report once all example tests have run."""
     results: list[ExampleRunResult] = []
     yield results
     write_examples_report(
-        example_downloads, results, examples_root / "examples-report.md"
+        application.name,
+        example_downloads,
+        results,
+        examples_root / "examples-report.md",
     )
 
 
 def test_example_execution(
     example_yaml: Path,
     settings: Settings,
+    app_settings: ApplicationSettings,
+    examples_support: ExamplesSupport,
     example_downloads: list[DownloadResult],
     examples_root: Path,
     example_results: list[ExampleRunResult],
 ) -> None:
-    """The shipped example runs via run-example.py in docker and exits 0."""
-    assert settings.root_dir is not None
+    """The shipped example runs through the application's runner and exits 0."""
+    assert app_settings.root_dir is not None
     stem = example_yaml.stem
     out_path = examples_root / f"{stem}.out"
-    command = run_example_command(settings, example_id(example_yaml))
+    command = examples_support.run_command(
+        settings, app_settings, examples_support.example_id(example_yaml)
+    )
 
     try:
         completed = subprocess.run(

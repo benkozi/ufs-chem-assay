@@ -40,7 +40,7 @@ def driver_like_nc(tmp_path: Path) -> tuple[Path, np.ndarray]:
 
 
 _RUN_ID = "01JZZZZZZZZZZZZZZZZZZZZZZZ"  # fixed 26-char ULID-shaped id for row fixtures
-_RUN = RunContext(run_id=_RUN_ID, suite="simple-maccity")
+_RUN = RunContext(run_id=_RUN_ID, application="cece", suite="simple-maccity")
 _COMBO_ID = "3f9a1c2b7d4e8a01"  # fixed hash-shaped combo id for row fixtures
 
 
@@ -48,6 +48,7 @@ def _stats_rows() -> list[VariableStats]:
     return [
         VariableStats(
             run_id=_RUN_ID,
+            application="cece",
             suite="simple-maccity",
             combo_id=_COMBO_ID,
             combo="MACCITY.map-consd",
@@ -78,7 +79,7 @@ def test_compute_file_stats_matches_numpy(
     from ulid import ULID
 
     path, data = driver_like_nc
-    run = RunContext(run_id=str(ULID()), suite="simple-maccity")
+    run = RunContext(run_id=str(ULID()), application="cece", suite="simple-maccity")
     (stats,) = compute_file_stats(
         path, combo="MACCITY.map-consd", combo_id=_COMBO_ID, run=run
     )

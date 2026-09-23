@@ -18,16 +18,18 @@ def run_config_file(
     root_dir: Path | None = None,
 ) -> Path:
     """A run config derived from a checked-in template: `overrides` keys are
-    dotted (`section.key`, or a top-level key), REMOVE deletes one, and
-    `root_dir` replaces the template's (None keeps it). Written to tmp_path."""
+    dotted paths (`section.key`, `applications.cece.ref`, or a top-level
+    key), REMOVE deletes one, and `root_dir` replaces the template's (None
+    keeps it). Written to tmp_path."""
     data = yaml.safe_load((TEMPLATES_DIR / template).read_text())
     assert isinstance(data, dict)
     if root_dir is not None:
         data["root_dir"] = str(root_dir)
     for dotted, value in (overrides or {}).items():
-        section, _, key = dotted.partition(".")
-        target = data[section] if key else data
-        name = key or section
+        *parents, name = dotted.split(".")
+        target = data
+        for parent in parents:
+            target = target.setdefault(parent, {})
         if value is REMOVE:
             del target[name]
         else:

@@ -9,7 +9,8 @@ import pytest
 from jinja2 import UndefinedError
 from pytest_mock import MockerFixture
 
-from examples import run_example_command
+from applications.cece.settings import CONTAINER_WORKDIR, CeceSettings
+from applications.registry import get_application
 from platforms import Platform, Runtime, default_runtime
 from resolution import resolve_output_roots
 from runner import (
@@ -25,13 +26,14 @@ from runner import (
 )
 from settings import Settings
 
+_APP = get_application("cece")
+_CECE = CeceSettings(root_dir=Path("/host/cece"), modulefile="cece_ursa.intelllvm")
+
 
 def _slurm(**overrides: object) -> Settings:
     values: dict[str, object] = {
         "platform": Platform.URSA,
-        "root_dir": Path("/host/cece"),
         "sbatch_args": "-A epic -q debug -p u1-compute -N 1 -n 1 -c 8",
-        "modulefile": "cece_ursa.intelllvm",
         "job_env": "I_MPI_FABRICS=shm FI_PROVIDER=tcp",
     }
     values.update(overrides)
@@ -141,7 +143,7 @@ def test_render_job_script_without_modules_or_env() -> None:
 
 
 def test_driver_command_and_job_script_path() -> None:
-    assert driver_command(_slurm(), PurePosixPath("/o/x/x.yaml")) == [
+    assert driver_command(_CECE, PurePosixPath("/o/x/x.yaml")) == [
         "./build/cece_standalone_driver",
         "/o/x/x.yaml",
     ]
@@ -151,7 +153,7 @@ def test_driver_command_and_job_script_path() -> None:
 def test_write_job_script_renders_from_settings(tmp_path: Path) -> None:
     out_path = tmp_path / "x.out"
     script = write_job_script(
-        _slurm(), PurePosixPath(str(tmp_path / "x.yaml")), out_path, timeout_s=90
+        _slurm(), _CECE, PurePosixPath(str(tmp_path / "x.yaml")), out_path, timeout_s=90
     )
     assert script == tmp_path / "x.sbatch"
     text = script.read_text()
@@ -166,7 +168,11 @@ def test_write_job_script_renders_from_settings(tmp_path: Path) -> None:
 
 def test_slurm_build_command_submits_the_script() -> None:
     command = build_command(
-        _slurm(), PurePosixPath("/o/x/x.yaml"), job_script=Path("/o/x/x.sbatch")
+        _slurm(),
+        _APP,
+        _CECE,
+        PurePosixPath("/o/x/x.yaml"),
+        job_script=Path("/o/x/x.sbatch"),
     )
     assert command == ["sbatch", "--wait", "--parsable", "/o/x/x.sbatch"]
 
@@ -200,7 +206,12 @@ def test_slurm_run_driver_writes_the_script_and_submits_it(
     out_path.write_bytes(b"driver ok\n")  # Slurm wrote the job's output
 
     run_driver(
-        _slurm(), PurePosixPath(str(tmp_path / "x.yaml")), out_path, timeout_s=10
+        _slurm(),
+        _APP,
+        _CECE,
+        PurePosixPath(str(tmp_path / "x.yaml")),
+        out_path,
+        timeout_s=10,
     )
 
     script = tmp_path / "x.sbatch"
@@ -218,7 +229,12 @@ def test_slurm_run_driver_nonzero_exit_reraises_with_job_output(
     out_path.write_bytes(b"boom\n")
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
         run_driver(
-            _slurm(), PurePosixPath(str(tmp_path / "x.yaml")), out_path, timeout_s=10
+            _slurm(),
+            _APP,
+            _CECE,
+            PurePosixPath(str(tmp_path / "x.yaml")),
+            out_path,
+            timeout_s=10,
         )
     assert excinfo.value.returncode == 3
     assert excinfo.value.output == b"boom\n"
@@ -231,7 +247,12 @@ def test_slurm_run_driver_writes_out_when_the_job_left_none(
     out_path = tmp_path / "x.out"
     with pytest.raises(subprocess.CalledProcessError):
         run_driver(
-            _slurm(), PurePosixPath(str(tmp_path / "x.yaml")), out_path, timeout_s=10
+            _slurm(),
+            _APP,
+            _CECE,
+            PurePosixPath(str(tmp_path / "x.yaml")),
+            out_path,
+            timeout_s=10,
         )
     assert out_path.is_file()
     assert b"12345" in out_path.read_bytes()  # the sbatch submission line at least
@@ -246,6 +267,8 @@ def test_slurm_run_driver_outer_timeout_cancels_the_job(
     with pytest.raises(subprocess.TimeoutExpired):
         run_driver(
             _slurm(slurm_queue_wait_s=5),
+            _APP,
+            _CECE,
             PurePosixPath(str(tmp_path / "x.yaml")),
             tmp_path / "x.out",
             timeout_s=10,
@@ -256,24 +279,27 @@ def test_slurm_run_driver_outer_timeout_cancels_the_job(
 
 
 def test_slurm_roots_are_host_roots() -> None:
-    host, driver = resolve_output_roots("runs", Path("/host/cece"), Runtime.SLURM)
+    host, driver = resolve_output_roots(
+        "runs", Path("/host/cece"), Runtime.SLURM, container_workdir=CONTAINER_WORKDIR
+    )
     assert host == Path("/host/cece/runs") and driver == PurePosixPath(
         "/host/cece/runs"
     )
 
 
 def test_examples_are_not_supported_under_slurm_yet() -> None:
+    assert _APP.examples is not None
     with pytest.raises(NotImplementedError, match="slurm"):
-        run_example_command(_slurm(), "ex3")
+        _APP.examples.run_command(_slurm(), _CECE, "ex3")
 
 
 def test_docker_and_native_paths_unchanged_by_the_new_runtime() -> None:
-    docker = Settings(platform=Platform.LOCAL, root_dir=Path("/host/cece"))
-    assert build_command(docker, PurePosixPath("/work/x.yaml"))[0] == "docker"
-    native = Settings(
-        platform=Platform.URSA, runtime=Runtime.NATIVE, root_dir=Path("/host/cece")
+    docker = Settings(platform=Platform.LOCAL)
+    assert (
+        build_command(docker, _APP, _CECE, PurePosixPath("/work/x.yaml"))[0] == "docker"
     )
-    assert build_command(native, PurePosixPath("/h/x.yaml")) == [
+    native = Settings(platform=Platform.URSA, runtime=Runtime.NATIVE)
+    assert build_command(native, _APP, _CECE, PurePosixPath("/h/x.yaml")) == [
         "/host/cece/build/cece_standalone_driver",
         "/h/x.yaml",
     ]

@@ -16,6 +16,7 @@ from report import TestReportRow, TestResult, worst_result, write_test_report_cs
 def _row(result: TestResult, suffix: str = "consd") -> TestReportRow:
     return TestReportRow(
         pytest_name=f"test_driver_execution[MACCITY.map-{suffix}]",
+        application="cece",
         suite="simple-maccity",
         combo_id="01JZZZZZZZZZZZZZZZZZZZZZZZ",
         combo=f"MACCITY.map-{suffix}",
@@ -46,6 +47,7 @@ def test_write_test_report_csv(tmp_path: Path) -> None:
     assert csv_path.is_file()
     assert list(frame.columns) == [
         "pytest_name",
+        "application",
         "suite",
         "combo_id",
         "combo",

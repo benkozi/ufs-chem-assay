@@ -15,7 +15,8 @@ logger = get_logger("cli")
 
 
 def write_script(script: ShellScript, scripts_dir: Path, index: int) -> Path:
-    """<scripts_dir>/<NN>-<name>.sh, executable, overwritten per invocation."""
+    """<scripts_dir>/<NN>-<stage>-<application>.sh, executable, overwritten
+    per invocation."""
     scripts_dir.mkdir(parents=True, exist_ok=True)
     path = scripts_dir / f"{index:02d}-{script.name}.sh"
     path.write_text(script.text)

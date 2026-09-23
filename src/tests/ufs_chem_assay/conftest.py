@@ -5,18 +5,22 @@ from pathlib import Path
 
 import pytest
 
+from settings import ENV_PREFIX, LEGACY_ENV_PREFIX
+
 
 @pytest.fixture(autouse=True)
 def hermetic_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every harness test starts from platform local / runtime docker
     wherever the suite runs: the hostname is pinned (the first Ursa run
     resolved `ursa` from the login node's name and turned docker-shaped
-    assertions native) and the platform variables are scrubbed, like the
-    settings tests scrub CECE_ROOT_DIR. A test that wants another hostname
-    patches it itself — a test-level setattr overrides this one."""
+    assertions native) and the platform variables are scrubbed under both
+    prefixes, like the settings tests scrub the root. A test that wants
+    another hostname patches it itself — a test-level setattr overrides
+    this one."""
     monkeypatch.setattr("platforms.socket.gethostname", lambda: "localhost")
-    for key in ("CECE_PLATFORM", "CECE_RUNTIME", "CECE_LAUNCHER"):
-        monkeypatch.delenv(key, raising=False)
+    for prefix in (ENV_PREFIX, LEGACY_ENV_PREFIX):
+        for key in ("PLATFORM", "RUNTIME", "LAUNCHER", "APPLICATION"):
+            monkeypatch.delenv(f"{prefix}{key}", raising=False)
 
 
 _CONFIG_ROOT = Path(__file__).resolve().parents[1] / "config"

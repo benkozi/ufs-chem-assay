@@ -1,18 +1,29 @@
+"""The docker runtime through the generic runner, with CECE as the concrete
+adapter: the command shape and the .out capture (process call mocked)."""
+
 import subprocess
 from pathlib import Path, PurePosixPath
 
 import pytest
 from pytest_mock import MockerFixture
 
+from applications.cece.settings import CeceSettings
+from applications.registry import get_application
 from platforms import Platform
 from runner import build_command, run_driver
 from settings import Settings
 
+_APP = get_application("cece")
+
 
 def _settings() -> Settings:
-    # Explicit values so ambient CECE_* env vars cannot influence assertions.
-    return Settings(
-        platform=Platform.LOCAL,  # the docker shape is the point of these tests
+    # Explicit values so ambient variables cannot influence assertions; the
+    # docker shape is the point of these tests.
+    return Settings(platform=Platform.LOCAL)
+
+
+def _app_settings() -> CeceSettings:
+    return CeceSettings(
         root_dir=Path("/host/cece"),
         docker_image="img:tag",
         driver_path="./build/cece_standalone_driver",
@@ -20,7 +31,9 @@ def _settings() -> Settings:
 
 
 def test_build_command_work_mount_and_yaml_argument() -> None:
-    command = build_command(_settings(), PurePosixPath("/work/combo_runs/x/x.yaml"))
+    command = build_command(
+        _settings(), _APP, _app_settings(), PurePosixPath("/work/combo_runs/x/x.yaml")
+    )
     assert command == [
         "docker",
         "run",
@@ -42,6 +55,8 @@ def test_build_command_work_mount_and_yaml_argument() -> None:
 def test_build_command_adds_output_mount() -> None:
     command = build_command(
         _settings(),
+        _APP,
+        _app_settings(),
         PurePosixPath("/combo_runs/x/x.yaml"),
         output_mount=(Path("/tmp/out"), PurePosixPath("/combo_runs")),
     )
@@ -57,6 +72,8 @@ def test_run_driver_success_writes_out(mocker: MockerFixture, tmp_path: Path) ->
 
     run_driver(
         _settings(),
+        _APP,
+        _app_settings(),
         driver_yaml=PurePosixPath("/work/x.yaml"),
         out_path=out_path,
         timeout_s=7,
@@ -78,6 +95,8 @@ def test_run_driver_nonzero_exit_writes_out_and_reraises(
     with pytest.raises(subprocess.CalledProcessError):
         run_driver(
             _settings(),
+            _APP,
+            _app_settings(),
             driver_yaml=PurePosixPath("/work/x.yaml"),
             out_path=out_path,
             timeout_s=7,
@@ -96,9 +115,27 @@ def test_run_driver_timeout_writes_out_and_reraises(
     with pytest.raises(subprocess.TimeoutExpired):
         run_driver(
             _settings(),
+            _APP,
+            _app_settings(),
             driver_yaml=PurePosixPath("/work/x.yaml"),
             out_path=out_path,
             timeout_s=7,
         )
 
     assert out_path.read_bytes() == b"partial\n"
+
+
+def test_output_banner_names_no_application(
+    mocker: MockerFixture, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mocker.patch("runner.subprocess.check_output", return_value=b"ok\n")
+    run_driver(
+        _settings(),
+        _APP,
+        _app_settings(),
+        driver_yaml=PurePosixPath("/work/x.yaml"),
+        out_path=tmp_path / "x.out",
+        timeout_s=7,
+    )
+    out = capsys.readouterr().out
+    assert "----- driver output [x] -----" in out and "cece driver" not in out

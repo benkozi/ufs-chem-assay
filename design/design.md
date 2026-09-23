@@ -2,10 +2,13 @@
 
 ## Goal
 
-A standalone pytest-based test suite that exercises `cece_standalone_driver`
-across combinations of the enum-valued configuration options defined in
-`src/models/cece_config.py`. The combinations to sweep are
-declared in a YAML **suite configuration** validated by pydantic. Each
+A standalone pytest-based test suite that exercises an application's
+driver (CECE's `cece_standalone_driver` today) across combinations of the
+enum-valued configuration options its driver config declares (for CECE,
+`src/applications/cece/config.py`). Everything that knows the application
+lives in an **application adapter** (see Applications below); the
+combinations to sweep are declared in a YAML **suite configuration**
+validated by pydantic. Each
 combination is rendered to a driver YAML config and executed in an isolated
 Docker container with its stdout/stderr captured to a per-combo `.out` file;
 unwrapped per-combo tests then assert on the outcome (driver exit code,
@@ -25,20 +28,84 @@ the harness test package `src/tests/ufs_chem_assay/`. See
 ## Non-goals
 
 - pytest's command line is the *test* entry point. The `ufs-chem-assay
-  run` command (`src/cli/`, 2026-09-03) orchestrates environment, CECE
-  build, data, and the pytest invocation from one run config — it never
-  re-implements test logic (see
+  run` command (`src/cli/`, 2026-09-03) orchestrates environment, the
+  application's build, data, and the pytest invocation from one run config
+  — it never re-implements test logic (see
   `design/feat/20260903-1453-run-on-rdhpc/20260903-1453-run-on-rdhpc.md`).
+  Since 2026-09-23 that run config is the **complete YAML surface** of a
+  run: `harness:` mirrors every harness-wide setting plus the pytest
+  options, each `applications.<name>:` section mirrors that adapter's
+  settings plus how to obtain and build it (a mirror test enforces both),
+  and command-line arguments are overrides on it (`--override
+  key:path=value`, YAML-scalar values merged before validation; precedence
+  override > `--platform`/`--root-dir` > file > derived defaults). Every
+  invocation writes the effective configuration to
+  `<root_dir>/scripts/run-config.yaml`. Stages render per application as
+  `<NN>-<stage>-<application>.sh`; a run config naming several
+  applications runs one pytest session per application.
 - No dependency on existing CECE Python infrastructure; the runner lives in
-  its **own repository** with its own `uv`-managed environment. The CECE
-  checkout (driver build, input data) is external, located via the
-  `root_dir` setting (`--cece-root-dir` flag or `CECE_ROOT_DIR` env var)
-  and mounted at `/work` in the driver container (see
+  its **own repository** with its own `uv`-managed environment. The
+  application checkout (driver build, input data) is external, located via
+  the adapter's `root_dir` setting (`CECE_ROOT_DIR` env var, `.env`, or
+  the run config — there is no command-line flag) and mounted at the
+  adapter's container workdir (`/work` for CECE) in the driver container (see
   `design/fix/20260717-1029-portability-external-cece/20260717-1029-portability-external-cece.md`).
 - No online baseline retrieval or baseline manifest yet — baselines are
   local directories keyed by ULID (see
   `design/feat/20260716-1113-compare-with-baseline/20260716-1113-compare-with-baseline.md`); no stats-CSV
   diffing (the comparison targets the NetCDF files themselves).
+
+## Applications
+
+Every piece of code that knows the application under test sits behind
+one adapter — `applications/base.py:Application`, an abstract base class —
+selected by name from a registry (`applications/registry.py`, a plain
+dict; `cece` is the only entry and the default). The shared code
+(enumeration, the pytest session, the runtimes, stats, plots, comparison,
+reporting, the CLI's harness stage) imports only the base module and
+calls through the adapter; the adapters (`applications/<name>/`) import
+the shared modules freely. Full rationale in
+`design/feat/20260914-1643-application-agnostic/20260914-1643-application-agnostic.md`
+(Phase B of the CATChem plan in
+`design/spike/20260901-1229-rename-and-plan-for-catchem/20260901-1229-rename-and-plan-for-catchem.md`).
+
+The adapter surface: constants (`name`, `env_prefix` — its settings
+namespace and the `${<PREFIX>ROOT_DIR}` suite token, `container_workdir`,
+`default_suite`, `checkout_dirname`, `standard_dimensions`), the models it
+subclasses (`settings_model`, `config_model`, `suite_model` with the
+application's sweep and selector schemas, `run_section_model`), an
+optional `examples` support, and the methods the shared code needs:
+`dimensions` (sweep → the generic `(Dimension, values)` list),
+`build_config`, `effective_parameters` (combos.csv rows), the derived
+expectations (`expected_output_count`, `expected_output_filenames`,
+`output_variable_names`), `selector_matches` (baseline selectors), and
+`stage_lines` (the CLI's source/build/data bodies). Each adapter narrows
+the generic base types it receives with one `isinstance` per method — a
+wrong `application:` cannot reach it, since its suite model validated the
+input.
+
+**One application per pytest session.** Every suite names its application
+(`application:`, default `cece`); `--application` (or `ASSAY_APPLICATION`,
+the flag winning) restricts a session to that application's suites and,
+with no `--suite-config`, runs the adapter's default suite; without it
+the selected suites must agree. A comprehensive run over several
+applications is the CLI's job (see the run config under Non-goals): one
+section per application, stages rendered per application, one pytest
+session each.
+
+**Two settings namespaces.** Harness-wide settings (`settings.Settings`)
+read `ASSAY_*`, with the pre-adapter `CECE_*` spellings accepted as
+fallbacks until the second adapter lands; each adapter's
+`ApplicationSettings` subclass (`CeceSettings`: `root_dir`, `docker_image`,
+`driver_path`, `modulefile`) reads its own prefix. Both classes ignore the
+other's keys in the shared `.env`.
+
+**Every artifact names the application.** An `application` column sits
+immediately before `suite` in `combos.csv`, `test-report.csv`, and the
+stats and comparison CSVs; `run.yaml` records `application`,
+`application_commit` (the checkout's HEAD), and the harness's own
+`harness_version` and `harness_commit` (`identity.py`; `-dirty` when the
+working tree is edited, null when not run from a git checkout).
 
 ## Suite configuration
 
@@ -51,7 +118,8 @@ values. The combination space is the cartesian product of the listed values.
 # simple-maccity-suite.yaml — initial suite
 name: simple-maccity                       # unique suite name (lowercase slug)
 config_path: ../cece/simple-maccity.yaml   # base driver config (suite-relative)
-timeout_s: 10                              # per combination; capped by CECE_RUN_TIMEOUT_S
+application: cece                          # optional; selects the adapter (default cece)
+timeout_s: 10                              # per combination; capped by ASSAY_RUN_TIMEOUT_S
 assertions:
   expected_nc_file_count: null             # null = derive from the combo config
   validate_filenames: true                 # false skips the filename tests
@@ -75,7 +143,7 @@ baseline_comparisons:                      # optional; each entry pairs one comb
         streams:
           - name: MACCITY
             mapalgo: consd
-    ulid: 01KXNXCJ86E8Z2FKVAXRER5ND4       # baseline under CECE_BASELINE_ROOT_DIR
+    ulid: 01KXNXCJ86E8Z2FKVAXRER5ND4       # baseline under ASSAY_BASELINE_ROOT_DIR
     atol: 0.0                              # per entry; 0 = bit-for-bit (default)
     plot: true                             # per entry; bias plots + GIF at session end
 sweep:
@@ -97,12 +165,21 @@ class Sweep(StrictModel):              # mirrors the driver-config structure
     cece_data: CeceDataSweep | None    # .streams: list[StreamSweep]
     species: dict[str, list[SpeciesEntrySweep]] | None
 
-class SuiteConfig(StrictModel):  # via models/base.py; unknown keys rejected
+class SuiteConfig(StrictModel):  # generic (models/suite_config.py); unknown keys rejected
     name: str           # unique suite name; convention: X lives in X-suite.yaml
-    config_path: Path   # base CECE driver config; relative → suite-file dir
+    application: str    # registry name, default "cece"; the loader picks the subclass
+    config_path: Path   # base driver config; relative → suite-file dir
     timeout_s: int      # per-combination driver timeout (seconds)
-    sweep: Sweep        # optional; absent/empty → the single "base" combination
+    sweep: SweepBase    # the adapter's schema; absent/empty → the single "base" combination
+
+class CeceSuiteConfig(SuiteConfig):  # applications/cece/suite.py
+    sweep: CeceSweep    # the models above; baseline selectors mirror them likewise
 ```
+
+`applications.registry.load_suite` reads the file's `application` key,
+validates the document with that adapter's suite model, and resolves
+`config_path`; `RunManifest.suites` is typed `SerializeAsAny`, so
+`run.yaml` records each suite with its adapter's schema.
 
 A sweep value list may instead be a **regex string**, expanded (fullmatch)
 against the enum's values into the sorted matching list at load time — so
@@ -130,8 +207,9 @@ and timeout semantics live in
 `sweep:` is optional: a suite attaching no dimensions runs its base config
 as the single combination named `base` (its id a runtime ULID like every
 combo's).
-A `config_path` starting with the literal `${CECE_ROOT_DIR}` token anchors
-on the CECE checkout (`settings.root_dir`) — how the checked-in
+A `config_path` starting with the literal `${CECE_ROOT_DIR}` token — the
+adapter's own root variable, `${<PREFIX>ROOT_DIR}` — anchors on the
+application checkout (the adapter settings' `root_dir`) — how the checked-in
 `ex1-suite.yaml` … `ex7-suite.yaml` run the checkout's shipped example
 configs (`examples/config/cece_config_ex*.yaml`) as ordinary suites with
 the full pipeline; using such a suite without a configured root is the
@@ -140,8 +218,8 @@ standard root-dir usage error. Generated combo configs also always point
 the examples set relative paths — can write a log into the checkout. See
 `design/feat/20260724-0907-examples-as-suites/20260724-0907-examples-as-suites.md`.
 
-Reusing the enums from `cece_config.py` means invalid values fail at suite-load
-time with a pydantic error, before any container runs.
+Reusing the enums from the adapter's config model means invalid values fail
+at suite-load time with a pydantic error, before any container runs.
 
 The **initial suite** sweeps only `Mapalgo` over `bilinear`, `consd`, and
 `passthrough` — 3 combinations. The full 6-enum product (864 combinations)
@@ -235,15 +313,17 @@ combination the generator:
 3. Points `output.directory` at the combo's own directory (see layout below).
 4. Serializes with `CeceConfig.to_yaml()`.
 
-**Requirement — all config construction goes through `cece_config.py`.**
-Every generated driver config is built as a `CeceConfig` model instance
-(base config and per-combo mutations alike) and written to disk only via
-`CeceConfig.to_yaml()`. No hand-assembled dicts, string templates, or direct
-`yaml.dump` calls anywhere in the generator. This guarantees every config the
-driver receives has passed pydantic validation, and keeps serialization
-behavior (`exclude_none`, key ordering, the YAML 1.2 boolean handling in
-`cece_config.py`) in one place. If a combination needs a field the model
-doesn't have, the fix is to extend `cece_config.py` — not to bypass it.
+**Requirement — all config construction goes through the adapter's config
+model.** Every generated driver config is built as an instance of the
+adapter's `DriverConfig` subclass (`CeceConfig`; base config and per-combo
+mutations alike) and written to disk only via its `to_yaml()`. No
+hand-assembled dicts, string templates, or direct `yaml.dump` calls
+anywhere in the generator. This guarantees every config the driver
+receives has passed pydantic validation, and keeps serialization behavior
+(`exclude_none`, key ordering, the YAML 1.2 boolean handling in
+`models/yaml.py`, shared with command-line override parsing) in one place.
+If a combination needs a field the model doesn't have, the fix is to
+extend the config model — not to bypass it.
 
 ## Directory layout (runtime artifacts)
 
@@ -256,22 +336,24 @@ last few runs under its base temp dir and prunes older ones.
 Passing `--combo-output-root=PATH` opts out of the temp default: the path is
 then interpreted as container-relative, resolved against `/work` (the mounted
 CECE checkout), so results persist in that checkout. Resolving it requires
-`root_dir`, so an explicit output root without `--cece-root-dir` /
+the adapter's `root_dir`, so an explicit output root without
 `CECE_ROOT_DIR` fails at session start — even under `--dry-run`.
 
 Layout under the output root is the same either way:
 
 ```
 <output-root>/                 # default: pytest tmp dir; else /work-relative
-  run.yaml                     # RunManifest: session ULID, cece_commit (the CECE
-                               #   checkout's HEAD SHA; null only when no checkout is
-                               #   configured — an unresolvable SHA for a configured
-                               #   root fails the session at start), and every
-                               #   resolved suite in selection order
+  run.yaml                     # RunManifest: session ULID, application,
+                               #   application_commit (the checkout's HEAD SHA; null
+                               #   only when no checkout is configured — an
+                               #   unresolvable SHA for a configured root fails the
+                               #   session at start), harness_version, harness_commit,
+                               #   platform, runtime, modulefile, and every resolved
+                               #   suite in selection order
   combos.csv                   # effective-parameter table: run_id, combo_id,
-                               #   suite, name, target, field, value, swept
-  test-report.csv              # every combo-test's outcome: pytest_name, suite,
-                               #   combo_id, combo, result (passed/failed/skipped)
+                               #   application, suite, name, target, field, value, swept
+  test-report.csv              # every combo-test's outcome: pytest_name, application,
+                               #   suite, combo_id, combo, result (passed/failed/skipped)
   descriptive_stats.csv        # all combos' statistics, concatenated at session end
   stats-comparison.csv         # all combos' baseline-comparison rows, concatenated
   01K0Z8FJX2.../               # one directory per combination (runtime ULID;
@@ -308,12 +390,12 @@ default on the `local` platform and described first below; `slurm`, the
 default on every other platform (RDHPC machines have no docker) — pytest
 runs on a login node and each driver call is one `sbatch --wait` job
 from a rendered `<combo_id>.sbatch` (Jinja2 template) kept beside the
-combo's artifacts — directives, `CECE_MODULEFILE` load, `CECE_JOB_ENV`,
+combo's artifacts — directives, `CECE_MODULEFILE` load, `ASSAY_JOB_ENV`,
 and the driver behind `srun --ntasks=1` — so the harness venv never sees
 the module environment and a failed job is reproducible by hand; and
-`native` — the driver as a host process, `cwd` = the CECE checkout,
+`native` — the driver as a host process, `cwd` = the application checkout,
 prefixed by the `launcher` setting, for a session inside an allocation. The platform is detected from the
-hostname (`CECE_PLATFORM` overrides; `local` when nothing matches) and
+hostname (`ASSAY_PLATFORM` overrides; `local` when nothing matches) and
 `run.yaml` records `platform`, `runtime`, and `modulefile`. The path model is one
 abstraction: `ComboRoots.driver` is the output root *as the driver sees
 it* — a container path under docker, the host path natively — and
@@ -337,15 +419,15 @@ docker run --rm \
     ./build/cece_standalone_driver <output-root>/<combo-name>/<combo-name>.yaml
 ```
 
-The `-v` flag carries the host→container mapping: the host-side CECE repo
-root — the `root_dir` setting, supplied by `--cece-root-dir` or
-`CECE_ROOT_DIR` (flag wins) — maps to `/work` in the container. The runner
-lives in a separate repository, so there is no derivable default: driver
-execution without a configured `root_dir` (or with one that is not an
-existing directory) fails at collection time with a `UsageError`, before
-any test runs. The
+The `-v` flag carries the host→container mapping: the host-side
+application checkout — the adapter's `root_dir` setting, supplied by
+`CECE_ROOT_DIR` (environment, `.env`, or the run config's export) — maps to
+the adapter's container workdir (`/work`). The runner lives in a separate
+repository, so there is no derivable default: driver execution without a
+configured `root_dir` (or with one that is not an existing directory)
+fails at collection time with a `UsageError`, before any test runs. The
 `-w` flag takes a container path only — it sets the driver's working
-directory to the mounted CECE root, so the relative `./build/...` driver
+directory to the mounted application root, so the relative `./build/...` driver
 path and `/work`-relative config paths resolve correctly.
 
 When the output root is the default pytest temp directory, it lies outside
@@ -377,7 +459,13 @@ exit is the failure condition. The environment variables mirror `setup.sh`
   invocation runs every combination to completion regardless of individual
   failures, so one bad combo never hides results for the rest. Fail-fast is
   opt-in via `pytest -x` (first failure) or `--maxfail=N`.
-- **Custom options** (registered in `conftest.py` via `pytest_addoption`):
+- **Custom options** (registered in `conftest.py` via `pytest_addoption`;
+  none is application-specific):
+  - `--application=NAME` — the session's application (overrides
+    `ASSAY_APPLICATION`): suites of other applications are dropped from
+    the selection, none left is a `UsageError`, and the default suite
+    becomes the adapter's. Without it, the selected suites' `application`
+    values must agree. An unknown name lists the registry.
   - `--suite-config=SELECTOR` — selects the suites to run. An existing
     file path is used verbatim (escape hatch); otherwise the value is a
     regex fullmatched (the sweep-regex convention) against each candidate
@@ -392,9 +480,10 @@ exit is the failure condition. The environment variables mirror `setup.sh`
     no guard on broad selectors). Zero matches raise `UsageError` listing
     the candidates, duplicate suite names among the matches fail at
     sessionstart; selection lives in `resolution.select_suites` (pure).
-    Default: `simple-maccity-suite.yaml` — a literal filename fullmatches
-    only itself, so a bare `pytest` always runs exactly that suite no
-    matter how many suites the roots contain.
+    Default: the application's `default_suite` (`simple-maccity-suite.yaml`
+    for cece) — a literal filename fullmatches only itself, so a bare
+    `pytest` always runs exactly that suite no matter how many suites the
+    roots contain.
   - `--combo-output-root=PATH` — root artifact directory (container-relative
     semantics as above). Default: unset, meaning a pytest-managed temporary
     directory via session-scoped `tmp_path_factory`.
@@ -410,7 +499,7 @@ exit is the failure condition. The environment variables mirror `setup.sh`
     client never starts). Validates any suite — notably the exhaustive
     one — before paying for containers. With the default temp output root
     it needs no environment at all — no CECE checkout required.
-  - `--run-examples` — flag, off by default; runs the CECE checkout's
+  - `--run-examples` — flag, off by default; runs the application checkout's (CECE's)
     shipped `examples/config/cece_config_ex*.yaml` through the checkout's
     own `examples/run-example.py` entrypoint, wrapped in docker by this
     runner (the entrypoint is container-agnostic and never spawns docker
@@ -434,22 +523,21 @@ exit is the failure condition. The environment variables mirror `setup.sh`
     configured root, `--run-examples` fails at collection via the root_dir
     guard (example tests don't request `driver_run`, so the guard carries
     a separate examples condition).
-  - `--cece-root-dir=PATH` — host path of the external CECE repository
-    root, mounted at `/work`. Optional; precedence is **flag >
-    `CECE_ROOT_DIR` env var > unset**, wired through pydantic-settings'
-    native init-kwargs-beat-env behavior (`Settings(root_dir=option)` when
-    the flag is given), so `settings.root_dir` is the single resolved
-    source of truth. Required to execute the driver: when combo tests are
-    collected without `--dry-run`, a missing or nonexistent `root_dir`
-    raises `UsageError` in `pytest_collection_modifyitems` — collection
-    time rather than sessionstart, so harness-only runs (which collect no
-    `driver_run` tests) stay green with no environment, while the failure
-    still lands before any test executes.
+  - The application checkout root has **no flag** (the former
+    `--cece-root-dir` was retired with the adapter extraction): the
+    adapter's `ROOT_DIR` variable, `.env`, or the run config's export is
+    its one source, so each process has one precedence chain
+    (environment > `.env` > default). Required to execute the driver: when
+    combo tests are collected without `--dry-run`, a missing or nonexistent
+    `root_dir` raises `UsageError` in `pytest_collection_modifyitems` —
+    collection time rather than sessionstart, so harness-only runs (which
+    collect no `driver_run` tests) stay green with no environment, while
+    the failure still lands before any test executes.
 - **Test report.** A `pytest_runtest_makereport` hookwrapper collects every
   combo-parameterized test's outcome (phases combine failed > skipped >
   passed via `report.worst_result`); `pytest_sessionfinish` writes
-  `test-report.csv` (pytest_name, combo_id, combo, result) first in its
-  artifact pipeline, whenever combinations ran. Non-combo (harness) tests
+  `test-report.csv` (pytest_name, application, suite, combo_id, combo,
+  result) first in its artifact pipeline, whenever combinations ran. Non-combo (harness) tests
   are not reported.
 - **Existing explicit output root is an error by default.** When
   `--combo-output-root` is given, the runner checks at session start — before
@@ -467,20 +555,24 @@ exit is the failure condition. The environment variables mirror `setup.sh`
 
 ## Settings
 
-`pydantic-settings` (`BaseSettings`, env prefix `CECE_`) supplies
-environment-derived configuration, keeping the pytest CLI for run-shaping
-options only (`--cece-root-dir` is the one override that feeds a setting;
-see Pytest integration). The prefix is deliberately `CECE_` rather than
-something runner-specific: the settings class may later host other variable
-groups beyond the test runner. `Settings` is **frozen**: constructed once at
-sessionstart and read-only thereafter, so `root_dir` resolution happens at
-exactly one point.
+Two `pydantic-settings` classes supply environment-derived configuration,
+keeping the pytest CLI for run-shaping options only (`--application` is
+the one flag that feeds a setting; see Pytest integration):
 
-A cwd-relative **`.env` file** (gitignored — it carries per-machine absolute
-paths) supplies values below real environment variables; precedence, highest
-first: init kwargs (the `--cece-root-dir` flag) → environment → `.env` →
-field default. Matching is case-insensitive, so lowercase `cece_root_dir=`
-keys work. pydantic-settings ships `python-dotenv`; no extra dependency.
+- `settings.Settings` — **harness-wide**, env prefix `ASSAY_` with the
+  pre-adapter `CECE_` spellings accepted as fallbacks through layered
+  sources (init kwargs > `ASSAY_` environment > `CECE_` environment >
+  `ASSAY_` `.env` > `CECE_` `.env` > default); the fallback goes away when
+  the second adapter lands.
+- the adapter's `ApplicationSettings` subclass (`CeceSettings`, prefix
+  `CECE_`) — the checkout root, image, driver path, modulefile, and the
+  checkout's commit SHA for run.yaml.
+
+Both are **frozen** (constructed once at sessionstart) and `extra="ignore"`,
+since the one cwd-relative **`.env` file** (gitignored — it carries
+per-machine absolute paths) holds both namespaces' keys. Matching is
+case-insensitive, so lowercase `cece_root_dir=` keys work. pydantic-settings
+ships `python-dotenv`; no extra dependency.
 
 ## Type checking
 
@@ -516,18 +608,28 @@ the one sanctioned remote exception, having no project-dependency
 coupling. `design/` (records, not maintained code) and `uv.lock`
 (generated) are excluded from the YAML/whitespace hooks.
 
+Harness-wide (`Settings`; `platform`, `runtime`, `launcher`, `sbatch_args`,
+`slurm_queue_wait_s`, `job_env` are described under Execution model):
+
 | Setting          | Env var               | Default              |
 |------------------|-----------------------|----------------------|
-| `docker_image`   | `CECE_DOCKER_IMAGE`   | `cece/cece-dev`  |
-| `root_dir`       | `CECE_ROOT_DIR`       | unset — required to run the driver; `--cece-root-dir` overrides |
+| `application`    | `ASSAY_APPLICATION`   | unset → inferred from the selected suites; `--application` overrides |
+| `run_timeout_s`  | `ASSAY_RUN_TIMEOUT_S` | 300 — caps the suite's `timeout_s` when smaller |
+| `log_level`      | `ASSAY_LOG_LEVEL`     | `INFO`               |
+| `baseline_root_dir` | `ASSAY_BASELINE_ROOT_DIR` | unset → cwd; baselines at `<root>/<ulid>/` |
+| `enable_baseline_comparisons` | `ASSAY_ENABLE_BASELINE_COMPARISONS` | `true`; false skips all comparison tests |
+| `dask_nworkers`  | `ASSAY_DASK_NWORKERS` | unset → all available; else int > 0 |
+| `config_search_path`       | `ASSAY_CONFIG_SEARCH_PATH`       | unset |
+| `suite_config_search_path` | `ASSAY_SUITE_CONFIG_SEARCH_PATH` | unset → built-in suite dir only; `os.pathsep`-separated list, searched recursively for suite selection |
+
+The CECE adapter (`CeceSettings`):
+
+| Setting          | Env var               | Default              |
+|------------------|-----------------------|----------------------|
+| `root_dir`       | `CECE_ROOT_DIR`       | unset — required to run the driver |
+| `docker_image`   | `CECE_DOCKER_IMAGE`   | `cece/cece-dev`      |
 | `driver_path`    | `CECE_DRIVER_PATH`    | `./build/cece_standalone_driver` |
-| `run_timeout_s`  | `CECE_RUN_TIMEOUT_S`  | 300 — caps the suite's `timeout_s` when smaller |
-| `log_level`      | `CECE_LOG_LEVEL`      | `INFO`               |
-| `baseline_root_dir` | `CECE_BASELINE_ROOT_DIR` | unset → cwd; baselines at `<root>/<ulid>/` |
-| `enable_baseline_comparisons` | `CECE_ENABLE_BASELINE_COMPARISONS` | `true`; false skips all comparison tests |
-| `dask_nworkers`  | `CECE_DASK_NWORKERS`  | unset → all available; else int > 0 |
-| `config_search_path`       | `CECE_CONFIG_SEARCH_PATH`       | unset |
-| `suite_config_search_path` | `CECE_SUITE_CONFIG_SEARCH_PATH` | unset → built-in suite dir only; `os.pathsep`-separated list, searched recursively for suite selection |
+| `modulefile`     | `CECE_MODULEFILE`     | unset                |
 
 `config_search_path`, when set, overrides normal config resolution: the
 search directory is prepended to the suite's relative `config_path`, kept
@@ -550,25 +652,41 @@ All code under `src/`; the project is `uv`-managed with its own
   config/                 # run-config templates: local.yaml (docker), ursa.yaml (native + slurm)
   design/design.md
   src/
+    applications/
+      base.py             # Application ABC, ApplicationSettings, DriverConfig, SweepBase,
+                          #   SweepSelectorBase, ApplicationRunSection, ExamplesSupport
+      registry.py         # REGISTRY (name -> adapter), get_application, load_suite
+      cece/
+        application.py    # CeceApplication: the wiring, registered by name
+        config.py         # the pydantic model of CECE's driver config (CeceConfig)
+        settings.py       # CeceSettings (CECE_*), the /work container workdir
+        suite.py          # CeceSweep + selectors, CeceSuiteConfig, selector matching
+        combos.py         # dimensions, build_config (cece.log), effective-parameter rows
+        assertions.py     # expected count/filenames/variable names, STANDARD_DIMENSIONS
+        examples.py       # example discovery, download, run command
+        cli.py            # CeceRunSection, source/build/data stage bodies
     models/
       base.py             # StrictModel: extra="forbid" base for all config models
-      cece_config.py      # existing pydantic model of the driver config
-      suite_config.py     # SuiteConfig / Sweep / RunManifest models + YAML loader
-    cli/                  # `ufs-chem-assay run`: run config model, stage scripts,
-                          #   bash/sbatch execution (console script via hatchling)
+      suite_config.py     # generic SuiteConfig, Assertions, Analysis, Plotting,
+                          #   BaselineComparison, RunManifest
+      yaml.py             # the YAML-1.2-boolean loader (configs, override values)
+    cli/                  # `ufs-chem-assay run`: run config model (applications map),
+                          #   overrides, per-application stage scripts, bash execution
+    identity.py           # HARNESS_NAME, HARNESS_ROOT, harness_version/commit
     platforms.py          # Platform / Runtime enums, hostname detection
     templates/driver-job.sbatch.j2  # the slurm runtime's per-driver job script
     analysis.py           # descriptive stats (dask distributed), CSV writing
-    assertions.py         # post-run assertions (NetCDF file count, filenames)
-    combos.py             # sweep → combinations, combo naming, config generation
-    examples.py           # example discovery, data downloads, examples report
-    logs.py               # namespace logger, level from CECE_LOG_LEVEL
+    assertions.py         # generic post-run assertions (expectations passed in)
+    combos.py             # Dimension, Combo, enumerate_combos, write_combos_csv
+    comparison.py         # baseline resolution (via the adapter) + NetCDF comparison
+    examples.py           # generic example result models + the session report
+    logs.py               # namespace logger, level from ASSAY_LOG_LEVEL
     plotting.py           # session-end spatial plots + GIFs (cartopy/matplotlib)
     report.py             # test-report.csv: row model, outcome precedence, writer
     resolution.py         # pure path-resolution rules (suite path, output roots)
     runner.py             # driver command per runtime (docker run / native +
-                          #   launcher), check_output, .out writing, DriverRunResult
-    settings.py           # pydantic-settings
+                          #   launcher / sbatch), check_output, .out writing
+    settings.py           # harness-wide pydantic-settings (ASSAY_*, CECE_* fallback)
     tests/
       config/
         cece/simple-maccity.yaml          # base driver config
@@ -576,6 +694,8 @@ All code under `src/`; the project is `uv`-managed with its own
         suite/exhaustive-maccity-run-only-suite.yaml  # every enum value via ".*"
                                           #   regex sweeps; on-demand, run-only
       ufs_chem_assay/     # the harness's own tests: mocked process call, no docker
+        applications/cece/  # the CECE adapter's tests (test_cece_*.py)
+        stubs.py          # an inert second adapter for several-application tests
       conftest.py         # options, session fixture (generate yamls), param fixture
       test_driver_combos.py               # integration tests (real docker)
       test_examples.py                    # shipped-example execution (--run-examples)
@@ -585,7 +705,7 @@ Dependencies: `pytest`, `pytest-mock`, `pydantic>=2`, `pydantic-settings`,
 `python-ulid`, `pyyaml`, the analysis stack (`pandas`, `xarray`, `netcdf4`,
 `dask[distributed]`), and the plotting stack (`matplotlib`, `cartopy`,
 `pillow`). Nothing
-imported from the CECE repo outside this repository.
+imported from any application repository outside this one.
 
 ## README (user documentation)
 
@@ -595,8 +715,8 @@ stage: enough for a user to set up and run the suite. It covers:
 - **Prerequisites**: a local CECE checkout (external to this repository)
   with the `cece/cece-dev` image built (`./setup.sh` there) and the driver
   built at `./build/cece_standalone_driver`; `uv` installed; the checkout's
-  path supplied via `.env` (`cece_root_dir=`), `CECE_ROOT_DIR`, or
-  `--cece-root-dir`.
+  path supplied via `.env` (`cece_root_dir=`), `CECE_ROOT_DIR`, or the
+  run config.
 - **Setup**: `uv sync` + a `.env` file with the per-machine paths.
 - **Running**:
   - full suite: `uv run pytest`
@@ -608,7 +728,10 @@ stage: enough for a user to set up and run the suite. It covers:
     an existing root is an error)
 - **Where results land**: the per-combo directory layout (yaml, `.out`,
   NetCDF) under the output root.
-- **Environment variables**: the `CECE_*` settings table.
+- **Environment variables**: the `ASSAY_*` (harness) and `CECE_*` (adapter)
+  settings tables.
+- **Configuring a run**: the run config as the complete YAML surface,
+  `--override`, precedence, and the `run-config.yaml` artifact.
 
 The README grows alongside future features (evaluation step, richer suite
 config) but stays a quick-start document; design rationale lives here, not
@@ -637,8 +760,8 @@ mechanics:
   docker-container buildx driver holds results inside BuildKit; the
   localhost push is how the job's docker daemon gets the image without a
   tarball round-trip). Everything runs inside the container; no image
-  leaves a runner. The harness suite runs with zero `CECE_*` environment —
-  it mocks `CECE_ROOT_DIR` itself where needed.
+  leaves a runner. The harness suite runs with zero `ASSAY_*`/`CECE_*`
+  environment — it mocks `CECE_ROOT_DIR` itself where needed.
 - **Conventional commits, enforced twice**: the
   `conventional-pre-commit` commit-msg hook aborts a non-conforming commit
   as it is being made (`default_install_hook_types` makes plain
@@ -690,7 +813,7 @@ mechanics:
   is absent". Every future string assertion follows this three-way
   convention: sentinel = skip, null = assert absent, string = assert equal.
 - Every YAML-backed config model (the full `CeceConfig` and `SuiteConfig`
-  hierarchies, plus `RunManifest`) inherits `models/base.py:StrictModel`
+  hierarchies, the run config, plus `RunManifest`) inherits `models/base.py:StrictModel`
   (`extra="forbid"`): unknown keys at any nesting level fail at load time
   instead of being silently dropped. Each run is identified by a runtime
   ULID — logged at session start, stamped into every stats row (`run_id`),

@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from combos import build_config, enumerate_combos, write_combos_csv
-from models.cece_config import (
+from applications.cece.combos import build_config, dimensions, effective_parameters
+from applications.cece.config import (
     CeceConfig,
     Mapalgo,
     Operation,
@@ -13,7 +13,17 @@ from models.cece_config import (
     Vdist,
     VdistMethod,
 )
-from models.suite_config import CeceDataSweep, SpeciesEntrySweep, StreamSweep, Sweep
+from applications.cece.suite import (
+    CeceDataSweep,
+    CeceSweep,
+    SpeciesEntrySweep,
+    StreamSweep,
+)
+from combos import Combo, enumerate_combos, write_combos_csv
+
+
+def _enumerate(sweep: CeceSweep, base_config: CeceConfig) -> list[Combo]:
+    return enumerate_combos(dimensions(sweep, base_config))
 
 
 @pytest.fixture()
@@ -33,8 +43,8 @@ def two_stream_config_path(tmp_path: Path, cece_config_path: Path) -> Path:
     return path
 
 
-def _maccity_sweep() -> Sweep:
-    return Sweep(
+def _maccity_sweep() -> CeceSweep:
+    return CeceSweep(
         cece_data=CeceDataSweep(
             streams=[
                 StreamSweep(
@@ -49,7 +59,7 @@ def _maccity_sweep() -> Sweep:
 def test_maccity_sweep_enumerates_three_qualified_combos(
     base_config: CeceConfig,
 ) -> None:
-    combos = enumerate_combos(_maccity_sweep(), base_config)
+    combos = _enumerate(_maccity_sweep(), base_config)
     assert [combo.name for combo in combos] == [
         "MACCITY.map-bilinear",
         "MACCITY.map-consd",
@@ -61,8 +71,8 @@ def test_combo_ids_are_runtime_ulids(base_config: CeceConfig) -> None:
     # Ids are minted per enumeration (runtime-only, like run_id): unique
     # within a run, different across enumerations — no content semantics.
     # combos.csv carries the parameter mapping; joins use suite + name.
-    first = enumerate_combos(_maccity_sweep(), base_config)
-    second = enumerate_combos(_maccity_sweep(), base_config)
+    first = _enumerate(_maccity_sweep(), base_config)
+    second = _enumerate(_maccity_sweep(), base_config)
     all_ids = [combo.combo_id for combo in first + second]
     assert len(set(all_ids)) == len(all_ids)
     for combo_id in all_ids:
@@ -73,7 +83,7 @@ def test_combo_ids_are_runtime_ulids(base_config: CeceConfig) -> None:
 def test_normalization_declaration_order_never_matters(base_config: CeceConfig) -> None:
     # Same sweep, values reversed and species/stream blocks declared in a
     # different order, must enumerate byte-identical names and ids.
-    tidy = Sweep(
+    tidy = CeceSweep(
         species={
             "co": [SpeciesEntrySweep(operation=[Operation.add, Operation.replace])]
         },
@@ -83,7 +93,7 @@ def test_normalization_declaration_order_never_matters(base_config: CeceConfig) 
             ]
         ),
     )
-    shuffled = Sweep(
+    shuffled = CeceSweep(
         cece_data=CeceDataSweep(
             streams=[
                 StreamSweep(name="MACCITY", mapalgo=[Mapalgo.consd, Mapalgo.bilinear])
@@ -93,8 +103,8 @@ def test_normalization_declaration_order_never_matters(base_config: CeceConfig) 
             "co": [SpeciesEntrySweep(operation=[Operation.replace, Operation.add])]
         },
     )
-    tidy_combos = enumerate_combos(tidy, base_config)
-    shuffled_combos = enumerate_combos(shuffled, base_config)
+    tidy_combos = _enumerate(tidy, base_config)
+    shuffled_combos = _enumerate(shuffled, base_config)
     assert [combo.name for combo in tidy_combos] == [
         combo.name for combo in shuffled_combos
     ]
@@ -105,7 +115,7 @@ def test_normalization_declaration_order_never_matters(base_config: CeceConfig) 
 def test_empty_sweep_enumerates_identity_combo(base_config: CeceConfig) -> None:
     # A sweep attaching no dimensions runs the base config as the single
     # combination (sweep-less suites; examples-as-suites design).
-    (combo,) = enumerate_combos(Sweep(), base_config)
+    (combo,) = _enumerate(CeceSweep(), base_config)
     assert combo.values == ()
     assert combo.name == "base"
     assert len(combo.combo_id) == 26  # runtime ULID, like every combo
@@ -114,7 +124,7 @@ def test_empty_sweep_enumerates_identity_combo(base_config: CeceConfig) -> None:
 def test_identity_combo_build_config_changes_output_only(
     base_config: CeceConfig, cece_config_path: Path
 ) -> None:
-    (combo,) = enumerate_combos(Sweep(), base_config)
+    (combo,) = _enumerate(CeceSweep(), base_config)
     generated = build_config(
         combo, output_directory="/combo_runs/x", config_path=cece_config_path
     )
@@ -141,14 +151,14 @@ def test_field_attributes_round_trip_through_generated_configs(
             },
         )
     ]
-    (combo,) = enumerate_combos(_single_consd_sweep(), base_config)
+    (combo,) = _enumerate(_single_consd_sweep(), base_config)
     generated = build_config(combo, output_directory=".", config_path=cece_config_path)
     assert generated.output is not None
     assert generated.output.fields == base_config.output.fields
 
 
-def _single_consd_sweep() -> Sweep:
-    return Sweep(
+def _single_consd_sweep() -> CeceSweep:
+    return CeceSweep(
         cece_data=CeceDataSweep(
             streams=[StreamSweep(name="MACCITY", mapalgo=[Mapalgo.consd])]
         )
@@ -159,12 +169,12 @@ def test_build_config_applies_to_named_non_first_stream(
     two_stream_config_path: Path,
 ) -> None:
     base = CeceConfig.from_yaml(two_stream_config_path)
-    sweep = Sweep(
+    sweep = CeceSweep(
         cece_data=CeceDataSweep(
             streams=[StreamSweep(name="AUXDATA", mapalgo=[Mapalgo.nn])]
         )
     )
-    (combo,) = enumerate_combos(sweep, base)
+    (combo,) = _enumerate(sweep, base)
     assert combo.name == "AUXDATA.map-nn"
 
     config = build_config(
@@ -177,7 +187,7 @@ def test_build_config_applies_to_named_non_first_stream(
 
 def test_stream_targets_sorted_lexicographically(two_stream_config_path: Path) -> None:
     base = CeceConfig.from_yaml(two_stream_config_path)
-    sweep = Sweep(
+    sweep = CeceSweep(
         cece_data=CeceDataSweep(
             streams=[
                 StreamSweep(name="MACCITY", mapalgo=[Mapalgo.consd]),
@@ -185,7 +195,7 @@ def test_stream_targets_sorted_lexicographically(two_stream_config_path: Path) -
             ]
         )
     )
-    (combo,) = enumerate_combos(sweep, base)
+    (combo,) = _enumerate(sweep, base)
     assert combo.name == "AUXDATA.tax-extend__MACCITY.map-consd"
 
 
@@ -194,8 +204,10 @@ def test_build_config_supplies_vdist_companions_per_method(
 ) -> None:
     # Sweeping vdist_method builds the nested vdist block the driver parses,
     # with the companions each method needs for a meaningful config.
-    sweep = Sweep(species={"co": [SpeciesEntrySweep(vdist_method=list(VdistMethod))]})
-    combos = enumerate_combos(sweep, base_config)
+    sweep = CeceSweep(
+        species={"co": [SpeciesEntrySweep(vdist_method=list(VdistMethod))]}
+    )
+    combos = _enumerate(sweep, base_config)
     assert [combo.name for combo in combos] == [
         "co.vd-height",
         "co.vd-pbl",
@@ -244,23 +256,23 @@ def test_build_config_supplies_vdist_companions_per_method(
 
 
 def test_unknown_stream_selector_rejected(base_config: CeceConfig) -> None:
-    sweep = Sweep(
+    sweep = CeceSweep(
         cece_data=CeceDataSweep(
             streams=[StreamSweep(name="NOPE", mapalgo=[Mapalgo.consd])]
         )
     )
     with pytest.raises(ValueError, match="NOPE"):
-        enumerate_combos(sweep, base_config)
+        _enumerate(sweep, base_config)
 
 
 def test_unknown_species_selector_rejected(base_config: CeceConfig) -> None:
-    sweep = Sweep(species={"nox": [SpeciesEntrySweep(operation=[Operation.add])]})
+    sweep = CeceSweep(species={"nox": [SpeciesEntrySweep(operation=[Operation.add])]})
     with pytest.raises(ValueError, match="nox"):
-        enumerate_combos(sweep, base_config)
+        _enumerate(sweep, base_config)
 
 
 def test_oversized_species_entry_list_rejected(base_config: CeceConfig) -> None:
-    sweep = Sweep(
+    sweep = CeceSweep(
         species={
             "co": [
                 SpeciesEntrySweep(operation=[Operation.add]),
@@ -269,7 +281,7 @@ def test_oversized_species_entry_list_rejected(base_config: CeceConfig) -> None:
         }
     )
     with pytest.raises(ValueError, match="entry blocks"):
-        enumerate_combos(sweep, base_config)
+        _enumerate(sweep, base_config)
 
 
 def test_write_combos_csv_is_effective_parameter_table(
@@ -278,24 +290,31 @@ def test_write_combos_csv_is_effective_parameter_table(
     """One row per (target, sweepable field) per combo with values from the
     generated config: swept rows carry the swept value, pinned rows the base
     value — parameters are joinable whether swept or not."""
-    combos = enumerate_combos(_maccity_sweep(), base_config)
+    combos = _enumerate(_maccity_sweep(), base_config)
     entries = [
         (
             "simple-maccity",
             combo,
-            build_config(combo, output_directory=".", config_path=cece_config_path),
+            effective_parameters(
+                combo,
+                build_config(combo, output_directory=".", config_path=cece_config_path),
+            ),
         )
         for combo in combos
     ]
     csv_path = tmp_path / "combos.csv"
     frame = write_combos_csv(
-        entries, run_id="01JZZZZZZZZZZZZZZZZZZZZZZZ", csv_path=csv_path
+        entries,
+        run_id="01JZZZZZZZZZZZZZZZZZZZZZZZ",
+        application="cece",
+        csv_path=csv_path,
     )
 
     assert csv_path.is_file()
     assert list(frame.columns) == [
         "run_id",
         "combo_id",
+        "application",
         "suite",
         "name",
         "target",
@@ -303,6 +322,7 @@ def test_write_combos_csv_is_effective_parameter_table(
         "value",
         "swept",
     ]
+    assert set(frame["application"]) == {"cece"}
     # maccity: species co (3 sweepable fields) + stream MACCITY (3) per combo.
     assert len(frame) == 6 * 3
     assert set(frame["suite"]) == {"simple-maccity"}
@@ -328,11 +348,12 @@ def test_write_combos_csv_covers_sweep_less_combos(
     tmp_path: Path, base_config: CeceConfig, cece_config_path: Path
 ) -> None:
     # A base combo gets its full effective parameter set — all pinned.
-    (combo,) = enumerate_combos(Sweep(), base_config)
+    (combo,) = _enumerate(CeceSweep(), base_config)
     config = build_config(combo, output_directory=".", config_path=cece_config_path)
     frame = write_combos_csv(
-        [("ex-suite", combo, config)],
+        [("ex-suite", combo, effective_parameters(combo, config))],
         run_id="01JZZZZZZZZZZZZZZZZZZZZZZZ",
+        application="cece",
         csv_path=tmp_path / "combos.csv",
     )
     assert len(frame) == 6

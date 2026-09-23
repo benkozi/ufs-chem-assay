@@ -1,59 +1,121 @@
-"""root_dir/.env/search-path resolution and immutability on Settings. Env-var
-tests scrub the ambient CECE_* variables via monkeypatch so a developer's
-shell cannot influence assertions, and chdir to tmp_path so the repo-root
-.env file is out of scope (each test opts in by writing its own)."""
+"""Harness-wide Settings: the ASSAY_* namespace with CECE_* fallbacks, .env,
+precedence, and immutability. Env-var tests scrub the ambient variables via
+monkeypatch so a developer's shell cannot influence assertions, and chdir to
+tmp_path so the repo-root .env file is out of scope (each test opts in by
+writing its own)."""
 
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from settings import Settings
+from platforms import Platform, Runtime
+from settings import ENV_PREFIX, LEGACY_ENV_PREFIX, Settings
+
+_SCRUBBED = (
+    "APPLICATION",
+    "PLATFORM",
+    "RUNTIME",
+    "SUITE_CONFIG_SEARCH_PATH",
+    "DASK_NWORKERS",
+    "BASELINE_ROOT_DIR",
+    "LOG_LEVEL",
+)
 
 
 @pytest.fixture()
-def clean_cece_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> pytest.MonkeyPatch:
-    for key in ("CECE_ROOT_DIR", "CECE_ROOT", "CECE_SUITE_CONFIG_SEARCH_PATH"):
-        monkeypatch.delenv(key, raising=False)
+def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> pytest.MonkeyPatch:
+    for prefix in (ENV_PREFIX, LEGACY_ENV_PREFIX):
+        for key in _SCRUBBED:
+            monkeypatch.delenv(f"{prefix}{key}", raising=False)
+    monkeypatch.delenv("CECE_ROOT_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     return monkeypatch
 
 
-def test_root_dir_defaults_to_none(clean_cece_env: pytest.MonkeyPatch) -> None:
-    assert Settings().root_dir is None
+def test_prefixes() -> None:
+    assert ENV_PREFIX == "ASSAY_" and LEGACY_ENV_PREFIX == "CECE_"
 
 
-def test_root_dir_reads_cece_root_dir_env(clean_cece_env: pytest.MonkeyPatch) -> None:
-    clean_cece_env.setenv("CECE_ROOT_DIR", "/host/cece")
-    assert Settings().root_dir == Path("/host/cece")
-
-
-def test_init_kwarg_beats_env(clean_cece_env: pytest.MonkeyPatch) -> None:
-    # The --cece-root-dir flag wiring relies on this precedence.
-    clean_cece_env.setenv("CECE_ROOT_DIR", "/from/env")
-    assert Settings(root_dir=Path("/from/flag")).root_dir == Path("/from/flag")
-
-
-def test_legacy_cece_root_env_has_no_effect(
-    clean_cece_env: pytest.MonkeyPatch,
+def test_no_application_settings_on_the_harness_model(
+    clean_env: pytest.MonkeyPatch,
 ) -> None:
-    clean_cece_env.setenv("CECE_ROOT", "/host/cece")
-    assert Settings().root_dir is None
+    # root_dir / docker_image / driver_path / modulefile are the adapters'.
+    for name in ("root_dir", "docker_image", "driver_path", "modulefile"):
+        assert name not in Settings.model_fields
+    clean_env.setenv("CECE_ROOT_DIR", "/host/cece")
+    assert not hasattr(Settings(), "root_dir")
 
 
-def test_settings_is_frozen(clean_cece_env: pytest.MonkeyPatch) -> None:
+def test_application_defaults_to_none(clean_env: pytest.MonkeyPatch) -> None:
+    assert Settings().application is None
+
+
+def test_application_from_env_and_kwarg(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("ASSAY_APPLICATION", "cece")
+    assert Settings().application == "cece"
+    # The --application flag wiring relies on init kwargs beating env.
+    assert Settings(application="other").application == "other"
+
+
+def test_assay_prefix_reads(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("ASSAY_DASK_NWORKERS", "3")
+    assert Settings().dask_nworkers == 3
+
+
+def test_legacy_prefix_is_a_fallback(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("CECE_DASK_NWORKERS", "3")
+    assert Settings().dask_nworkers == 3
+
+
+def test_assay_wins_over_legacy_within_the_environment(
+    clean_env: pytest.MonkeyPatch,
+) -> None:
+    clean_env.setenv("CECE_DASK_NWORKERS", "3")
+    clean_env.setenv("ASSAY_DASK_NWORKERS", "5")
+    assert Settings().dask_nworkers == 5
+
+
+def test_env_file_supplies_values_under_either_prefix(
+    clean_env: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / ".env").write_text(
+        "cece_root_dir=/from/dotenv\n"  # the adapter's key: ignored here
+        "cece_baseline_root_dir=/baselines\n"
+        "assay_dask_nworkers=4\n"
+    )
+    settings = Settings()
+    assert settings.baseline_root_dir == Path("/baselines")
+    assert settings.dask_nworkers == 4
+
+
+def test_real_env_beats_env_file_across_prefixes(
+    clean_env: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # environment > .env holds even when the .env uses the new spelling and
+    # the environment the legacy one.
+    (tmp_path / ".env").write_text("assay_dask_nworkers=4\n")
+    clean_env.setenv("CECE_DASK_NWORKERS", "9")
+    assert Settings().dask_nworkers == 9
+
+
+def test_init_kwarg_beats_env_file(
+    clean_env: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / ".env").write_text("assay_platform=ursa\n")
+    assert Settings(platform=Platform.LOCAL).platform is Platform.LOCAL
+
+
+def test_settings_is_frozen(clean_env: pytest.MonkeyPatch) -> None:
     settings = Settings()
     with pytest.raises(ValidationError):
-        settings.root_dir = Path("/host/cece")  # type: ignore[misc]
+        settings.log_level = "DEBUG"  # type: ignore[misc]
 
 
-def test_search_path_splits_on_pathsep(clean_cece_env: pytest.MonkeyPatch) -> None:
-    clean_cece_env.setenv(
-        "CECE_SUITE_CONFIG_SEARCH_PATH", os.pathsep.join(["/suites/a", "/suites/b"])
+def test_search_path_splits_on_pathsep(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv(
+        "ASSAY_SUITE_CONFIG_SEARCH_PATH", os.pathsep.join(["/suites/a", "/suites/b"])
     )
     assert Settings().suite_config_search_path == [
         Path("/suites/a"),
@@ -61,92 +123,17 @@ def test_search_path_splits_on_pathsep(clean_cece_env: pytest.MonkeyPatch) -> No
     ]
 
 
-def test_search_path_single_directory(clean_cece_env: pytest.MonkeyPatch) -> None:
-    clean_cece_env.setenv("CECE_SUITE_CONFIG_SEARCH_PATH", "/suites/a")
+def test_search_path_single_directory_legacy_spelling(
+    clean_env: pytest.MonkeyPatch,
+) -> None:
+    clean_env.setenv("CECE_SUITE_CONFIG_SEARCH_PATH", "/suites/a")
     assert Settings().suite_config_search_path == [Path("/suites/a")]
 
 
-def test_search_path_defaults_to_empty(clean_cece_env: pytest.MonkeyPatch) -> None:
+def test_search_path_defaults_to_empty(clean_env: pytest.MonkeyPatch) -> None:
     assert Settings().suite_config_search_path == []
 
 
-def test_env_file_supplies_values(
-    clean_cece_env: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    (tmp_path / ".env").write_text(
-        "cece_root_dir=/from/dotenv\ncece_baseline_root_dir=/baselines\n"
-    )
-    settings = Settings()
-    assert settings.root_dir == Path("/from/dotenv")
-    assert settings.baseline_root_dir == Path("/baselines")
-
-
-def test_real_env_beats_env_file(
-    clean_cece_env: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    (tmp_path / ".env").write_text("cece_root_dir=/from/dotenv\n")
-    clean_cece_env.setenv("CECE_ROOT_DIR", "/from/env")
-    assert Settings().root_dir == Path("/from/env")
-
-
-def test_init_kwarg_beats_env_file(
-    clean_cece_env: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    (tmp_path / ".env").write_text("cece_root_dir=/from/dotenv\n")
-    assert Settings(root_dir=Path("/from/flag")).root_dir == Path("/from/flag")
-
-
-# -- cece_commit_sha: the checkout's HEAD SHA for run.yaml -------------------
-
-
-def _git_repo_with_commit(path: Path) -> str:
-    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
-    subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "user.name=t",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "initial",
-        ],
-        cwd=path,
-        check=True,
-    )
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=path,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return head.stdout.strip()
-
-
-def test_cece_commit_sha_of_git_checkout(tmp_path: Path) -> None:
-    expected = _git_repo_with_commit(tmp_path)
-    assert Settings(root_dir=tmp_path).get_cece_commit_sha() == expected
-    assert len(expected) == 40
-
-
-def test_cece_commit_sha_raises_for_non_repo(tmp_path: Path) -> None:
-    # Sessions always run against a checked-out CECE: a configured root
-    # without a resolvable SHA is fatal, not a recordable state.
-    with pytest.raises(ValueError, match="git checkout"):
-        Settings(root_dir=tmp_path).get_cece_commit_sha()
-
-
-def test_cece_commit_sha_raises_for_repo_without_commits(tmp_path: Path) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    with pytest.raises(ValueError, match="rev-parse"):
-        Settings(root_dir=tmp_path).get_cece_commit_sha()
-
-
-def test_cece_commit_sha_none_when_no_checkout_configured() -> None:
-    # An explicit None root (init kwarg beats env) means "no checkout":
-    # recorded as null, never an error.
-    assert Settings(root_dir=None).get_cece_commit_sha() is None
+def test_runtime_from_legacy_env(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("CECE_RUNTIME", "native")
+    assert Settings(platform=Platform.LOCAL).runtime is Runtime.NATIVE

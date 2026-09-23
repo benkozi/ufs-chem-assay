@@ -22,7 +22,7 @@ logger = get_logger("report")
 TestResult = Literal["passed", "failed", "skipped"]
 
 _RESULT_PRECEDENCE: dict[str, int] = {"passed": 0, "skipped": 1, "failed": 2}
-_REPORT_COLUMNS = ["pytest_name", "suite", "combo_id", "combo", "result"]
+_REPORT_COLUMNS = ["pytest_name", "application", "suite", "combo_id", "combo", "result"]
 
 
 class TestReportRow(StrictModel):
@@ -30,6 +30,9 @@ class TestReportRow(StrictModel):
 
     pytest_name: str = Field(
         description="Test name including the combo parameter id, e.g. test_driver_execution[MACCITY.map-consd]"
+    )
+    application: str = Field(
+        description="Registry name of the application the session ran"
     )
     suite: str = Field(
         description="Unique name of the suite the combination belongs to"

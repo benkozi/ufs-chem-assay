@@ -1,13 +1,14 @@
 # Test-suite configuration (see design/design.md).
-# config_path names the base CECE driver config; relative paths resolve
-# against this file's directory (or CECE_CONFIG_SEARCH_PATH when set).
+# application names the adapter (optional; cece is the default) and
+# config_path its base driver config; relative paths resolve against this
+# file's directory (or ASSAY_CONFIG_SEARCH_PATH when set).
 # The sweep mirrors the driver-config structure: dimensions attach to named
 # streams (or positional species entries); the combination space is the
 # cartesian product of all attached value lists. Fields absent from the
 # sweep stay at their base-config values.
 name: simple-maccity
 config_path: ../cece/simple-maccity.yaml
-timeout_s: 10  # per combination; capped by CECE_RUN_TIMEOUT_S when that is smaller
+timeout_s: 10  # per combination; capped by ASSAY_RUN_TIMEOUT_S when that is smaller
 assertions:
   expected_nc_file_count:  # null = derive from the combo config
   validate_filenames: true
@@ -23,7 +24,7 @@ assertions:
           coordinates: time lev lat lon
 # Each entry's sweep_selector mirrors `sweep` with regexes (fullmatch) at the
 # leaves and must select exactly one combination; ulids live under
-# CECE_BASELINE_ROOT_DIR; atol is per entry (default 0.0 = bit-for-bit).
+# ASSAY_BASELINE_ROOT_DIR; atol is per entry (default 0.0 = bit-for-bit).
 baseline_comparisons:
   - sweep_selector:
       cece_data:

@@ -1,37 +1,48 @@
 # Run config for a laptop: the docker runtime, no modules, no Slurm — the
-# CLI equivalent of the integration workflow (CECE's own container build
-# script builds the driver in cece/cece-dev, then the harness runs on the
+# CLI equivalent of the integration workflow (the application's own container
+# build script builds the driver in its image, then the harness runs on the
 # host). Runs as shipped from the checkout:
 #   ufs-chem-assay run --config-file=config/local.yaml [--dry-run]
+# Every key is listed; command-line overrides change any of them:
+#   --override harness:suite_config=ex3-suite.yaml applications:cece:ref=develop
 platform: local
 # root_dir is derived: the parent of this harness checkout. Set it here, or pass
 # --root-dir, only if your layout differs.
-cece:
-  git_url: git@github.com:benkozi/CECE.git
-  ref: fix/all-examples-pass
-  clone_dir:  # default <root_dir>/CECE; point at your sandbox checkout instead
-  update_source: false  # true: fetch, checkout ref, pull --ff-only, submodule update --init --recursive
-  modulefile:  # none locally
-  cmake_args: []  # unused: the container build script owns the configure
-  build_jobs: 4
-  targets:
-    - cece_standalone_driver
+applications:  # one section per application in the run, keyed by adapter name
+  cece:
+    git_url: git@github.com:benkozi/CECE.git
+    ref: fix/all-examples-pass
+    clone_dir:  # default <root_dir>/CECE; point at your sandbox checkout instead
+    update_source: false  # true: fetch, checkout ref, pull --ff-only, submodule update --init --recursive
+    modulefile:  # CECE_MODULEFILE; none locally
+    docker_image:  # CECE_DOCKER_IMAGE; null = the adapter's default (cece/cece-dev)
+    driver_path:  # CECE_DRIVER_PATH; null = the adapter's default (./build/cece_standalone_driver)
+    cmake_args: []  # unused: the container build script owns the configure
+    build_jobs: 4
+    targets:
+      - cece_standalone_driver
+    examples:  # example ids whose data download-example-data.py stages
+      - ex3
 data:
-  examples:
-    - ex3
   warm_cartopy: false
 baselines:
-  root_dir:
-  enabled: false
+  root_dir:  # ASSAY_BASELINE_ROOT_DIR
+  enabled: false  # ASSAY_ENABLE_BASELINE_COMPARISONS
 harness:
   suite_config: simple-maccity-suite.yaml  # regex; every match runs, e.g. 'ex[0-9]-suite.yaml'
   output_root: ufs-chem-assay-output  # relative: under the checkout (docker: must stay there)
   clean_root: true  # removes only a previous harness root (one with run.yaml)
+  pytest_dry_run: false  # pytest --dry-run: generate everything, execute no driver
+  run_examples: false  # --run-examples: the application's shipped examples
   pytest_args: []
-  launcher: ''  # unused under docker
+  runtime:  # ASSAY_RUNTIME; null = the platform's default (docker here)
+  launcher: ''  # ASSAY_LAUNCHER; unused under docker
   env: {}
-  dask_nworkers:
-  run_timeout_s: 300
+  dask_nworkers:  # ASSAY_DASK_NWORKERS
+  run_timeout_s: 300  # ASSAY_RUN_TIMEOUT_S
+  log_level:  # ASSAY_LOG_LEVEL; null = INFO
+  config_search_path:  # ASSAY_CONFIG_SEARCH_PATH
+  suite_config_search_path: []  # ASSAY_SUITE_CONFIG_SEARCH_PATH
 slurm:  # direct execution
 uv:
   cache_dir:

@@ -1,7 +1,11 @@
-from .cece_config import (
+"""The CECE adapter. The config model's public names are re-exported here."""
+
+from applications.cece.config import (
+    Cadence,
     Category,
     CeceConfig,
     CeceData,
+    DataModel,
     Diagnostics,
     Driver,
     Grid,
@@ -15,13 +19,16 @@ from .cece_config import (
     StreamVariable,
     Taxmode,
     Tintalgo,
+    Vdist,
     VdistMethod,
 )
 
 __all__ = [
+    "Cadence",
     "Category",
     "CeceConfig",
     "CeceData",
+    "DataModel",
     "Diagnostics",
     "Driver",
     "Grid",
@@ -35,5 +42,6 @@ __all__ = [
     "StreamVariable",
     "Taxmode",
     "Tintalgo",
+    "Vdist",
     "VdistMethod",
 ]
