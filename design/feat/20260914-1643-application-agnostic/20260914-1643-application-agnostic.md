@@ -930,7 +930,16 @@ artifacts (Verification, item 1) before step 1.
 
 ## TODO
 
-- [ ] **Confirm on Ursa** (user): after the extraction, run the maccity
+- [x] **Confirmed on Ursa, 2026-09-23** (user's `out.harness-run.20260923-171229`):
+      `ufs-chem-assay run --config-file=config/ursa.yaml --stage harness`
+      from the `feat/application-agnostic` clone at `13882f3` rendered
+      `scripts/run-config.yaml` and `05-harness-cece.sh`, the session
+      started as `application cece`, and the suite finished **18 passed,
+      3 skipped** (the baseline comparisons, disabled) in 131 s — three
+      `sbatch --wait` jobs, stats and plots on the login node. The only
+      warnings are cartopy's known matplotlib deprecation. Wall time was
+      65 s on 2026-09-11; the difference is queue wait, not the harness.
+- [ ] ~~**Confirm on Ursa** (user)~~: after the extraction, run the maccity
       CECE example on Ursa — `uv run ufs-chem-assay run
       --config-file=config/ursa.yaml --stage harness` from a
       runbook-layout checkout — and check that it is green (18 passed,
@@ -1011,7 +1020,7 @@ checked-in suite's `--dry-run` root was captured on the untouched tree
 - **CI workflows**: `integration.yaml` exports
   `ASSAY_ENABLE_BASELINE_COMPARISONS`; nothing else needed changing
   (`CECE_ROOT_DIR` is still the adapter's variable).
-- **TODO (unchanged)**: the Ursa confirmation above.
+- **Ursa**: confirmed green on 2026-09-23 (see the TODO section).
 
 ---
 
