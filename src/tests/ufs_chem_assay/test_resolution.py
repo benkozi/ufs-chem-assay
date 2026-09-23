@@ -4,22 +4,39 @@ import pytest
 
 from resolution import resolve_output_roots, select_suites
 
+_WORK = PurePosixPath("/work")
+
 
 def test_relative_output_root_maps_under_work() -> None:
-    host, container = resolve_output_roots("combo_runs", Path("/host/cece"))
+    host, container = resolve_output_roots(
+        "combo_runs", Path("/host/cece"), container_workdir=_WORK
+    )
     assert host == Path("/host/cece/combo_runs")
     assert container == PurePosixPath("/work/combo_runs")
 
 
 def test_absolute_output_root_under_work_is_mapped() -> None:
-    host, container = resolve_output_roots("/work/nested/runs", Path("/host/cece"))
+    host, container = resolve_output_roots(
+        "/work/nested/runs", Path("/host/cece"), container_workdir=_WORK
+    )
     assert host == Path("/host/cece/nested/runs")
     assert container == PurePosixPath("/work/nested/runs")
 
 
+def test_workdir_is_the_adapters(tmp_path: Path) -> None:
+    # A different mount convention (CATChem's /opt/project) changes both sides.
+    host, container = resolve_output_roots(
+        "runs", Path("/host/app"), container_workdir=PurePosixPath("/opt/project")
+    )
+    assert host == Path("/host/app/runs")
+    assert container == PurePosixPath("/opt/project/runs")
+
+
 def test_absolute_output_root_outside_work_raises() -> None:
     with pytest.raises(ValueError, match="/work"):
-        resolve_output_roots("/elsewhere/runs", Path("/host/cece"))
+        resolve_output_roots(
+            "/elsewhere/runs", Path("/host/cece"), container_workdir=_WORK
+        )
 
 
 @pytest.fixture()

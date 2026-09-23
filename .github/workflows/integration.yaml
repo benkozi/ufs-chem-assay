@@ -113,13 +113,13 @@ jobs:
           CECE_ROOT_DIR: ${{ github.workspace }}/cece
           # No public baseline store yet; the suite's three comparisons
           # skip. TODO: drop this once baselines are downloadable.
-          CECE_ENABLE_BASELINE_COMPARISONS: 'false'
+          ASSAY_ENABLE_BASELINE_COMPARISONS: 'false'
         run: |
           uv sync --frozen
           uv run pytest src/tests/test_driver_combos.py \
             --suite-config=simple-maccity-suite.yaml \
             --combo-output-root=ufs-chem-assay-ci-output
-      # Success and failure alike: run.yaml (with cece_commit), combos.csv,
+      # Success and failure alike: run.yaml (with application_commit), combos.csv,
       # test-report.csv, stats, plots, NetCDF, .out, cece.log per combo.
       - name: Upload the output root
         if: always()

@@ -14,8 +14,8 @@ _USAGE_ERROR = 4  # pytest.ExitCode.USAGE_ERROR
 
 
 def _run_pytest(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CECE_")}
-    env["CECE_PLATFORM"] = "local"  # the child cannot inherit the hostname patch
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CECE_", "ASSAY_"))}
+    env["ASSAY_PLATFORM"] = "local"  # the child cannot inherit the hostname patch
     return subprocess.run(
         [
             sys.executable,
@@ -69,3 +69,28 @@ def test_multi_match_runs_every_selected_suite(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1461 skipped" in result.stdout
+
+
+def test_application_switch_filters_the_selection(tmp_path: Path) -> None:
+    # --application keeps only that application's suites among the matches;
+    # every checked-in suite is CECE's, so the multi-match session is intact.
+    result = _run_pytest(
+        [
+            "--dry-run",
+            "--application=cece",
+            "--suite-config=(simple-maccity|exhaustive-maccity-run-only)-suite.yaml",
+        ],
+        tmp_path,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1461 skipped" in result.stdout
+
+
+def test_suite_of_an_unknown_application_is_a_usage_error(tmp_path: Path) -> None:
+    suite = tmp_path / "other-suite.yaml"
+    suite.write_text(
+        "name: other\napplication: catchem\nconfig_path: x.yaml\ntimeout_s: 5\n"
+    )
+    result = _run_pytest(["--dry-run", f"--suite-config={suite}"], tmp_path)
+    assert result.returncode == _USAGE_ERROR, result.stdout + result.stderr
+    assert "unknown application 'catchem'" in result.stderr

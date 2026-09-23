@@ -11,11 +11,15 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from combos import build_config, enumerate_combos
-from examples import EXAMPLES_SUBDIR, example_id
-from models.cece_config import Cadence, CeceConfig, DataModel
-from models.suite_config import SuiteConfig, Sweep
-from settings import Settings
+from applications.cece.combos import build_config
+from applications.cece.config import Cadence, CeceConfig, DataModel
+from applications.cece.examples import EXAMPLES_SUBDIR, CeceExamples
+from applications.cece.settings import CeceSettings
+from applications.cece.suite import CeceSweep
+from applications.registry import get_application, load_suite
+from combos import enumerate_combos
+
+_APP = get_application("cece")
 
 EXAMPLE_IDS = [f"ex{n}" for n in range(1, 8)]
 
@@ -195,7 +199,9 @@ def test_build_config_always_redirects_log_file(
     if base_log_file is not None:
         content["driver"]["log_file"] = base_log_file
     config_path = _write_config(tmp_path, content)
-    (combo,) = enumerate_combos(Sweep(), CeceConfig.from_yaml(config_path))
+    (combo,) = enumerate_combos(
+        _APP.dimensions(CeceSweep(), CeceConfig.from_yaml(config_path))
+    )
     generated = build_config(
         combo, output_directory="/combo_runs/abc123", config_path=config_path
     )
@@ -228,7 +234,7 @@ def test_root_token_resolves_against_root_dir(
         "config_path: ${CECE_ROOT_DIR}/examples/config/cece_config_ex3.yaml\n"
         "timeout_s: 5\n"
     )
-    suite = SuiteConfig.from_yaml(suite_file, root_dir=fake_checkout)
+    suite = load_suite(suite_file, root_dir=fake_checkout)
     assert (
         suite.config_path
         == (fake_checkout / "examples" / "config" / "cece_config_ex3.yaml").resolve()
@@ -243,7 +249,7 @@ def test_root_token_without_root_dir_errors(tmp_path: Path) -> None:
         "timeout_s: 5\n"
     )
     with pytest.raises(ValueError, match="CECE_ROOT_DIR"):
-        SuiteConfig.from_yaml(suite_file)
+        load_suite(suite_file)
 
 
 def test_root_token_beats_config_search_path(
@@ -257,7 +263,7 @@ def test_root_token_beats_config_search_path(
         "config_path: ${CECE_ROOT_DIR}/examples/config/cece_config_ex3.yaml\n"
         "timeout_s: 5\n"
     )
-    suite = SuiteConfig.from_yaml(
+    suite = load_suite(
         suite_file, config_search_path=tmp_path / "elsewhere", root_dir=fake_checkout
     )
     assert suite.config_path.is_file()
@@ -267,7 +273,7 @@ def test_plain_relative_config_path_ignores_root_dir(
     suite_path: Path, fake_checkout: Path
 ) -> None:
     # Existing suites resolve exactly as before even when a root is known.
-    suite = SuiteConfig.from_yaml(suite_path, root_dir=fake_checkout)
+    suite = load_suite(suite_path, root_dir=fake_checkout)
     assert (
         suite.config_path
         == (suite_path.parent / ".." / "cece" / "simple-maccity.yaml").resolve()
@@ -280,12 +286,13 @@ def test_every_runnable_example_has_a_suite_file(suite_dir: Path) -> None:
     checked-in <id>-suite.yaml — a new example arriving in CECE fails here
     until it gains a suite. Skips when no checkout is configured (the only
     test in this module touching one)."""
-    root_dir = Settings().root_dir
+    root_dir = CeceSettings().root_dir
     if root_dir is None or not root_dir.is_dir():
         pytest.skip("CECE checkout not configured; set CECE_ROOT_DIR")
     configs = sorted((root_dir / EXAMPLES_SUBDIR).glob("cece_config_*.yaml"))
     assert configs, f"no example configs under {root_dir / EXAMPLES_SUBDIR}"
-    runnable = {example_id(path) for path in configs} - UNCOVERED_EXAMPLES
+    examples = CeceExamples()
+    runnable = {examples.example_id(path) for path in configs} - UNCOVERED_EXAMPLES
     missing = sorted(
         eid for eid in runnable if not (suite_dir / f"{eid}-suite.yaml").is_file()
     )
@@ -301,9 +308,9 @@ def test_checked_in_example_suite_loads(
     single base combination)."""
     suite_file = suite_dir / f"{eid}-suite.yaml"
     assert suite_file.is_file(), f"missing {suite_file}"
-    suite = SuiteConfig.from_yaml(suite_file, root_dir=fake_checkout)
+    suite = load_suite(suite_file, root_dir=fake_checkout)
     assert suite.name == eid
     assert suite.config_path.name == f"cece_config_{eid}.yaml"
     base_config = CeceConfig.from_yaml(suite.config_path)
-    combos = enumerate_combos(suite.sweep, base_config)
+    combos = enumerate_combos(_APP.dimensions(suite.sweep, base_config))
     assert [combo.name for combo in combos] == ["base"]

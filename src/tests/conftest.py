@@ -9,11 +9,17 @@ import pytest
 from pydantic import BaseModel, ConfigDict, InstanceOf
 
 from analysis import RunContext, concatenate_stats_csvs
-from combos import Combo, build_config, enumerate_combos, write_combos_csv
+from applications.base import Application, ApplicationSettings, DriverConfig
+from applications.registry import (
+    DEFAULT_APPLICATION,
+    get_application,
+    load_suite,
+    peek_application,
+)
+from combos import Combo, ParameterRow, enumerate_combos, write_combos_csv
 from comparison import concatenate_comparison_csvs, resolve_baseline_comparisons
-from examples import discover_examples
+from identity import harness_commit, harness_version
 from logs import configure_logging, get_logger
-from models.cece_config import CeceConfig
 from models.suite_config import (
     Analysis,
     Assertions,
@@ -39,11 +45,9 @@ _TESTS_ROOT = Path(__file__).resolve().parent
 # Always the final --suite-config search root, so checked-in suites stay
 # selectable and the bare default needs no configuration.
 _BUILTIN_SUITE_DIR = _TESTS_ROOT / "config" / "suite"
-# A literal filename is also a regex that fullmatches exactly that file.
-_DEFAULT_SUITE = "simple-maccity-suite.yaml"
 
 # Container-side mount point for the default (pytest tmp) output root, which
-# lives outside the /work mount (docker runtime only).
+# lives outside the application's checkout mount (docker runtime only).
 _CONTAINER_TMP_ROOT = PurePosixPath("/combo_runs")
 
 
@@ -56,7 +60,7 @@ class ComboRoots(BaseModel):
 
     host: Path
     driver: PurePosixPath
-    needs_mount: bool  # docker only: the host root is outside the /work mount
+    needs_mount: bool  # docker only: the host root is outside the checkout mount
 
     @property
     def output_mount(self) -> tuple[Path, PurePosixPath] | None:
@@ -70,7 +74,7 @@ class GeneratedCombo(BaseModel):
 
     host_dir: Path
     driver_yaml: PurePosixPath  # the config path as the driver sees it
-    config: CeceConfig
+    config: InstanceOf[DriverConfig]
 
 
 class SuiteContext(BaseModel):
@@ -81,18 +85,22 @@ class SuiteContext(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    suite: SuiteConfig
+    suite: InstanceOf[SuiteConfig]
     # InstanceOf: Combo is enumeration machinery (callables, enum members),
     # validated by isinstance rather than deep pydantic validation.
     combos: list[InstanceOf[Combo]]
-    baselines: dict[str, BaselineComparison]
+    baselines: dict[str, InstanceOf[BaselineComparison]]
 
 
 # Session state on pytest.Config, typed end to end via config.stash — written
 # once at sessionstart (realized roots: once in combo_roots), read everywhere
 # else. StashKey is the sanctioned pattern for hanging state on the config.
 _RUN_ID = pytest.StashKey[str]()
-_CECE_COMMIT = pytest.StashKey[str | None]()
+_APPLICATION = pytest.StashKey[Application]()
+_APP_SETTINGS = pytest.StashKey[ApplicationSettings]()
+_APPLICATION_COMMIT = pytest.StashKey[str | None]()
+_HARNESS_VERSION = pytest.StashKey[str]()
+_HARNESS_COMMIT = pytest.StashKey[str | None]()
 _SETTINGS = pytest.StashKey[Settings]()
 _SUITE_CONTEXTS = pytest.StashKey[list[SuiteContext]]()
 _EXPLICIT_ROOTS = pytest.StashKey[ComboRoots | None]()
@@ -103,24 +111,35 @@ _REPORT_ROWS = pytest.StashKey[dict[str, TestReportRow]]()
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("combo", "combinatorial driver test runner")
     group.addoption(
+        "--application",
+        default=None,
+        help=(
+            "Run only suites of this application (registry name, e.g. cece); "
+            "overrides ASSAY_APPLICATION. Without it the application is inferred "
+            "from the selected suites, which must agree. A bare --application "
+            "runs that application's default suite."
+        ),
+    )
+    group.addoption(
         "--suite-config",
-        default=_DEFAULT_SUITE,
+        default=None,
         help=(
             "Suite selector: an existing file path, or a regex fullmatched "
             "against each suite's file name or search-root-relative path. "
             "Candidates are the *.yaml files found recursively under "
-            "CECE_SUITE_CONFIG_SEARCH_PATH (os.pathsep-separated) plus the "
+            "ASSAY_SUITE_CONFIG_SEARCH_PATH (os.pathsep-separated) plus the "
             "built-in suite directory; every match runs — several matches "
-            "run as one multi-suite session."
+            "run as one multi-suite session. Default: the application's "
+            "default suite (simple-maccity-suite.yaml for cece)."
         ),
     )
     group.addoption(
         "--combo-output-root",
         default=None,
         help=(
-            "Root artifact directory; relative paths resolve against the CECE "
-            "checkout (mounted at /work under docker). Default: a "
-            "pytest-managed temporary directory."
+            "Root artifact directory; relative paths resolve against the "
+            "application checkout (its container mount under docker). Default: "
+            "a pytest-managed temporary directory."
         ),
     )
     group.addoption(
@@ -141,55 +160,100 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         ),
     )
     group.addoption(
-        "--cece-root-dir",
-        default=None,
-        help=(
-            "Host path of the CECE repository root, mounted at /work in the "
-            "driver container. Overrides CECE_ROOT_DIR; required (either form) "
-            "to execute the driver."
-        ),
-    )
-    group.addoption(
         "--run-examples",
         action="store_true",
         help=(
-            "Run the CECE checkout's shipped example configs "
-            "(examples/cece_config_ex*.yaml) verbatim in docker, "
-            "fetching data via scripts/data_download/ first. Off by default; "
+            "Run the application checkout's shipped example configs verbatim "
+            "through its own tooling, fetching data first. Off by default; "
             "examples may legitimately fail — they are artifacts under test."
         ),
     )
 
 
-_ROOT_DIR_SOURCES = "pass --cece-root-dir or set CECE_ROOT_DIR"
+def _root_dir_source(app: Application) -> str:
+    return f"set {app.env_prefix}ROOT_DIR"
+
+
+def _resolve_application(
+    settings: Settings, suite_paths: list[Path]
+) -> tuple[Application, list[Path]]:
+    """The session's one application and the suites that belong to it.
+    Explicit (--application / ASSAY_APPLICATION): other applications' suites
+    are dropped with a log line; none left is a usage error. Inferred: every
+    selected suite must name the same application."""
+    try:
+        by_path = {path: peek_application(path) for path in suite_paths}
+    except (OSError, ValueError, yaml_error()) as exc:
+        raise pytest.UsageError(str(exc)) from exc
+    if settings.application is not None:
+        try:
+            app = get_application(settings.application)
+        except ValueError as exc:
+            raise pytest.UsageError(str(exc)) from exc
+        kept = [path for path, name in by_path.items() if name == app.name]
+        for path, name in by_path.items():
+            if name != app.name:
+                logger.info("suite %s: application %s, skipped", path.name, name)
+        if not kept:
+            raise pytest.UsageError(
+                f"--application {app.name}: none of the selected suites is a "
+                f"{app.name} suite (selected: "
+                + ", ".join(f"{path.name} [{name}]" for path, name in by_path.items())
+                + ")"
+            )
+        return app, kept
+    names = sorted(set(by_path.values()))
+    if len(names) > 1:
+        raise pytest.UsageError(
+            "the selected suites belong to several applications ("
+            + ", ".join(f"{path.name} [{name}]" for path, name in by_path.items())
+            + "); a session runs one application — pass --application to choose"
+        )
+    return get_application(names[0]), suite_paths
+
+
+def yaml_error() -> type[Exception]:
+    import yaml
+
+    return yaml.YAMLError
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
     config = session.config
     # Init kwargs beat env vars in pydantic-settings, so the flag wins over
-    # CECE_ROOT_DIR here — the single root_dir resolution point (Settings is
-    # frozen).
-    root_dir_option = config.getoption("--cece-root-dir")
+    # ASSAY_APPLICATION here (Settings is frozen).
+    application_option = config.getoption("--application")
     settings = (
-        Settings() if root_dir_option is None else Settings(root_dir=root_dir_option)
+        Settings()
+        if application_option is None
+        else Settings(application=application_option)
     )
     configure_logging(settings.log_level)
 
-    # Sessions always run against a checked-out CECE when a root is
-    # configured: an unresolvable commit SHA is a fatal misconfiguration,
-    # surfaced here before any work. No configured root records null.
     try:
-        config.stash[_CECE_COMMIT] = settings.get_cece_commit_sha()
+        default_app = get_application(settings.application or DEFAULT_APPLICATION)
     except ValueError as exc:
         raise pytest.UsageError(str(exc)) from exc
-
+    suite_option = config.getoption("--suite-config") or default_app.default_suite
     try:
         suite_paths = select_suites(
-            config.getoption("--suite-config"),
-            [*settings.suite_config_search_path, _BUILTIN_SUITE_DIR],
+            suite_option, [*settings.suite_config_search_path, _BUILTIN_SUITE_DIR]
         )
     except ValueError as exc:
         raise pytest.UsageError(str(exc)) from exc
+
+    app, suite_paths = _resolve_application(settings, suite_paths)
+    app_settings = app.settings_model()
+
+    # Sessions always run against a checked-out application when a root is
+    # configured: an unresolvable commit SHA is a fatal misconfiguration,
+    # surfaced here before any work. No configured root records null.
+    try:
+        config.stash[_APPLICATION_COMMIT] = app_settings.commit_sha()
+    except ValueError as exc:
+        raise pytest.UsageError(str(exc)) from exc
+    config.stash[_HARNESS_VERSION] = harness_version()
+    config.stash[_HARNESS_COMMIT] = harness_commit()
 
     # Every match runs: one suite is a single-suite session, several a
     # multi-suite session over the same flat output root.
@@ -197,10 +261,10 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     seen_names: dict[str, Path] = {}
     for suite_path in suite_paths:
         try:
-            suite = SuiteConfig.from_yaml(
+            suite = load_suite(
                 suite_path,
                 config_search_path=settings.config_search_path,
-                root_dir=settings.root_dir,
+                root_dir=app_settings.root_dir,
             )
         except (FileNotFoundError, ValueError) as exc:
             raise pytest.UsageError(str(exc)) from exc
@@ -214,10 +278,12 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
         # Selector validation happens here, against the loaded base config,
         # before any container runs.
-        base_config = CeceConfig.from_yaml(suite.config_path)
+        base_config = app.config_model.from_yaml(suite.config_path)
         try:
-            combos = enumerate_combos(suite.sweep, base_config)
-            baselines = resolve_baseline_comparisons(suite.baseline_comparisons, combos)
+            combos = enumerate_combos(app.dimensions(suite.sweep, base_config))
+            baselines = resolve_baseline_comparisons(
+                app, suite.baseline_comparisons, combos
+            )
         except ValueError as exc:
             raise pytest.UsageError(str(exc)) from exc
         contexts.append(SuiteContext(suite=suite, combos=combos, baselines=baselines))
@@ -225,8 +291,9 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     # One ULID per test run, generated at runtime only — never configuration.
     run_id = str(ULID())
     logger.info(
-        "starting run %s (%s suite(s): %s)",
+        "starting run %s (application %s; %s suite(s): %s)",
         run_id,
+        app.name,
         len(contexts),
         ", ".join(context.suite.name for context in contexts),
     )
@@ -239,13 +306,17 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     if option is None:
         roots = None
     else:
-        if settings.root_dir is None:
+        if app_settings.root_dir is None:
             raise pytest.UsageError(
-                f"--combo-output-root resolves against the CECE repository root; {_ROOT_DIR_SOURCES}"
+                "--combo-output-root resolves against the application checkout; "
+                + _root_dir_source(app)
             )
         try:
             host_root, driver_root = resolve_output_roots(
-                option, settings.root_dir, settings.runtime
+                option,
+                app_settings.root_dir,
+                settings.runtime,
+                container_workdir=app.container_workdir,
             )
         except ValueError as exc:
             raise pytest.UsageError(str(exc)) from exc
@@ -267,6 +338,8 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         roots = ComboRoots(host=host_root, driver=driver_root, needs_mount=False)
 
     config.stash[_SETTINGS] = settings
+    config.stash[_APPLICATION] = app
+    config.stash[_APP_SETTINGS] = app_settings
     config.stash[_SUITE_CONTEXTS] = contexts
     config.stash[_EXPLICIT_ROOTS] = roots
     # test-report.csv rows, keyed by nodeid in execution order; filled by the
@@ -277,7 +350,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """Fail fast when driver execution is coming but no CECE root is
+    """Fail fast when driver execution is coming but no application root is
     configured. Collection time (not sessionstart) so harness-only runs —
     which collect no driver-executing tests — need no environment; still
     before any test executes. Example tests don't request driver_run, so
@@ -293,15 +366,17 @@ def pytest_collection_modifyitems(
         )
     if not needs_root:
         return
-    settings = config.stash[_SETTINGS]
-    if settings.root_dir is None:
+    app = config.stash[_APPLICATION]
+    app_settings = config.stash[_APP_SETTINGS]
+    if app_settings.root_dir is None:
         raise pytest.UsageError(
-            f"driver execution requires the CECE repository root; {_ROOT_DIR_SOURCES}"
+            f"driver execution requires the {app.name} checkout root; "
+            + _root_dir_source(app)
         )
-    if not settings.root_dir.is_dir():
+    if not app_settings.root_dir.is_dir():
         raise pytest.UsageError(
-            f"CECE root {settings.root_dir} is not an existing directory; "
-            f"check --cece-root-dir / CECE_ROOT_DIR"
+            f"{app.name} root {app_settings.root_dir} is not an existing directory; "
+            f"check {app.env_prefix}ROOT_DIR"
         )
 
 
@@ -326,6 +401,7 @@ def pytest_runtest_makereport(
     if row is None:
         row = TestReportRow(
             pytest_name=item.name,
+            application=item.config.stash[_APPLICATION].name,
             suite=context.suite.name,
             combo_id=combo.combo_id,
             combo=combo.name,
@@ -339,11 +415,11 @@ def pytest_runtest_makereport(
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Session-end artifact pipeline, in order: test report -> stats concat ->
     per-suite overview plots -> comparison-stats concat -> per-suite bias
-    plots. The output root is flat across suites; concatenated CSVs carry a
-    suite column, and each suite's plots render from its own slice so color
-    scales never mix suites. Bias plotting is independent of the overview
-    plotting/stats gates: its scale derives from the comparison CSV and it
-    is governed per comparison entry."""
+    plots. The output root is flat across suites; concatenated CSVs carry
+    application and suite columns, and each suite's plots render from its
+    own slice so color scales never mix suites. Bias plotting is independent
+    of the overview plotting/stats gates: its scale derives from the
+    comparison CSV and it is governed per comparison entry."""
     config = session.config
     contexts = config.stash.get(_SUITE_CONTEXTS, None)
     roots = config.stash.get(_REALIZED_ROOTS, None)
@@ -436,12 +512,19 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
                 indirect=True,
             )
     if "example_yaml" in metafunc.fixturenames:
-        # Discovery needs the CECE checkout; without a root there is nothing
-        # to parametrize (the empty set collects as a single skipped item,
-        # and the collection guard converts it to a UsageError when
-        # --run-examples actually asks for execution).
-        root_dir = metafunc.config.stash[_SETTINGS].root_dir
-        examples = discover_examples(root_dir) if root_dir is not None else []
+        # Discovery needs the application checkout; without a root there is
+        # nothing to parametrize (the empty set collects as a single skipped
+        # item, and the collection guard converts it to a UsageError when
+        # --run-examples actually asks for execution). An application without
+        # examples support has nothing to discover either.
+        app = metafunc.config.stash[_APPLICATION]
+        root_dir = metafunc.config.stash[_APP_SETTINGS].root_dir
+        if app.examples is None:
+            if metafunc.config.getoption("--run-examples"):
+                raise pytest.UsageError(f"application {app.name} ships no examples")
+            examples: list[Path] = []
+        else:
+            examples = app.examples.discover(root_dir) if root_dir is not None else []
         metafunc.parametrize(
             "example_yaml", examples, ids=[path.stem for path in examples]
         )
@@ -450,6 +533,18 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 @pytest.fixture(scope="session")
 def settings(request: pytest.FixtureRequest) -> Settings:
     return request.config.stash[_SETTINGS]
+
+
+@pytest.fixture(scope="session")
+def application(request: pytest.FixtureRequest) -> Application:
+    """The session's application adapter."""
+    return request.config.stash[_APPLICATION]
+
+
+@pytest.fixture(scope="session")
+def app_settings(request: pytest.FixtureRequest) -> ApplicationSettings:
+    """The session application's settings (checkout, image, driver)."""
+    return request.config.stash[_APP_SETTINGS]
 
 
 def _owning_context(request: pytest.FixtureRequest) -> SuiteContext:
@@ -487,6 +582,7 @@ def baseline_comparisons(
 def run_context(request: pytest.FixtureRequest) -> RunContext:
     return RunContext(
         run_id=request.config.stash[_RUN_ID],
+        application=request.config.stash[_APPLICATION].name,
         suite=_owning_context(request).suite.name,
     )
 
@@ -534,10 +630,13 @@ def combo_roots(
     settings = request.config.stash[_SETTINGS]
     manifest = RunManifest(
         run_id=request.config.stash[_RUN_ID],
-        cece_commit=request.config.stash[_CECE_COMMIT],
+        application=request.config.stash[_APPLICATION].name,
+        application_commit=request.config.stash[_APPLICATION_COMMIT],
+        harness_version=request.config.stash[_HARNESS_VERSION],
+        harness_commit=request.config.stash[_HARNESS_COMMIT],
         platform=settings.platform,
         runtime=settings.runtime,
-        modulefile=settings.modulefile,
+        modulefile=request.config.stash[_APP_SETTINGS].modulefile,
         suites=[context.suite for context in request.config.stash[_SUITE_CONTEXTS]],
     )
     manifest.to_yaml(roots.host / "run.yaml")
@@ -553,8 +652,10 @@ def generated_combos(
     effective-parameter table reads the generated configs, and writing it
     here keeps the record complete before any driver executes."""
     generated: dict[str, GeneratedCombo] = {}
-    entries: list[tuple[str, Combo, CeceConfig]] = []
+    entries: list[tuple[str, Combo, list[ParameterRow]]] = []
     settings = request.config.stash[_SETTINGS]
+    app = request.config.stash[_APPLICATION]
+    app_settings = request.config.stash[_APP_SETTINGS]
     for context in request.config.stash[_SUITE_CONTEXTS]:
         for combo in context.combos:
             # Storage carries no semantics: directories and filenames are the
@@ -562,19 +663,20 @@ def generated_combos(
             combo_dir = combo_roots.host / combo.combo_id
             combo_dir.mkdir(parents=True)
             driver_dir = combo_roots.driver / combo.combo_id
-            config = build_config(
+            config = app.build_config(
                 combo,
                 output_directory=str(driver_dir),
                 config_path=context.suite.config_path,
             )
             config.to_yaml(combo_dir / f"{combo.combo_id}.yaml")
-            if settings.runtime is Runtime.SLURM and settings.root_dir is not None:
+            if settings.runtime is Runtime.SLURM and app_settings.root_dir is not None:
                 # The job script is a recorded artifact like the yaml: written
                 # up front (dry runs included), rewritten identically before
                 # submission. A checkout-less dry run has no job to describe
                 # (nothing to --chdir into) and records none.
                 write_job_script(
                     settings,
+                    app_settings,
                     driver_dir / f"{combo.combo_id}.yaml",
                     combo_dir / f"{combo.combo_id}.out",
                     timeout_s=min(context.suite.timeout_s, settings.run_timeout_s),
@@ -584,10 +686,13 @@ def generated_combos(
                 driver_yaml=driver_dir / f"{combo.combo_id}.yaml",
                 config=config,
             )
-            entries.append((context.suite.name, combo, config))
+            entries.append(
+                (context.suite.name, combo, app.effective_parameters(combo, config))
+            )
     write_combos_csv(
         entries,
         run_id=request.config.stash[_RUN_ID],
+        application=app.name,
         csv_path=combo_roots.host / "combos.csv",
     )
     return generated
@@ -599,6 +704,8 @@ def driver_run(
     combo_roots: ComboRoots,
     generated_combos: dict[str, GeneratedCombo],
     settings: Settings,
+    application: Application,
+    app_settings: ApplicationSettings,
 ) -> DriverRunResult:
     """Run the driver once per combination (session-scoped, parameterized on
     (suite context, combo) pairs) and capture the outcome without raising."""
@@ -623,6 +730,8 @@ def driver_run(
     try:
         run_driver(
             settings,
+            application,
+            app_settings,
             driver_yaml=generated.driver_yaml,
             out_path=out_path,
             timeout_s=run_timeout_s,

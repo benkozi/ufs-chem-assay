@@ -8,7 +8,8 @@ import xarray as xr
 from PIL import GifImagePlugin, Image
 from pydantic import ValidationError
 
-from models.suite_config import Plotting, SuiteConfig
+from applications.registry import load_suite
+from models.suite_config import Plotting
 from plotting import (
     VariableScale,
     derive_scales,
@@ -154,7 +155,7 @@ def test_plotting_requires_descriptive_stats(
         "sweep:\n  cece_data:\n    streams:\n      - name: MACCITY\n        mapalgo: [consd]\n"
     )
     with pytest.raises(ValidationError, match="compute_descriptive_stats"):
-        SuiteConfig.from_yaml(suite_file)
+        load_suite(suite_file)
 
 
 def test_stats_disabled_with_plotting_disabled_is_valid(
@@ -167,7 +168,7 @@ def test_stats_disabled_with_plotting_disabled_is_valid(
         "plotting:\n  enabled: false\n"
         "sweep:\n  cece_data:\n    streams:\n      - name: MACCITY\n        mapalgo: [consd]\n"
     )
-    suite = SuiteConfig.from_yaml(suite_file)
+    suite = load_suite(suite_file)
     assert suite.plotting.enabled is False
 
 

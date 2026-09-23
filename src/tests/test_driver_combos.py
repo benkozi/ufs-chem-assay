@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from analysis import RunContext, compute_file_stats, write_combo_stats_csv
+from applications.base import Application
 from assertions import (
     assert_nc_file_count,
     assert_nc_filenames,
@@ -22,43 +23,57 @@ def test_driver_execution(driver_run: DriverRunResult) -> None:
 
 
 def test_nc_file_count(
-    driver_run: DriverRunResult, suite_assertions: Assertions
+    driver_run: DriverRunResult,
+    suite_assertions: Assertions,
+    application: Application,
 ) -> None:
-    """The combo directory holds the expected number of NetCDF output files."""
+    """The combo directory holds the expected number of NetCDF output files
+    (the suite's explicit count, else the count the adapter derives from
+    the combo's generated config)."""
     if driver_run.error is not None:
         pytest.skip(f"driver run failed: {driver_run.error}")
     if not suite_assertions.validate_file_count:
         pytest.skip("file count validation disabled by suite config")
-    assert_nc_file_count(
-        driver_run.combo_dir,
-        driver_run.config,
-        suite_assertions.expected_nc_file_count,
-    )
+    expected = suite_assertions.expected_nc_file_count
+    if expected is None:
+        expected = application.expected_output_count(driver_run.config)
+    assert_nc_file_count(driver_run.combo_dir, expected)
 
 
 def test_nc_filenames(
-    driver_run: DriverRunResult, suite_assertions: Assertions
+    driver_run: DriverRunResult,
+    suite_assertions: Assertions,
+    application: Application,
 ) -> None:
-    """The NetCDF filenames match filename_pattern at the expected write times."""
+    """The NetCDF filenames match the application's naming at the expected
+    write times."""
     if driver_run.error is not None:
         pytest.skip(f"driver run failed: {driver_run.error}")
     if not suite_assertions.validate_filenames:
         pytest.skip("filename validation disabled by suite config")
-    assert_nc_filenames(driver_run.combo_dir, driver_run.config)
+    assert_nc_filenames(
+        driver_run.combo_dir, application.expected_output_filenames(driver_run.config)
+    )
 
 
 def test_nc_variable_dimensions(
-    driver_run: DriverRunResult, suite_assertions: Assertions
+    driver_run: DriverRunResult,
+    suite_assertions: Assertions,
+    application: Application,
 ) -> None:
-    """Every configured output variable carries the standard
-    (time, lev, lat, lon) dimensions in every NetCDF the combo produced —
-    a synthetic dimension (e.g. nox_dim2 where lat belongs) means the
-    writer failed to associate the coordinate."""
+    """Every configured output variable carries the application's standard
+    dimensions (CECE: time, lev, lat, lon) in every NetCDF the combo
+    produced — a synthetic dimension (e.g. nox_dim2 where lat belongs)
+    means the writer failed to associate the coordinate."""
     if driver_run.error is not None:
         pytest.skip(f"driver run failed: {driver_run.error}")
     if not suite_assertions.validate_dimensions:
         pytest.skip("dimension validation disabled by suite config")
-    assert_output_variable_dimensions(driver_run.combo_dir, driver_run.config)
+    assert_output_variable_dimensions(
+        driver_run.combo_dir,
+        application.output_variable_names(driver_run.config),
+        application.standard_dimensions,
+    )
 
 
 def test_species_attributes(
@@ -104,7 +119,7 @@ def test_baseline_comparison(
     if not baseline_dir.is_dir():
         pytest.fail(
             f"configured baseline {entry.ulid} not found at {baseline_dir} "
-            "(set CECE_BASELINE_ROOT_DIR)"
+            "(set ASSAY_BASELINE_ROOT_DIR)"
         )
 
     result = compare_with_baseline(
@@ -112,6 +127,7 @@ def test_baseline_comparison(
         baseline_dir,
         atol=entry.atol,
         run_id=run_context.run_id,
+        application=run_context.application,
         suite=run_context.suite,
         combo=driver_run.combo.name,
         combo_id=driver_run.combo.combo_id,

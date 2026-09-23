@@ -1,17 +1,19 @@
 # Ursa runbook: running the harness natively
 
-Manual steps to build the CECE driver against its own Ursa modulefiles
-and run `simple-maccity-suite.yaml` through the harness from a login
-node, one Slurm job per driver call. `ufs-chem-assay run --config-file=config/ursa.yaml` automates the
-same sequence (each stage renders to a script under `<root_dir>/scripts/`,
-so the two are the same commands).
+Manual steps to build the target driver (CECE's `cece_standalone_driver`,
+the application this runbook is written for) against the application's
+own Ursa modulefiles and run `simple-maccity-suite.yaml` through the
+harness from a login node, one Slurm job per driver call.
+`ufs-chem-assay run --config-file=config/ursa.yaml` automates the same
+sequence (each stage renders to a script under `<root_dir>/scripts/`, so
+the two are the same commands).
 
 Set these once in your shell; every step below uses them:
 
 ```bash
 export ROOT=<your scratch directory>/ufs-chem-assay   # holds ufs-chem-assay/ and CECE/
 export HARNESS_REF=develop                             # harness branch or tag
-export CECE_REF=<branch or SHA>                        # CECE ref to build (config/ursa.yaml: cece.ref)
+export CECE_REF=<branch or SHA>                        # CECE ref to build (config/ursa.yaml: applications.cece.ref)
 ```
 
 Conventions:
@@ -101,17 +103,21 @@ the OS one.
 The shipped `config/ursa.yaml` runs as-is from a checkout laid out like
 this runbook: the CLI derives `root_dir` as the parent of the harness
 checkout (`$ROOT`), so `$ROOT/CECE` is the checkout it uses. Nothing in
-the YAML needs editing; pass `--root-dir` (or set `root_dir` in a copy)
-only if your layout differs, and edit a copy only if your Slurm account
-is not `epic`.
+the YAML needs editing; pass `--root-dir` only if your layout differs,
+and override any other key from the command line instead of editing —
+`--override slurm:account=<yours>` if your Slurm account is not `epic`,
+`--override applications:cece:ref=<branch>` for another CECE ref. The
+effective configuration (file plus overrides) is written to
+`$ROOT/scripts/run-config.yaml` on every invocation.
 
 ```bash
 cd $ROOT/ufs-chem-assay
 uv run ufs-chem-assay run --config-file=config/ursa.yaml --dry-run
 ```
 
-The dry run renders every stage to `$ROOT/scripts/<NN>-<stage>.sh` and
-executes nothing; read `05-harness.sh` before running it. It runs pytest
+The dry run renders every stage to `$ROOT/scripts/<NN>-<stage>-<application>.sh`
+(`05-harness-cece.sh` for the harness stage) and executes nothing; read
+`05-harness-cece.sh` before running it. It runs pytest
 **on the login node**, and pytest submits **one Slurm job per driver
 call**: each combo gets a rendered `<combo_id>.sbatch` beside its
 `.yaml` and `.out` under the output root, with the `#SBATCH` directives,
@@ -136,11 +142,13 @@ cd $ROOT/ufs-chem-assay
 uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage harness
 ```
 
-The CLI logs to `$ROOT/logs/05-harness-<timestamp>.log` as it runs. In
-another window, `squeue -u $USER` shows the per-combo jobs
+The CLI logs to `$ROOT/logs/05-harness-cece-<timestamp>.log` as it
+runs. In another window, `squeue -u $USER` shows the per-combo jobs
 (`ufs-chem-assay-<combo_id>`) come and go. Results land in
-`$ROOT/CECE/ufs-chem-assay-output/`: `run.yaml` (with `cece_commit`,
-`platform: ursa`, `runtime: slurm`, `modulefile`), `combos.csv`,
+`$ROOT/CECE/ufs-chem-assay-output/`: `run.yaml` (with `application:
+cece`, `application_commit`, the harness's own `harness_version` and
+`harness_commit`, `platform: ursa`, `runtime: slurm`, `modulefile`),
+`combos.csv`,
 `test-report.csv`, and per combo the generated config, the job script,
 the job's `.out`, `cece.log`, NetCDF, stats, and plots. The login node
 has network, so the first plot fetches Natural Earth coastlines on its

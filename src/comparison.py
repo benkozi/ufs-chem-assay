@@ -9,7 +9,7 @@ executed on the active distributed client.
 
 from __future__ import annotations
 
-import re
+from collections.abc import Sequence
 from pathlib import Path
 
 import dask
@@ -20,15 +20,11 @@ import pandas as pd
 import xarray as xr
 from pydantic import ConfigDict, Field
 
+from applications.base import Application
 from combos import Combo
 from logs import get_logger
 from models.base import StrictModel
-from models.suite_config import (
-    BaselineComparison,
-    SpeciesEntrySweepSelector,
-    StreamSweepSelector,
-    SweepSelector,
-)
+from models.suite_config import BaselineComparison
 
 logger = get_logger("comparison")
 
@@ -123,6 +119,9 @@ class BaselineComparisonResult(StrictModel):
     run_id: str = Field(
         description="Session ULID of the run that produced the realization"
     )
+    application: str = Field(
+        description="Registry name of the application the realization was produced by"
+    )
     suite: str = Field(description="Unique suite name the realization was produced by")
     combo: str = Field(description="Canonical combination name")
     combo_id: str = Field(description="Content-hash combination id")
@@ -162,91 +161,12 @@ class BaselineComparisonResult(StrictModel):
         return "; ".join(parts) or "passed"
 
 
-def _stream_block_matches(block: StreamSweepSelector, combo: Combo) -> bool:
-    """A streams selector block scopes its fields to one name-matched stream:
-    some swept stream must fullmatch `name` and satisfy every specified field."""
-    by_stream: dict[str, dict[str, str]] = {}
-    for dimension, value in combo.values:
-        if dimension.group == "stream":
-            by_stream.setdefault(dimension.key, {})[dimension.field] = value.value
-    criteria = {
-        field: pattern
-        for field, pattern in (
-            ("taxmode", block.taxmode),
-            ("tintalgo", block.tintalgo),
-            ("mapalgo", block.mapalgo),
-        )
-        if pattern is not None
-    }
-    for stream_name, fields in by_stream.items():
-        if re.fullmatch(block.name, stream_name) is None:
-            continue
-        if all(
-            field in fields and re.fullmatch(pattern, fields[field]) is not None
-            for field, pattern in criteria.items()
-        ):
-            return True
-    return False
-
-
-def _species_entry_matches(
-    key_pattern: str,
-    index: int,
-    entry_selector: SpeciesEntrySweepSelector,
-    combo: Combo,
-) -> bool:
-    """A species entry selector requires a swept species whose name fullmatches
-    the dict key, with the selector's list position pinning the entry index."""
-    by_species: dict[tuple[str, int], dict[str, str]] = {}
-    for dimension, value in combo.values:
-        if dimension.group == "species":
-            by_species.setdefault((dimension.key, dimension.index), {})[
-                dimension.field
-            ] = value.value
-    criteria = {
-        field: pattern
-        for field, pattern in (
-            ("operation", entry_selector.operation),
-            ("category", entry_selector.category),
-            ("vdist_method", entry_selector.vdist_method),
-        )
-        if pattern is not None
-    }
-    if not criteria:
-        return True  # {} entry: no constraint at this index
-    for (species_name, entry_index), fields in by_species.items():
-        if entry_index != index or re.fullmatch(key_pattern, species_name) is None:
-            continue
-        if all(
-            field in fields and re.fullmatch(pattern, fields[field]) is not None
-            for field, pattern in criteria.items()
-        ):
-            return True
-    return False
-
-
-def _selector_matches(selector: SweepSelector, combo: Combo) -> bool:
-    """Structural walk mirroring the sweep: every constrained element must be
-    satisfied; unspecified structure is unconstrained."""
-    if selector.cece_data is not None:
-        if not all(
-            _stream_block_matches(block, combo) for block in selector.cece_data.streams
-        ):
-            return False
-    if selector.species is not None:
-        for key_pattern, entries in selector.species.items():
-            for index, entry_selector in enumerate(entries):
-                if not _species_entry_matches(
-                    key_pattern, index, entry_selector, combo
-                ):
-                    return False
-    return True
-
-
 def resolve_baseline_comparisons(
-    comparisons: list[BaselineComparison], combos: list[Combo]
+    app: Application, comparisons: Sequence[BaselineComparison], combos: list[Combo]
 ) -> dict[str, BaselineComparison]:
-    """Resolve each baseline_comparisons entry to exactly one combination.
+    """Resolve each baseline_comparisons entry to exactly one combination,
+    matching selectors through the application adapter (it knows the
+    selector's shape and the dimensions' attachment metadata).
 
     Fails (ValueError) before any container runs when a selector matches no
     combination, a selector matches more than one, or a combination is
@@ -257,7 +177,9 @@ def resolve_baseline_comparisons(
     for position, entry in enumerate(comparisons):
         selector_repr = entry.sweep_selector.model_dump(exclude_none=True)
         matches = [
-            combo for combo in combos if _selector_matches(entry.sweep_selector, combo)
+            combo
+            for combo in combos
+            if app.selector_matches(entry.sweep_selector, combo)
         ]
         if not matches:
             raise ValueError(
@@ -450,6 +372,7 @@ def compare_with_baseline(
     baseline_dir: Path,
     atol: float,
     run_id: str,
+    application: str,
     suite: str,
     combo: str,
     combo_id: str,
@@ -477,6 +400,7 @@ def compare_with_baseline(
     passed = file_names_match and all(file.passed for file in files)
     result = BaselineComparisonResult(
         run_id=run_id,
+        application=application,
         suite=suite,
         combo=combo,
         combo_id=combo_id,
@@ -497,6 +421,7 @@ def compare_with_baseline(
 
 _COMPARISON_COLUMNS = [
     "run_id",
+    "application",
     "suite",
     "combo_id",
     "combo",
@@ -537,6 +462,7 @@ def write_comparison_csv(
             rows.append(
                 {
                     "run_id": result.run_id,
+                    "application": result.application,
                     "suite": result.suite,
                     "combo_id": result.combo_id,
                     "combo": result.combo,

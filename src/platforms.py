@@ -1,7 +1,7 @@
 """Where the harness runs (platform) and how the driver is launched (runtime).
 
 The platform is a per-machine fact — detected from the hostname, overridable
-through CECE_PLATFORM — and the runtime derives from it: docker locally,
+through ASSAY_PLATFORM — and the runtime derives from it: docker locally,
 a Slurm job per driver call everywhere else (RDHPC machines have no docker).
 Detection is a convenience, never load-bearing: run configs for a machine
 set the platform explicitly.
@@ -24,7 +24,7 @@ class Platform(StrEnum):
 class Runtime(StrEnum):
     """How a driver invocation is spawned."""
 
-    DOCKER = "docker"  # docker run against the cece/cece-dev image
+    DOCKER = "docker"  # docker run against the application's image
     NATIVE = "native"  # a host process, optionally behind a launcher (srun)
     SLURM = "slurm"  # one `sbatch --wait` job per driver call, from a login node
 

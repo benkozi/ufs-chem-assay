@@ -1,19 +1,25 @@
-"""Post-run assertions evaluated against a combination's output directory."""
+"""Post-run assertions evaluated against a combination's output directory.
+
+Generic: every expectation (file count, filenames, variable names and their
+standard dimensions) is derived by the application adapter from the combo's
+generated config and passed in; the attribute assertion reads the suite's
+expectations directly."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import xarray as xr
 
 from logs import get_logger
-from models.cece_config import CeceConfig
 
 logger = get_logger("assertions")
 
 
-def _render_filename_pattern(pattern: str, when: datetime) -> str:
+def render_filename_pattern(pattern: str, when: datetime) -> str:
+    """Expand the {YYYY}{MM}{DD}{HH}{mm}{ss} placeholders of an output
+    filename pattern at one write time."""
     return (
         pattern.replace("{YYYY}", f"{when.year:04d}")
         .replace("{MM}", f"{when.month:02d}")
@@ -24,34 +30,9 @@ def _render_filename_pattern(pattern: str, when: datetime) -> str:
     )
 
 
-def derive_expected_nc_file_count(config: CeceConfig) -> int:
-    """Expected NetCDF output file count from the generated combo config:
-    one file per output.frequency_steps timesteps; 0 when output is disabled
-    or absent."""
-    if config.output is None or not config.output.enabled:
-        return 0
-    start = datetime.fromisoformat(config.driver.start_time)
-    end = datetime.fromisoformat(config.driver.end_time)
-    n_steps = int((end - start).total_seconds()) // config.driver.timestep_seconds
-    logger.info(
-        "deriving expected_nc_file_count: timestep_seconds=%s n_steps=%s frequency_steps=%s",
-        config.driver.timestep_seconds,
-        n_steps,
-        config.output.frequency_steps,
-    )
-    return n_steps // config.output.frequency_steps
-
-
-def assert_nc_file_count(
-    combo_dir: Path, config: CeceConfig, expected: int | None
-) -> None:
-    """Assert the number of NetCDF files in the combo directory (non-recursive).
-
-    expected=None derives the count from the combo config; an explicit 0
-    asserts that no NetCDF files were produced.
-    """
-    if expected is None:
-        expected = derive_expected_nc_file_count(config)
+def assert_nc_file_count(combo_dir: Path, expected: int) -> None:
+    """Assert the number of NetCDF files in the combo directory
+    (non-recursive); 0 asserts that none were produced."""
     found = len(list(combo_dir.glob("*.nc")))
     logger.info("testing expected_nc_file_count=%s, found %s files", expected, found)
     assert found == expected, (
@@ -59,27 +40,9 @@ def assert_nc_file_count(
     )
 
 
-def expected_nc_filenames(config: CeceConfig) -> set[str]:
-    """Expected NetCDF filenames: filename_pattern rendered at each write
-    time, the first at start_time + frequency_steps * timestep_seconds (the
-    end of the first output interval, not t=0)."""
-    if config.output is None or not config.output.enabled:
-        return set()
-    count = derive_expected_nc_file_count(config)
-    start = datetime.fromisoformat(config.driver.start_time)
-    interval = timedelta(
-        seconds=config.output.frequency_steps * config.driver.timestep_seconds
-    )
-    return {
-        _render_filename_pattern(config.output.filename_pattern, start + k * interval)
-        for k in range(1, count + 1)
-    }
-
-
-def assert_nc_filenames(combo_dir: Path, config: CeceConfig) -> None:
+def assert_nc_filenames(combo_dir: Path, expected: set[str]) -> None:
     """Assert the NetCDF filenames in the combo directory (non-recursive)
-    exactly match the expected set rendered from filename_pattern."""
-    expected = expected_nc_filenames(config)
+    exactly match the expected set."""
     found = {path.name for path in combo_dir.glob("*.nc")}
     logger.info(
         "testing expected filenames=%s, found %s", sorted(expected), sorted(found)
@@ -91,30 +54,14 @@ def assert_nc_filenames(combo_dir: Path, config: CeceConfig) -> None:
     )
 
 
-# The driver's standard output layout: every output variable is 4-D on
-# exactly these named dimensions. A deviation (e.g. a synthetic "<var>_dimN"
-# where lat should be) means the writer failed to associate the coordinate —
-# observed from AMIO with amio_worker_threads >= 2, where async coordinate
-# and data writes race the dimension definitions.
-STANDARD_DIMENSIONS = ("time", "lev", "lat", "lon")
-
-
-def _output_field_names(config: CeceConfig) -> list[str]:
-    """Configured output variable names (a fields entry is a plain string or
-    an OutputField map)."""
-    if config.output is None or not config.output.enabled:
-        return []
-    return [
-        field if isinstance(field, str) else field.name
-        for field in config.output.fields
-    ]
-
-
-def assert_output_variable_dimensions(combo_dir: Path, config: CeceConfig) -> None:
-    """Assert every configured output variable carries exactly the standard
-    (time, lev, lat, lon) dimensions in every NetCDF of the combo directory.
-    A missing variable fails; disabled/absent output checks nothing."""
-    names = _output_field_names(config)
+def assert_output_variable_dimensions(
+    combo_dir: Path, names: list[str], standard: tuple[str, ...]
+) -> None:
+    """Assert every named output variable carries exactly the standard
+    dimensions in every NetCDF of the combo directory. A missing variable
+    fails; no names checks nothing. (A synthetic "<var>_dimN" where a
+    coordinate belongs means the writer failed to associate it — observed
+    from CECE's AMIO with amio_worker_threads >= 2.)"""
     failures: list[str] = []
     for nc_path in sorted(combo_dir.glob("*.nc")):
         with xr.open_dataset(
@@ -128,14 +75,14 @@ def assert_output_variable_dimensions(combo_dir: Path, config: CeceConfig) -> No
                 logger.info(
                     "testing dimensions of %r: expected %s, found %s (%s)",
                     name,
-                    STANDARD_DIMENSIONS,
+                    standard,
                     dims,
                     nc_path.name,
                 )
-                if dims != STANDARD_DIMENSIONS:
+                if dims != standard:
                     failures.append(
                         f"{nc_path.name}: {name} has dimensions {dims}, "
-                        f"expected {STANDARD_DIMENSIONS}"
+                        f"expected {standard}"
                     )
     assert not failures, (
         f"non-standard output variable dimensions in {combo_dir}: "

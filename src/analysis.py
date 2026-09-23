@@ -32,6 +32,7 @@ class RunContext(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     run_id: str  # session ULID
+    application: str  # registry name of the application the session runs
     suite: str  # unique suite name (SuiteConfig.name)
 
 
@@ -47,6 +48,7 @@ class VariableStats(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     run_id: str  # session ULID; differentiates runs when CSVs accumulate
+    application: str  # which application produced this row
     suite: str  # which suite produced this row
     combo_id: str  # content hash of the combination; stable across runs
     combo: str  # human-readable canonical combination string
@@ -160,6 +162,7 @@ def compute_file_stats(
         stats.append(
             VariableStats(
                 run_id=run.run_id,
+                application=run.application,
                 suite=run.suite,
                 combo_id=combo_id,
                 combo=combo,

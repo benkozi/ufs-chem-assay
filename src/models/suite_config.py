@@ -1,131 +1,24 @@
+"""The generic suite model: what every suite says regardless of application.
+The application-shaped parts — the sweep and the baseline sweep selectors —
+are the adapter's subclasses (applications/<name>/suite.py), selected by the
+suite's `application:` value through the registry's load_suite."""
+
 from __future__ import annotations
 
 import re
-from enum import StrEnum
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Callable, TypeVar
 
 import yaml
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, SerializeAsAny, field_validator, model_validator
 
+from applications.base import SweepBase, SweepSelectorBase
 from models.base import StrictModel
 from platforms import Platform, Runtime
-from models.cece_config import (
-    Category,
-    Mapalgo,
-    Operation,
-    Taxmode,
-    Tintalgo,
-    VdistMethod,
-)
-
 
 # General string-assertion sentinel: "don't check". A plain null cannot serve
 # because null already means "assert the value is absent".
 IGNORE_VALUE = "__ignore__"
-
-# config_path prefix anchoring a checked-in suite on the external CECE
-# checkout (settings.root_dir); a literal token, not environment expansion.
-_ROOT_DIR_TOKEN = "${CECE_ROOT_DIR}"
-
-
-_SweptEnum = TypeVar("_SweptEnum", bound=StrEnum)
-
-
-def _unique_values(values: list[_SweptEnum] | None) -> list[_SweptEnum] | None:
-    """Duplicate sweep values would enumerate two combinations with the same
-    id and directory — rejected loudly rather than deduped."""
-    if values is not None and len(values) != len(set(values)):
-        raise ValueError("duplicate values in sweep list")
-    return values
-
-
-def _expand_enum_regex(enum_cls: type[StrEnum]) -> Callable[[object], object]:
-    """Sweep values accept a regex string in place of a value list: expanded
-    (fullmatch) against the enum's values into the sorted matching list at
-    load time, so ".*" always means every value — including ones added after
-    the suite was written — and run.yaml records the expanded list. A regex
-    matching nothing, like an invalid one, fails the load."""
-
-    def expand(value: object) -> object:
-        if isinstance(value, str):
-            try:
-                pattern = re.compile(value)
-            except re.error as exc:
-                raise ValueError(f"invalid regex {value!r}: {exc}") from exc
-            matched = sorted(
-                member.value for member in enum_cls if pattern.fullmatch(member.value)
-            )
-            if not matched:
-                raise ValueError(
-                    f"regex {value!r} matches no {enum_cls.__name__} value "
-                    f"(values: {sorted(member.value for member in enum_cls)})"
-                )
-            return matched
-        return value
-
-    return expand
-
-
-class StreamSweep(StrictModel):
-    """Swept dimensions attached to one stream, selected by name."""
-
-    name: str = Field(description="Stream in the base config this sweep attaches to")
-    taxmode: list[Taxmode] | None = Field(None, min_length=1)
-    tintalgo: list[Tintalgo] | None = Field(None, min_length=1)
-    mapalgo: list[Mapalgo] | None = Field(None, min_length=1)
-
-    _expand_taxmode = field_validator("taxmode", mode="before")(
-        _expand_enum_regex(Taxmode)
-    )
-    _expand_tintalgo = field_validator("tintalgo", mode="before")(
-        _expand_enum_regex(Tintalgo)
-    )
-    _expand_mapalgo = field_validator("mapalgo", mode="before")(
-        _expand_enum_regex(Mapalgo)
-    )
-    _unique = field_validator("taxmode", "tintalgo", "mapalgo")(_unique_values)
-
-
-class CeceDataSweep(StrictModel):
-    streams: list[StreamSweep] = Field(min_length=1)
-
-    @field_validator("streams")
-    @classmethod
-    def _unique_stream_names(cls, streams: list[StreamSweep]) -> list[StreamSweep]:
-        names = [stream.name for stream in streams]
-        if len(names) != len(set(names)):
-            raise ValueError("duplicate stream names in sweep")
-        return streams
-
-
-class SpeciesEntrySweep(StrictModel):
-    """Swept dimensions attached to one species entry, selected by list
-    position (sweep list index i -> species.<name>[i]); {} skips an entry."""
-
-    operation: list[Operation] | None = Field(None, min_length=1)
-    category: list[Category] | None = Field(None, min_length=1)
-    vdist_method: list[VdistMethod] | None = Field(None, min_length=1)
-
-    _expand_operation = field_validator("operation", mode="before")(
-        _expand_enum_regex(Operation)
-    )
-    _expand_category = field_validator("category", mode="before")(
-        _expand_enum_regex(Category)
-    )
-    _expand_vdist_method = field_validator("vdist_method", mode="before")(
-        _expand_enum_regex(VdistMethod)
-    )
-    _unique = field_validator("operation", "category", "vdist_method")(_unique_values)
-
-
-class Sweep(StrictModel):
-    """Sweeps mirror the driver-config structure and attach to named streams
-    or positional species entries. The combination space is the cartesian
-    product of every attached value list."""
-
-    cece_data: CeceDataSweep | None = None
-    species: dict[str, list[SpeciesEntrySweep]] | None = None
 
 
 class AttributesAssertion(StrictModel):
@@ -163,7 +56,7 @@ class Assertions(StrictModel):
     )
     validate_filenames: bool = Field(
         True,
-        description="Assert NetCDF filenames match filename_pattern at the expected write times; false skips the test",
+        description="Assert NetCDF filenames match the application's naming at the expected write times; false skips the test",
     )
     validate_file_count: bool = Field(
         True,
@@ -172,9 +65,8 @@ class Assertions(StrictModel):
     validate_dimensions: bool = Field(
         True,
         description=(
-            "Assert every configured output variable carries the standard "
-            "(time, lev, lat, lon) dimensions in every NetCDF; false skips "
-            "the test"
+            "Assert every configured output variable carries the application's "
+            "standard dimensions in every NetCDF; false skips the test"
         ),
     )
     species: dict[str, SpeciesAssertions] | None = Field(
@@ -193,7 +85,8 @@ class Analysis(StrictModel):
     )
 
 
-def _valid_regex(value: str | None) -> str | None:
+def valid_regex(value: str | None) -> str | None:
+    """Validator helper shared with the adapters' selector models."""
     if value is not None:
         try:
             re.compile(value)
@@ -202,76 +95,12 @@ def _valid_regex(value: str | None) -> str | None:
     return value
 
 
-class StreamSweepSelector(StrictModel):
-    """Mirror of StreamSweep with regexes at the leaves: name selects the
-    stream target, sibling fields constrain that stream's swept values."""
-
-    name: str = Field(description="Regex (fullmatch) against the stream target's name")
-    taxmode: str | None = Field(
-        None, description="Regex (fullmatch) against the stream's swept taxmode value"
-    )
-    tintalgo: str | None = Field(
-        None, description="Regex (fullmatch) against the stream's swept tintalgo value"
-    )
-    mapalgo: str | None = Field(
-        None, description="Regex (fullmatch) against the stream's swept mapalgo value"
-    )
-
-    _regex = field_validator("name", "taxmode", "tintalgo", "mapalgo")(_valid_regex)
-
-
-class CeceDataSweepSelector(StrictModel):
-    streams: list[StreamSweepSelector] = Field(
-        min_length=1, description="Stream selector blocks; all must be satisfied"
-    )
-
-
-class SpeciesEntrySweepSelector(StrictModel):
-    """Mirror of SpeciesEntrySweep with regexes at the leaves; list position
-    selects the species entry index, as in the sweep."""
-
-    operation: str | None = Field(
-        None, description="Regex (fullmatch) against the entry's swept operation value"
-    )
-    category: str | None = Field(
-        None, description="Regex (fullmatch) against the entry's swept category value"
-    )
-    vdist_method: str | None = Field(
-        None,
-        description="Regex (fullmatch) against the entry's swept vdist_method value",
-    )
-
-    _regex = field_validator("operation", "category", "vdist_method")(_valid_regex)
-
-
-class SweepSelector(StrictModel):
-    """Mirror of Sweep: a structural pattern matched against a combination's
-    swept elements. Unspecified structure is unconstrained."""
-
-    cece_data: CeceDataSweepSelector | None = Field(
-        None, description="Stream selector blocks; None leaves streams unconstrained"
-    )
-    species: dict[str, list[SpeciesEntrySweepSelector]] | None = Field(
-        None,
-        description="Species-name regex -> positional entry selectors; None leaves species unconstrained",
-    )
-
-    @field_validator("species")
-    @classmethod
-    def _species_keys_are_regexes(
-        cls, species: dict[str, list[SpeciesEntrySweepSelector]] | None
-    ) -> dict[str, list[SpeciesEntrySweepSelector]] | None:
-        if species is not None:
-            for key in species:
-                _valid_regex(key)
-        return species
-
-
 class BaselineComparison(StrictModel):
     """One baseline comparison: a sweep-mirroring selector pairing exactly one
-    combination with a baseline ULID, modeled on nccmp at comparison time."""
+    combination with a baseline ULID, modeled on nccmp at comparison time.
+    The selector's shape is the adapter's (its subclass narrows the type)."""
 
-    sweep_selector: SweepSelector = Field(
+    sweep_selector: SerializeAsAny[SweepSelectorBase] = Field(
         description="Structural pattern selecting exactly one enumerated combination"
     )
     ulid: str = Field(description="ULID of the baseline under baseline_root_dir")
@@ -299,6 +128,11 @@ class Plotting(StrictModel):
 
 
 class SuiteConfig(StrictModel):
+    """A suite: which base config, for which application, swept how, asserted
+    and analysed how. Load through applications.registry.load_suite, which
+    picks the adapter's subclass; the base class alone describes a sweep-less
+    suite of an unspecified application."""
+
     name: str = Field(
         pattern=r"^[a-z0-9][a-z0-9-]*$",
         description=(
@@ -306,8 +140,15 @@ class SuiteConfig(StrictModel):
             "but this field is authoritative"
         ),
     )
+    application: str = Field(
+        "cece",
+        description=(
+            "Registry name of the application this suite tests; selects the "
+            "sweep and selector schemas and the driver config model"
+        ),
+    )
     config_path: Path = Field(
-        description="Base CECE driver config this suite's combinations are diffs of"
+        description="Base driver config this suite's combinations are diffs of"
     )
     analysis: Analysis = Field(
         default_factory=Analysis,
@@ -317,7 +158,8 @@ class SuiteConfig(StrictModel):
         default_factory=Plotting,
         description="Session-end spatial plotting; defaults apply when absent",
     )
-    baseline_comparisons: list[BaselineComparison] = Field(
+    # Sequence (covariant): the adapter's subclass narrows the entry type.
+    baseline_comparisons: Sequence[BaselineComparison] = Field(
         default_factory=list,
         description="Per-combination baseline comparisons; empty/absent disables",
     )
@@ -340,55 +182,58 @@ class SuiteConfig(StrictModel):
         gt=0,
         description="Per-combination driver timeout in seconds; capped by the run_timeout_s setting",
     )
-    sweep: Sweep = Field(
-        default_factory=Sweep,
+    # SerializeAsAny: dumped with the subclass's schema, so run.yaml records
+    # the application's sweep — the base type would serialise to nothing.
+    sweep: SerializeAsAny[SweepBase] = Field(
+        default_factory=SweepBase,
         description=(
-            "Enum dimensions and values defining the combination space; absent "
-            "or empty runs the base config as the single combination"
+            "Dimensions and values defining the combination space (the "
+            "application's schema); absent or empty runs the base config as the "
+            "single combination"
         ),
     )
 
-    @classmethod
-    def from_yaml(
-        cls,
-        path: Path,
+    def resolve_config_path(
+        self,
+        suite_path: Path,
+        *,
         config_search_path: Path | None = None,
         root_dir: Path | None = None,
-    ) -> SuiteConfig:
-        """Load a suite file; config_path is resolved to an absolute host path.
+        root_dir_token: str,
+    ) -> None:
+        """Resolve config_path to an absolute host path, in place.
 
-        A config_path starting with the literal ${CECE_ROOT_DIR} token anchors
-        on root_dir (the CECE checkout) — how checked-in suites reference
-        configs living in the external checkout portably. Otherwise, relative
-        values resolve against the suite file's own directory, or against
+        A config_path starting with the literal root-dir token (the
+        application's `${<PREFIX>ROOT_DIR}`) anchors on root_dir, the
+        application checkout — how checked-in suites reference configs
+        living in the external checkout portably. Otherwise, relative values
+        resolve against the suite file's own directory, or against
         config_search_path when set (prepended verbatim, so nested and ../
         paths work), and absolute values are used as-is. A missing target
-        fails here, before any containers run.
+        fails here, before any driver runs.
         """
-        with open(path) as f:
-            suite = cls.model_validate(yaml.safe_load(f))
-        parts = suite.config_path.parts
-        if parts and parts[0] == _ROOT_DIR_TOKEN:
+        parts = self.config_path.parts
+        if parts and parts[0] == root_dir_token:
             if root_dir is None:
+                variable = root_dir_token[2:-1]
                 raise ValueError(
-                    f"suite config_path {str(suite.config_path)!r} anchors on "
-                    f"{_ROOT_DIR_TOKEN}, but the CECE repository root is not "
-                    "configured; pass --cece-root-dir or set CECE_ROOT_DIR"
+                    f"suite config_path {str(self.config_path)!r} anchors on "
+                    f"{root_dir_token}, but the application checkout is not "
+                    f"configured; set {variable}"
                 )
             resolved = root_dir.joinpath(*parts[1:])
-        elif suite.config_path.is_absolute():
-            resolved = suite.config_path
+        elif self.config_path.is_absolute():
+            resolved = self.config_path
         elif config_search_path is not None:
-            resolved = config_search_path / suite.config_path
+            resolved = config_search_path / self.config_path
         else:
-            resolved = path.parent / suite.config_path
+            resolved = suite_path.parent / self.config_path
         resolved = resolved.resolve()
         if not resolved.is_file():
             raise FileNotFoundError(
-                f"suite config_path {str(suite.config_path)!r} resolved to {resolved}, which does not exist"
+                f"suite config_path {str(self.config_path)!r} resolved to {resolved}, which does not exist"
             )
-        suite.config_path = resolved
-        return suite
+        self.config_path = resolved
 
 
 class RunManifest(StrictModel):
@@ -400,14 +245,27 @@ class RunManifest(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     run_id: str  # session ULID; its timestamp encodes the run start
+    application: str = Field(
+        description="Registry name of the application the session ran"
+    )
     # Required-but-nullable: every writer must state the SHA explicitly —
     # null is the deliberate "no checkout configured" record (checkout-less
     # dry-runs), never an accidental omission.
-    cece_commit: str | None = Field(
+    application_commit: str | None = Field(
         description=(
-            "HEAD commit SHA of the CECE checkout the session ran against; "
-            "null only when no checkout is configured (a configured root "
-            "without a resolvable SHA fails the session at start)"
+            "HEAD commit SHA of the application checkout the session ran "
+            "against; null only when no checkout is configured (a configured "
+            "root without a resolvable SHA fails the session at start)"
+        ),
+    )
+    harness_version: str = Field(
+        description="Installed version of the harness package that produced the run"
+    )
+    harness_commit: str | None = Field(
+        description=(
+            "HEAD commit SHA of the harness checkout, `-dirty` when its working "
+            "tree had uncommitted changes; null when the harness did not run "
+            "from a git checkout"
         ),
     )
     platform: Platform = Field(
@@ -417,9 +275,29 @@ class RunManifest(StrictModel):
         description="How the driver was spawned: docker, native, or slurm (settings.runtime)"
     )
     modulefile: str | None = Field(
-        description="CECE modulefile the driver jobs loaded (slurm runtime); null otherwise"
+        description="Modulefile the driver jobs loaded (slurm runtime); null otherwise"
     )
-    suites: list[SuiteConfig]
+    # SerializeAsAny: each suite dumps with its adapter's schema (the sweep).
+    suites: list[SerializeAsAny[SuiteConfig]]
+
+    @field_validator("suites", mode="before")
+    @classmethod
+    def _dispatch_suites(cls, value: object) -> object:
+        # A run.yaml read back (a report tool, a round-trip test) validates
+        # each recorded suite through its adapter, like load_suite does.
+        # Local import: the registry imports the adapters, which import this.
+        from applications.registry import get_application
+
+        if not isinstance(value, list):
+            return value
+        return [
+            get_application(
+                entry.get("application", "cece")
+            ).suite_model.model_validate(entry)
+            if isinstance(entry, dict)
+            else entry
+            for entry in value
+        ]
 
     def to_yaml(self, path: Path) -> None:
         with open(path, "w") as f:

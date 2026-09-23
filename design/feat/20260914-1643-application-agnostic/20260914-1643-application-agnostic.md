@@ -940,6 +940,79 @@ artifacts (Verification, item 1) before step 1.
       `runtime: slurm`, `modulefile: cece_ursa.intelllvm`. Record the
       outcome in this document's implementation notes.
 
+## Implementation notes (2026-09-23)
+
+Built from the design at `239d47e`, red → green in the order of the plan,
+on `feat/application-agnostic`. Before the first code change every
+checked-in suite's `--dry-run` root was captured on the untouched tree
+(`--basetemp`, ten suites plus the slurm variant of `simple-maccity`).
+
+- **Harness suite 313 → 395 passed**, hooks pass (ruff check/format, mypy
+  over the new package, yamlfix/yamllint), and the suite is green again
+  with the hostname forced to `ufe01`. New test modules: `test_identity.py`,
+  `test_override.py`, `applications/test_registry.py`, and the adapter's
+  `applications/cece/test_cece_*.py` (moved from the generic modules where
+  they tested CECE code: combos, assertions, the sweep schema, selectors,
+  examples, the pipeline, the example suites, settings).
+- **Byte-identity**: the after tree, with the sanctioned additions
+  stripped (the `application` column in every CSV; `application`,
+  `harness_version`, `harness_commit` in run.yaml, its
+  `application_commit` renamed back, the suites' `application` field) and
+  ULIDs plus the pinned basetemp path normalised, diffs empty against the
+  before tree for all eleven variants. The normaliser stays in the scratch
+  space.
+- **Real runs**: `simple-maccity` in docker through pytest directly —
+  18 passed, 3 baseline skips — and once more through the CLI
+  (`config/local.yaml --stage harness --override
+  applications:cece:clone_dir=<checkout>`, the first override in anger);
+  `run.yaml` records `application: cece`, `application_commit`,
+  `harness_version: 0.1.0`, `harness_commit: <sha>-dirty`. Both templates
+  dry-run to four `<NN>-<stage>-cece.sh` scripts plus `run-config.yaml`;
+  the CI image rebuilt and ran the harness suite in-container (394 passed,
+  1 skipped, the usual no-checkout skip; the console script resolves).
+- **Deviations from the design, all small.** (1) The registry lives in
+  `applications/registry.py`, not `applications/__init__.py`: importing
+  `applications.base` from the shared models would otherwise execute the
+  package `__init__`, which imports the adapters, which import the shared
+  models — a cycle. (2) `SuiteConfig.baseline_comparisons` is a
+  `Sequence` (covariant) so `CeceSuiteConfig` can narrow the entry type;
+  `resolve_baseline_comparisons` takes a `Sequence` too. (3)
+  `RunManifest.suites` also dispatches on each entry's `application` when
+  a run.yaml is read back (a `mode="before"` validator with a local
+  registry import), so the round-trip test — and a future report tool —
+  gets the adapter's schema, not the base one. (4) The run-as-root MPI
+  environment stays in the generic docker prefix (harmless where not
+  needed), as the design allowed. (5) The `examples` ids moved from
+  `data:` into the adapter's section (`applications.cece.examples`), since
+  they are the application's; `data.warm_cartopy` stays harness-wide and
+  renders once, under the first application's data script. (6) The
+  YAML-1.2 boolean loader moved to `models/yaml.py`, shared by the CECE
+  config model and override-value parsing. (7) The adapter tests carry
+  unique basenames (`test_cece_*.py`) and no `__init__.py`: a package
+  marker under `src/tests/ufs_chem_assay/applications/` made pytest name
+  the module `applications.cece.test_…`, shadowing the real package. (8)
+  A second, inert adapter for the several-applications tests is
+  `tests/ufs_chem_assay/stubs.py`, registered per test with
+  `monkeypatch.setitem(REGISTRY, …)`; the mixed-selection `UsageError` in
+  the pytest session (two applications among the selected suites) cannot
+  be exercised end to end with one real adapter and is covered by the
+  unknown-application paths only — Phase C's adapter makes it testable.
+- **Settings mechanics**: the `CECE_*` fallback is two extra
+  pydantic-settings sources (`EnvSettingsSource` / `DotEnvSettingsSource`
+  with `env_prefix="CECE_"`) layered below the `ASSAY_*` ones, not
+  aliases; both settings classes are `extra="ignore"` because the shared
+  `.env` carries the other namespace's keys (pydantic-settings otherwise
+  rejects them as extras). Verified empirically before writing:
+  `ASSAY_` env > `CECE_` env > `ASSAY_` `.env` > `CECE_` `.env`.
+- **The user's `.env`** (gitignored) still works as written — its
+  `cece_root_dir` is the adapter's key and `cece_baseline_root_dir` the
+  fallback spelling of a harness key; its comments mention the retired
+  flag and are the user's to update.
+- **CI workflows**: `integration.yaml` exports
+  `ASSAY_ENABLE_BASELINE_COMPARISONS`; nothing else needed changing
+  (`CECE_ROOT_DIR` is still the adapter's variable).
+- **TODO (unchanged)**: the Ursa confirmation above.
+
 ---
 
 # appendix: original notes

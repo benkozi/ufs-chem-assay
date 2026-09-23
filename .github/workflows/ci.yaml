@@ -95,8 +95,8 @@ jobs:
           push: true
           tags: localhost:5000/ufs-chem-assay:ci
           cache-from: type=gha
-      # No CECE_* environment and no .env: the harness suite is hermetic
-      # and mocks CECE_ROOT_DIR itself where needed.
+      # No ASSAY_*/CECE_* environment and no .env: the harness suite is
+      # hermetic and mocks CECE_ROOT_DIR itself where needed.
       - name: harness tests
         run: |-
           docker run --rm -v "$GITHUB_WORKSPACE":/repo -w /repo \

@@ -6,15 +6,17 @@ Combinations of enum-valued driver options (declared in a suite file, e.g.
 `src/tests/config/suite/simple-maccity-suite.yaml`) are rendered to YAML
 configs and each runs in its own Docker container, followed by per-combo
 assertions on the output (exit code, file counts/names, attributes) and a
-statistics/plotting analysis step. Design rationale lives in
-[design/design.md](design/design.md).
+statistics/plotting analysis step. Everything that knows the application
+under test — its driver config, sweep schema, image, checkout, examples —
+lives in an application adapter; CECE is the shipped one (`application:
+cece`, the default in every suite and run config), and a session runs one
+application. Design rationale lives in [design/design.md](design/design.md).
 
 ## Prerequisites
 
 - A local checkout of the application under test (this harness lives in
-  its own repository; the application checkout is external). The harness
-  targets CECE today — its settings, driver path, and image names are
-  CECE's; generalizing them is the `Application` adapter follow-up. With:
+  its own repository; the application checkout is external). For CECE,
+  the shipped adapter:
   - Docker and the `cece/cece-dev` image available locally (build it via
     `./setup.sh` in the checkout) — or, on a machine without docker such
     as Ursa, the target driver built natively against the checkout's
@@ -35,24 +37,30 @@ uv run pre-commit install     # ruff check/format + mypy on every commit, plus
 # per-machine configuration lives in a .env file at the repo root
 # (gitignored; read when running pytest from the repo root):
 cat > .env <<'EOF'
-cece_root_dir=/path/to/CECE
-cece_baseline_root_dir=/path/to/cece-baselines
+cece_root_dir=/path/to/CECE                    # the CECE adapter's checkout
+assay_baseline_root_dir=/path/to/cece-baselines  # a harness-wide setting
 EOF
 ```
 
-Real environment variables override `.env` values, and the
-`--cece-root-dir` flag overrides both.
+Real environment variables override `.env` values. Harness-wide settings
+use the `ASSAY_` prefix (the older `CECE_` spellings still work as
+fallbacks); an application's own settings keep its prefix (`CECE_ROOT_DIR`,
+`CECE_MODULEFILE`, ...). There is no command-line flag for the checkout
+root: the variable, `.env`, or the run config (below) supplies it.
 
 ## Running
 
 ```sh
 uv run pytest                      # everything: integration + runner harness tests
+uv run pytest --application=cece   # only this application's suites (the default suite when
+                                   #   no --suite-config is given); a session runs one application
 uv run pytest -vs                  # show each driver's output as it runs
 uv run pytest -x                   # fail fast: stop at the first failure
 uv run pytest -k map-consd         # run a subset by combo name
 uv run pytest --combo-clean-root   # delete an existing output root first
 
 uv run pytest src/tests/ufs_chem_assay                  # harness only: fast, no docker
+uv run pytest src/tests/ufs_chem_assay/applications/cece  # the CECE adapter's tests only
 uv run pytest src/tests/test_driver_combos.py  # integration only (real docker)
 
 uv run mypy                        # type checking (all of src/; zero errors expected)
@@ -132,6 +140,13 @@ skipped with a `driver run failed: ...` reason.
 
 Options:
 
+- `--application=NAME` — run only suites of this application (registry
+  name; `cece` today), overriding `ASSAY_APPLICATION`. Without it the
+  application is inferred from the selected suites, which must all agree
+  (a mixed selection is a usage error naming the flag); with it, suites
+  of other applications are dropped from the selection with a log line.
+  A bare `--application=cece` with no `--suite-config` runs that
+  adapter's default suite (`simple-maccity-suite.yaml`).
 - `--suite-config=SELECTOR` — selects the suites to run. The selector
   is a regex fullmatched against each discovered suite's file name or its
   search-root-relative path; candidates are every `*.yaml` found
@@ -146,15 +161,17 @@ Options:
   ids suite-qualified (`ex3/base`) so `-k` selects per suite. There is no
   guard on broad selectors — a regex matching everything runs everything.
   Zero matches fail immediately with a listing; duplicate suite *names*
-  among the matches fail at session start. Default:
-  `simple-maccity-suite.yaml` — a bare `uv run pytest` always runs exactly
-  that one suite, however many suites exist. Use the `--suite-config=...`
-  form (with `=`), not a space.
+  among the matches fail at session start. Default: the application's
+  default suite (`simple-maccity-suite.yaml` for cece) — a bare `uv run
+  pytest` always runs exactly that one suite, however many suites exist.
+  Use the `--suite-config=...` form (with `=`), not a space.
 
   The suite YAML defines the suite's unique `name` (lowercase slug; by
-  convention suite `X` lives in `X-suite.yaml`), the base driver config
-  (`config_path`), the per-combination timeout (`timeout_s`), and the
-  sweep — which mirrors the driver-config structure, attaching swept
+  convention suite `X` lives in `X-suite.yaml`), its `application`
+  (optional, default `cece`; selects the sweep schema and the driver
+  config model), the base driver config (`config_path`), the
+  per-combination timeout (`timeout_s`), and the sweep — which, for CECE,
+  mirrors the driver-config structure, attaching swept
   values to named streams (or positional species entries). A sweep value
   may be a regex string instead of a list — `mapalgo: ".*"` expands
   (fullmatch, against the enum's values) to every value at load time,
@@ -164,8 +181,8 @@ Options:
 
   `sweep:` is optional: absent (or attaching no dimensions) the suite runs
   its base config as the single combination named `base`. A `config_path`
-  starting with the literal `${CECE_ROOT_DIR}` token anchors on the CECE
-  checkout (`--cece-root-dir` / `CECE_ROOT_DIR`) — how the checked-in
+  starting with the literal `${CECE_ROOT_DIR}` token — the application's
+  own root variable — anchors on the CECE checkout — how the checked-in
   `ex1-suite.yaml` … `ex7-suite.yaml` reference the shipped example
   configs (`examples/config/cece_config_ex*.yaml`) portably; using such a
   suite without a configured root fails immediately with the standard
@@ -177,16 +194,14 @@ Options:
   required — use it to validate a suite (notably the exhaustive one) before
   paying for containers. With the default output root it also needs no
   `CECE_ROOT_DIR`.
-- `--cece-root-dir=PATH` — host path of the CECE checkout, mounted at
-  `/work` in the driver container. Overrides `CECE_ROOT_DIR` when both are
-  set. One of the two is required to execute the driver (and to resolve an
-  explicit `--combo-output-root`); missing or nonexistent paths fail
-  immediately, before any test runs.
 - `--combo-output-root=PATH` — root artifact directory; relative paths
-  resolve against the CECE checkout (mounted at `/work` under docker), so
-  results persist there. Under docker an absolute path must lie under
-  `/work`; natively any absolute host path works. Default: a
-  pytest-managed temporary directory (nothing is written to the checkout).
+  resolve against the application checkout (`CECE_ROOT_DIR`, mounted at
+  `/work` under docker), so results persist there. Under docker an
+  absolute path must lie under the checkout mount; natively any absolute
+  host path works. Default: a pytest-managed temporary directory (nothing
+  is written to the checkout). The checkout root is required to execute
+  the driver and to resolve an explicit output root; a missing or
+  nonexistent path fails immediately, before any test runs.
 - `--combo-clean-root` — with an explicit `--combo-output-root`, remove an
   existing output root before running. Without it, an existing root is an
   error — prior results are never mixed with a new run. Only a previous
@@ -207,50 +222,98 @@ Options:
   (`<stem>.out` per example plus a session `examples-report.md`); they
   are not part of `test-report.csv`.
 
+## Configuring a run: `ufs-chem-assay run`
+
+A whole run — the application's source and build, its input data, and
+the pytest session — is described by **one YAML run config**, and every
+setting a run reads has a key in it: the `harness:` section mirrors every
+harness-wide setting (`ASSAY_*`) plus the pytest options, and each
+application's section under `applications:` mirrors its own settings
+(`CECE_*`) plus how to obtain and build it. The shipped templates
+(`config/local.yaml` for a laptop, `config/ursa.yaml` for Ursa) list every
+key and run as-is from a checkout laid out like the runbook:
+
+```yaml
+platform: ursa
+applications:            # one section per application in the run
+  cece:
+    git_url: git@github.com:benkozi/CECE.git
+    ref: fix/all-examples-pass
+    clone_dir:           # null: <root_dir>/CECE (CECE_ROOT_DIR)
+    modulefile: cece_ursa.intelllvm
+    ...
+harness:
+  suite_config: simple-maccity-suite.yaml
+  output_root: ufs-chem-assay-output
+  ...
+slurm: ...
+```
+
+**Command-line arguments are overrides on the file.** `--override`
+(`-o`) takes `key:path=value` entries, repeatable and several per flag;
+values are YAML scalars (`8`, `true`, `null`, `[-x, -k, base]`, or a
+plain string), and pydantic validates the merged result exactly as it
+validates the file, so a typo in a key path is the usual unknown-key
+error. Precedence, highest first: `--override` entries in command-line
+order, the named flags `--platform` and `--root-dir`, the file, then the
+derived defaults (hostname detection; the harness checkout's parent as
+the root).
+
+```sh
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --dry-run   # render only
+uv run ufs-chem-assay run --config-file=config/ursa.yaml             # clone, build,
+                                                                     #   data, harness
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage harness \
+  --override harness:suite_config=ex3-suite.yaml harness:pytest_args='[-x]' \
+             applications:cece:ref=develop slurm:qos=batch
+```
+
+Every invocation, dry runs included, writes the effective configuration
+— the file with every override merged in, as validated — to
+`<root_dir>/scripts/run-config.yaml` beside the rendered scripts; it
+re-runs the same configuration with no override list, and it is the way
+to check that an override landed.
+
+Stages (`--stage`, repeatable): `source` (clone or fast-forward the
+checkout), `build` (modules + cmake, or the application's container build
+script locally), `data` (the application's input data, the cartopy
+cache), `harness` (the pytest session). Running CECE's own tests is a
+separate task (issue #9). Each renders to
+`<root_dir>/scripts/<NN>-<stage>-<application>.sh` and runs with bash
+where the CLI runs; logs land in `<root_dir>/logs/`. A run config naming
+several applications is a comprehensive run: the stages render per
+application in stage-major order (every `source`, then every `build`,
+...) and the harness stage runs one pytest session per application, each
+under `<output_root>/<application>`; `--application NAME` (repeatable)
+narrows such a run. Run the harness stage under `tmux` — it lives as
+long as the suite. The CLI never deletes anything except the harness
+output root (`clean_root`), and never mutates an existing checkout
+without `update_source`.
+
 ## Running on RDHPC (Ursa)
 
 RDHPCS machines have no docker, so the target driver is built natively
 against the application's own modulefiles (`<checkout>/modulefiles/cece_ursa.*.lua`
 for CECE), and the harness runs on a **login node** submitting **one
-Slurm job per driver call** — the **slurm runtime**, selected by `CECE_RUNTIME=slurm` (the
-default once `CECE_PLATFORM` is anything but `local`; the platform is
+Slurm job per driver call** — the **slurm runtime**, selected by `ASSAY_RUNTIME=slurm` (the
+default once `ASSAY_PLATFORM` is anything but `local`; the platform is
 detected from the hostname and overridable). Each job is
 a rendered script, `<combo_id>.sbatch`, kept beside the combo's `.yaml`
 and `.out` so a failed job is reproducible by hand: `#SBATCH` directives
-from `CECE_SBATCH_ARGS` (account, QOS, partition, cpus) and the suite's
+from `ASSAY_SBATCH_ARGS` (account, QOS, partition, cpus) and the suite's
 `timeout_s` rounded up to whole minutes, the `CECE_MODULEFILE` load,
-the `CECE_JOB_ENV` exports, and the driver behind `srun --ntasks=1`
+the `ASSAY_JOB_ENV` exports, and the driver behind `srun --ntasks=1`
 (MPI inside a batch job needs Slurm's PMI endpoint). Two environments stay apart on
 purpose: the harness venv never sees the modulefile (spack-stack's
 `PYTHONPATH` would shadow its numpy), the driver always does. Analysis
-runs in the pytest process, so cap `CECE_DASK_NWORKERS` on a login node.
-`CECE_RUNTIME=native` runs the driver as a direct host process with
-`CECE_LAUNCHER` as an optional prefix — for a docker-less machine whose
+runs in the pytest process, so cap `ASSAY_DASK_NWORKERS` on a login node.
+`ASSAY_RUNTIME=native` runs the driver as a direct host process with
+`ASSAY_LAUNCHER` as an optional prefix — for a docker-less machine whose
 shell already suits both the harness and the driver; not Ursa, where the
 two environments conflict.
 
-`ufs-chem-assay run` assembles all of that from one YAML run config:
-
-```sh
-# the shipped template runs as-is: root_dir is derived as the parent of this
-# checkout ($ROOT/ufs-chem-assay beside $ROOT/CECE); --root-dir overrides it
-uv run ufs-chem-assay run --config-file=config/ursa.yaml --dry-run   # render only
-uv run ufs-chem-assay run --config-file=config/ursa.yaml             # clone, build,
-                                                                     #   data, harness
-uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage harness
-```
-
-Stages (`--stage`, repeatable): `source` (clone or fast-forward CECE),
-`build` (modules + cmake, or CECE's container build script locally),
-`data` (example downloads, cartopy cache), `harness` (the pytest
-session). Running CECE's own tests is a separate task (issue #9).
-Each renders to `<root_dir>/scripts/<NN>-<stage>.sh` and runs with bash
-where the CLI runs; logs land in `<root_dir>/logs/`. Run the harness
-stage under `tmux` — it lives as long as the suite. The CLI never
-deletes anything except the harness output root (`clean_root`), and
-never mutates an existing checkout without `update_source`.
-
-The same steps by hand are in [docs/ursa-runbook.md](docs/ursa-runbook.md).
+The run config above assembles all of that; the same steps by hand are
+in [docs/ursa-runbook.md](docs/ursa-runbook.md).
 
 ## CI and releases
 
@@ -265,8 +328,8 @@ Every pull request (and every push to `develop`/`main`, as post-merge
 validation) runs `.github/workflows/ci.yaml`: the toolchain container is
 built from `Dockerfile` (cached via the GitHub Actions buildx cache;
 never pushed off-runner), then pre-commit and the harness tests run
-inside it with no `CECE_*` environment at all. Reproduce exactly what CI
-runs locally:
+inside it with no `ASSAY_*`/`CECE_*` environment at all. Reproduce
+exactly what CI runs locally:
 
 ```sh
 docker buildx build --load -t ufs-chem-assay:dev .
@@ -287,14 +350,14 @@ container image built through the buildx cache and loaded as
 by CECE commit), the maccity dataset downloaded via CECE's own `ex3`
 data set (cached), and `simple-maccity-suite.yaml` runs for real.
 Baseline-comparison tests skip in CI
-(`CECE_ENABLE_BASELINE_COMPARISONS=false`: the baseline store has no
+(`ASSAY_ENABLE_BASELINE_COMPARISONS=false`: the baseline store has no
 public download source yet — re-enabling is a standing TODO). The full
 output root uploads as a workflow artifact on success and failure
-alike; `run.yaml` records the exact CECE commit (`cece_commit`). Mirror
-it locally:
+alike; `run.yaml` records the exact CECE commit (`application_commit`).
+Mirror it locally:
 
 ```sh
-CECE_ENABLE_BASELINE_COMPARISONS=false uv run pytest \
+ASSAY_ENABLE_BASELINE_COMPARISONS=false uv run pytest \
   src/tests/test_driver_combos.py --suite-config=simple-maccity-suite.yaml
 ```
 
@@ -324,17 +387,20 @@ directory per combination:
 
 ```
 <output-root>/
-  run.yaml                       # run manifest: session ULID, the CECE checkout's
-                                 #   HEAD commit SHA (cece_commit; null only when no
-                                 #   checkout is configured — a configured root that
-                                 #   is not a git checkout fails the session at
-                                 #   start), and every resolved suite in selection
-                                 #   order (one-element list when single)
+  run.yaml                       # run manifest: session ULID; the application and
+                                 #   its checkout's HEAD SHA (application_commit; null
+                                 #   only when no checkout is configured — a configured
+                                 #   root that is not a git checkout fails the session
+                                 #   at start); the harness's own harness_version and
+                                 #   harness_commit (HEAD, `-dirty` when edited; null
+                                 #   when not run from a git checkout); platform,
+                                 #   runtime, modulefile; and every resolved suite in
+                                 #   selection order (one-element list when single)
   combos.csv                     # effective-parameter table: one row per sweepable
                                  #   dimension per combo (columns: run_id, combo_id,
-                                 #   suite, name, target, field, value, swept)
-  test-report.csv                # per combo-test outcome: pytest_name, suite,
-                                 #   combo_id, combo, result (passed/failed/skipped)
+                                 #   application, suite, name, target, field, value, swept)
+  test-report.csv                # per combo-test outcome: pytest_name, application,
+                                 #   suite, combo_id, combo, result (passed/failed/skipped)
   descriptive_stats.csv          # all combos' statistics, concatenated (suite-stamped)
   stats-comparison.csv           # all combos' comparison rows, concatenated
   01K0Z8FJX2.../                 # one directory per combination (runtime ULID);
@@ -353,14 +419,17 @@ Test ids stay human-readable (`MACCITY.map-consd`, target-qualified;
 `<suite>/<combo>` in multi-suite sessions); directories are runtime ULIDs —
 minted per combo per run, time-ordered (directories list in creation order),
 never derived from content. The output root stays flat however many suites
-run. Cross-run joins use the recorded parameters, not ids: `combos.csv` is
+run. Every table carries the `application` column immediately before
+`suite`, so rows stay self-describing when CSVs from several output roots
+(a comprehensive run's per-application sessions) are concatenated. Cross-run
+joins use the recorded parameters, not ids: `combos.csv` is
 the **effective-parameter table** — for every combo, one row per sweepable
-dimension (per-stream `taxmode`/`tintalgo`/`mapalgo`, per-species-entry
-`operation`/`category`/`vdist_method`) with the value from the combo's
-generated config, `swept` marking actual sweep dimensions — so pinned
-parameters and sweep-less `base` combos join exactly like swept ones (join
-stats to parameters on `run_id` + `combo_id`, or across runs on `suite` +
-`combo` name).
+dimension (for CECE: per-stream `taxmode`/`tintalgo`/`mapalgo`,
+per-species-entry `operation`/`category`/`vdist_method`) with the value from
+the combo's generated config, `swept` marking actual sweep dimensions — so
+pinned parameters and sweep-less `base` combos join exactly like swept ones
+(join stats to parameters on `run_id` + `combo_id`, or across runs on
+`application` + `suite` + `combo` name).
 
 Every run gets a runtime-generated ULID (`run_id`) — logged at session
 start, written to `run.yaml`, and stamped into every stats row so CSVs from
@@ -375,8 +444,8 @@ statistics — so plotting requires `compute_descriptive_stats`. First-time
 boundary rendering downloads Natural Earth coastline/border data; offline,
 plots degrade to data-only maps with a warning.
 
-Stats CSV columns: `run_id`, `suite` (the suite's unique `name` from its
-yaml, e.g. `simple-maccity`), identity (`combo_id`, `combo`, `file`,
+Stats CSV columns: `run_id`, `application`, `suite` (the suite's unique
+`name` from its yaml, e.g. `simple-maccity`), identity (`combo_id`, `combo`, `file`,
 `variable`), the file's
 timestamp from its NetCDF time coordinate as `time` (ISO-8601) plus part
 columns `year`/`month`/`day`/`hour`/`minute`/`second` for easy time
@@ -385,26 +454,38 @@ statistics (`count`, `sum`, `mean`, `std`, `min`, `max`, `median`).
 
 ## Environment variables
 
-All `CECE_*` variables can also be set (lowercase works) in a gitignored
-`.env` file at the repo root, read when pytest runs from there; real
-environment variables override `.env`, and `--cece-root-dir` overrides both.
+Every variable can also be set (lowercase works) in a gitignored `.env`
+file at the repo root, read when pytest runs from there; real environment
+variables override `.env`. Two namespaces: **harness-wide** settings under
+`ASSAY_*` (the pre-adapter `CECE_*` spellings are accepted as fallbacks
+and go away when the second application adapter lands; `ASSAY_X` wins over
+`CECE_X` when both are set), and each **application's** settings under its
+own prefix — `CECE_*` for the CECE adapter.
+
+Harness-wide:
 
 | Env var                         | Meaning                                        | Default                          |
 |---------------------------------|------------------------------------------------|----------------------------------|
-| `CECE_PLATFORM`                 | machine the harness runs on (`local`, `ursa`)  | detected from the hostname, else `local` |
-| `CECE_RUNTIME`                  | how the driver is spawned (`docker`, `native`, `slurm`) | `docker` on `local`, `slurm` elsewhere |
-| `CECE_LAUNCHER`                 | command prefix for native driver runs (e.g. `srun --ntasks=1`) | empty (run directly) |
-| `CECE_SBATCH_ARGS`              | slurm runtime: sbatch options per driver job (`-A … -q … -p … -N 1 -n 1 -c …`) | empty |
-| `CECE_SLURM_QUEUE_WAIT_S`       | slurm runtime: seconds a driver job may wait in the queue before the harness cancels it (the run config's `slurm.queue_wait_s`) | `3600` |
-| `CECE_JOB_ENV`                  | slurm runtime: `NAME=VALUE` pairs exported inside each driver job | empty |
-| `CECE_MODULEFILE`               | CECE modulefile each driver job loads before the driver (recorded in `run.yaml`) | unset |
-| `CECE_DOCKER_IMAGE`             | container image (docker runtime)               | `cece/cece-dev`              |
-| `CECE_ROOT_DIR`                 | host CECE checkout root mounted at /work       | unset — required to run the driver; `--cece-root-dir` overrides |
-| `CECE_DRIVER_PATH`              | driver path inside the container               | `./build/cece_standalone_driver` |
-| `CECE_RUN_TIMEOUT_S`            | caps the suite `timeout_s` when smaller        | `300`                            |
-| `CECE_LOG_LEVEL`                | runner log level (`DEBUG`, `INFO`, ...)        | `INFO`                           |
-| `CECE_DASK_NWORKERS`            | dask workers for the stats cluster (int > 0)   | unset → all available cores      |
-| `CECE_BASELINE_ROOT_DIR`        | baselines live at `<root>/<ulid>/`             | unset → current working directory |
-| `CECE_ENABLE_BASELINE_COMPARISONS` | global switch; `false` skips comparison tests | `true`                           |
-| `CECE_CONFIG_SEARCH_PATH`       | prepended to relative `config_path` values     | unset                            |
-| `CECE_SUITE_CONFIG_SEARCH_PATH` | colon-separated dirs searched recursively for `--suite-config` selection | unset → built-in suite dir only |
+| `ASSAY_APPLICATION`             | the application the session runs (`--application` overrides) | unset → inferred from the selected suites |
+| `ASSAY_PLATFORM`                | machine the harness runs on (`local`, `ursa`)  | detected from the hostname, else `local` |
+| `ASSAY_RUNTIME`                 | how the driver is spawned (`docker`, `native`, `slurm`) | `docker` on `local`, `slurm` elsewhere |
+| `ASSAY_LAUNCHER`                | command prefix for native driver runs (e.g. `srun --ntasks=1`) | empty (run directly) |
+| `ASSAY_SBATCH_ARGS`             | slurm runtime: sbatch options per driver job (`-A … -q … -p … -N 1 -n 1 -c …`) | empty |
+| `ASSAY_SLURM_QUEUE_WAIT_S`      | slurm runtime: seconds a driver job may wait in the queue before the harness cancels it (the run config's `slurm.queue_wait_s`) | `3600` |
+| `ASSAY_JOB_ENV`                 | slurm runtime: `NAME=VALUE` pairs exported inside each driver job | empty |
+| `ASSAY_RUN_TIMEOUT_S`           | caps the suite `timeout_s` when smaller        | `300`                            |
+| `ASSAY_LOG_LEVEL`               | runner log level (`DEBUG`, `INFO`, ...)        | `INFO`                           |
+| `ASSAY_DASK_NWORKERS`           | dask workers for the stats cluster (int > 0)   | unset → all available cores      |
+| `ASSAY_BASELINE_ROOT_DIR`       | baselines live at `<root>/<ulid>/`             | unset → current working directory |
+| `ASSAY_ENABLE_BASELINE_COMPARISONS` | global switch; `false` skips comparison tests | `true`                          |
+| `ASSAY_CONFIG_SEARCH_PATH`      | prepended to relative `config_path` values     | unset                            |
+| `ASSAY_SUITE_CONFIG_SEARCH_PATH` | colon-separated dirs searched recursively for `--suite-config` selection | unset → built-in suite dir only |
+
+The CECE adapter:
+
+| Env var                         | Meaning                                        | Default                          |
+|---------------------------------|------------------------------------------------|----------------------------------|
+| `CECE_ROOT_DIR`                 | host CECE checkout root, mounted at `/work` under docker | unset — required to run the driver |
+| `CECE_DOCKER_IMAGE`             | container image (docker runtime)               | `cece/cece-dev`                  |
+| `CECE_DRIVER_PATH`              | driver path, relative to the checkout          | `./build/cece_standalone_driver` |
+| `CECE_MODULEFILE`               | modulefile each driver job loads before the driver (slurm runtime; recorded in `run.yaml`) | unset |

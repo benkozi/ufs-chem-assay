@@ -1,36 +1,15 @@
 from __future__ import annotations
 
-import re
 from enum import StrEnum, unique
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import yaml
 from pydantic import Field, model_validator
 
+from applications.base import DriverConfig
 from models.base import StrictModel
-
-# ── YAML loader that follows YAML 1.2 boolean rules (true/false only) ────────
-# PyYAML (YAML 1.1) also maps yes/no/on/off to booleans, which collides with
-# species names like "no". Strip the inherited bool resolver from SafeLoader
-# and replace it with one that only accepts true/false.
-
-_BOOL_TAG = "tag:yaml.org,2002:bool"
-_BOOL_RE = re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$")
-
-
-class _StrictBoolLoader(yaml.SafeLoader):
-    pass
-
-
-# Build a fresh copy of the parent's resolver map with the bool tag removed,
-# then add back a YAML-1.2-compatible resolver (true/false only).
-_StrictBoolLoader.yaml_implicit_resolvers = {
-    ch: [(tag, regexp) for tag, regexp in resolvers if tag != _BOOL_TAG]
-    for ch, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
-}
-_StrictBoolLoader.add_implicit_resolver(_BOOL_TAG, _BOOL_RE, list("tTfF"))
-
+from models.yaml import StrictBoolLoader
 
 # ── Enums ────────────────────────────────────────────────────────────────────
 
@@ -363,7 +342,7 @@ class Output(StrictModel):
 # ── Top-level ─────────────────────────────────────────────────────────────────
 
 
-class CeceConfig(StrictModel):
+class CeceConfig(DriverConfig):
     driver: Driver = Field(description="Simulation time and spatial grid settings")
     meteorology: dict[str, str] | None = Field(
         None,
@@ -394,9 +373,9 @@ class CeceConfig(StrictModel):
     output: Output | None = Field(None, description="NetCDF output configuration")
 
     @classmethod
-    def from_yaml(cls, path: Path) -> CeceConfig:
+    def from_yaml(cls, path: Path) -> Self:
         with open(path) as f:
-            return cls.model_validate(yaml.load(f, Loader=_StrictBoolLoader))
+            return cls.model_validate(yaml.load(f, Loader=StrictBoolLoader))
 
     def to_yaml(self, path: Path) -> None:
         with open(path, "w") as f:

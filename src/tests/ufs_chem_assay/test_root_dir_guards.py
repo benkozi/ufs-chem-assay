@@ -1,6 +1,6 @@
 """root_dir fail-fast guards, exercised through real pytest subprocesses (the
 same no-mocking style as the dry-run harness test). Every subprocess runs with
-the ambient CECE_* variables stripped and from a neutral cwd (tmp_path), so
+the ambient ASSAY_*/CECE_* variables stripped and from a neutral cwd (tmp_path), so
 neither the shell nor the repo-root .env file can supply configuration.
 """
 
@@ -17,10 +17,10 @@ _USAGE_ERROR = 4  # pytest.ExitCode.USAGE_ERROR
 def _run_pytest(
     args: list[str], cwd: Path, env_overrides: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CECE_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CECE_", "ASSAY_"))}
     # Explicit platform: the child cannot inherit the in-process hostname
     # patch, and on an RDHPC login node detection would pick that machine.
-    env["CECE_PLATFORM"] = "local"
+    env["ASSAY_PLATFORM"] = "local"
     env |= env_overrides or {}
     return subprocess.run(
         [
@@ -65,7 +65,7 @@ def test_driver_execution_without_root_dir_is_usage_error(tmp_path: Path) -> Non
     result = _run_pytest([], tmp_path)
     assert result.returncode == _USAGE_ERROR, result.stdout + result.stderr
     assert "CECE_ROOT_DIR" in result.stderr
-    assert "--cece-root-dir" in result.stderr
+    assert "--cece-root-dir" not in result.stderr  # the flag is retired
 
 
 def test_driver_execution_with_nonexistent_root_dir_is_usage_error(
@@ -90,35 +90,28 @@ def test_bare_dry_run_passes_with_no_environment(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_cece_root_dir_flag_satisfies_requirement(tmp_path: Path) -> None:
+def test_the_root_dir_flag_is_retired(tmp_path: Path) -> None:
+    # CECE_ROOT_DIR (or .env, or the run config) is the root's one source in
+    # the pytest process; the old --cece-root-dir is an unknown option.
+    result = _run_pytest(["--dry-run", f"--cece-root-dir={tmp_path}"], tmp_path)
+    assert result.returncode == _USAGE_ERROR, result.stdout + result.stderr
+    assert "unrecognized arguments: --cece-root-dir" in result.stderr
+
+
+def test_env_root_dir_satisfies_requirement(tmp_path: Path) -> None:
     _git_checkout(tmp_path)
     result = _run_pytest(
-        ["--dry-run", "--combo-output-root=combo_runs", f"--cece-root-dir={tmp_path}"],
+        ["--dry-run", "--combo-output-root=combo_runs"],
         tmp_path,
+        {"CECE_ROOT_DIR": str(tmp_path)},
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert (tmp_path / "combo_runs" / "run.yaml").is_file()
 
 
-def test_flag_wins_over_env(tmp_path: Path) -> None:
-    env_root = tmp_path / "from-env"
-    flag_root = tmp_path / "from-flag"
-    env_root.mkdir()
-    flag_root.mkdir()
-    _git_checkout(flag_root)  # only the winning root must be a checkout
-    result = _run_pytest(
-        ["--dry-run", "--combo-output-root=combo_runs", f"--cece-root-dir={flag_root}"],
-        tmp_path,
-        {"CECE_ROOT_DIR": str(env_root)},
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert (flag_root / "combo_runs" / "run.yaml").is_file()
-    assert not (env_root / "combo_runs").exists()
-
-
 def test_non_git_root_dir_is_usage_error(tmp_path: Path) -> None:
     # A configured root that is not a git checkout is fatal at sessionstart:
-    # the run must record the CECE commit it ran against.
+    # the run must record the application commit it ran against.
     plain = tmp_path / "not-a-checkout"
     plain.mkdir()
     result = _run_pytest(["--dry-run"], tmp_path, {"CECE_ROOT_DIR": str(plain)})

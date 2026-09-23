@@ -5,10 +5,11 @@ from pathlib import Path, PurePosixPath
 
 from pytest_mock import MockerFixture
 
+from applications.cece.config import CeceConfig
+from applications.cece.settings import CeceSettings
+from applications.registry import get_application, load_suite
 from assertions import assert_nc_file_count, assert_nc_filenames
-from combos import build_config, enumerate_combos, write_combos_csv
-from models.cece_config import CeceConfig
-from models.suite_config import SuiteConfig
+from combos import enumerate_combos, write_combos_csv
 from platforms import Platform
 from runner import run_driver
 from settings import Settings
@@ -24,10 +25,12 @@ def test_maccity_pipeline_runs_all_combos_mocked(
         "runner.subprocess.check_output",
         return_value=b"INFO: CECE Finalize completed successfully\n",
     )
-    settings = Settings(platform=Platform.LOCAL, root_dir=tmp_path)
-    suite = SuiteConfig.from_yaml(suite_path)
+    app = get_application("cece")
+    settings = Settings(platform=Platform.LOCAL)
+    app_settings = CeceSettings(root_dir=tmp_path)
+    suite = load_suite(suite_path)
     base_config = CeceConfig.from_yaml(suite.config_path)
-    combos = enumerate_combos(suite.sweep, base_config)
+    combos = enumerate_combos(app.dimensions(suite.sweep, base_config))
     assert [combo.name for combo in combos] == [
         "MACCITY.map-bilinear",
         "MACCITY.map-consd",
@@ -39,13 +42,17 @@ def test_maccity_pipeline_runs_all_combos_mocked(
             (
                 suite.name,
                 combo,
-                build_config(
-                    combo, output_directory=".", config_path=suite.config_path
+                app.effective_parameters(
+                    combo,
+                    app.build_config(
+                        combo, output_directory=".", config_path=suite.config_path
+                    ),
                 ),
             )
             for combo in combos
         ],
         run_id="01JZZZZZZZZZZZZZZZZZZZZZZZ",
+        application="cece",
         csv_path=tmp_path / "combos.csv",
     )
     assert set(mapping["combo_id"]) == {combo.combo_id for combo in combos}
@@ -60,7 +67,7 @@ def test_maccity_pipeline_runs_all_combos_mocked(
         combo_dir.mkdir()
         container_dir = container_root / combo.combo_id
 
-        config = build_config(
+        config = app.build_config(
             combo, output_directory=str(container_dir), config_path=suite.config_path
         )
         yaml_path = combo_dir / f"{combo.combo_id}.yaml"
@@ -78,6 +85,8 @@ def test_maccity_pipeline_runs_all_combos_mocked(
         out_path = combo_dir / f"{combo.combo_id}.out"
         run_driver(
             settings,
+            app,
+            app_settings,
             driver_yaml=container_dir / f"{combo.combo_id}.yaml",
             out_path=out_path,
             timeout_s=effective_timeout,
@@ -89,9 +98,10 @@ def test_maccity_pipeline_runs_all_combos_mocked(
         # hour 1), then run the suite's assertions in derived mode.
         for name in maccity_expected_filenames:
             (combo_dir / name).touch()
-        assert_nc_file_count(combo_dir, config, suite.assertions.expected_nc_file_count)
+        assert suite.assertions.expected_nc_file_count is None  # derived
+        assert_nc_file_count(combo_dir, app.expected_output_count(config))
         assert suite.assertions.validate_filenames
-        assert_nc_filenames(combo_dir, config)
+        assert_nc_filenames(combo_dir, app.expected_output_filenames(config))
 
     assert check_output.call_count == 3
     for call in check_output.call_args_list:
