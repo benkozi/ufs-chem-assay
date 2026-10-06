@@ -11,7 +11,7 @@
 # (secrets SEMVER_APP_ID / SEMVER_APP_PRIVATE_KEY; Contents: Read and
 # write; listed as an always-bypass actor on the ruleset) does the push.
 # github.token is the fallback so previews — including fork PRs, which get
-# no secrets — always work. verify-credentials gates production runs;
+# no secrets — always work. release-verify gates production runs;
 # verify-secrets.yml re-runs the same checks daily.
 #
 # Permissions come from the calling job (contents: write for the release
@@ -38,22 +38,21 @@ on:
     outputs:
       current_version:
         description: Version before this evaluation
-        value: ${{ jobs.release.outputs.current_version }}
+        value: ${{ jobs.release-psr.outputs.current_version }}
       new_release_version:
         description: Version of the (projected) release
-        value: ${{ jobs.release.outputs.new_release_version }}
+        value: ${{ jobs.release-psr.outputs.new_release_version }}
       new_release_published:
         description: Whether a release was (would be) published
-        value: ${{ jobs.release.outputs.new_release_published }}
+        value: ${{ jobs.release-psr.outputs.new_release_published }}
       is_prerelease:
         description: Whether the release is a prerelease
-        value: ${{ jobs.release.outputs.is_prerelease }}
+        value: ${{ jobs.release-psr.outputs.is_prerelease }}
       tag:
         description: Git tag of the (projected) release
-        value: ${{ jobs.release.outputs.tag }}
+        value: ${{ jobs.release-psr.outputs.tag }}
 jobs:
-  verify-credentials:
-    name: Verify Semantic Release Credentials
+  release-verify:
     # Never on forks: they have no App and must never release.
     if: github.repository == 'benkozi/ufs-chem-assay'
     runs-on: ubuntu-latest
@@ -89,14 +88,13 @@ jobs:
         run: |
           python3 .github/workflows/scripts/verify_semantic_release_credentials.py check-permissions \
             --branches "$BRANCHES"
-  release:
-    name: Semantic Release
+  release-psr:
     needs:
-      - verify-credentials
+      - release-verify
     # skipped = fork (never releases; previews still run).
     if: >-
       !cancelled() &&
-      (needs.verify-credentials.result == 'success' || needs.verify-credentials.result == 'skipped')
+      (needs.release-verify.result == 'success' || needs.release-verify.result == 'skipped')
     runs-on: ubuntu-latest
     outputs:
       current_version: ${{ steps.eval.outputs.current_version }}
