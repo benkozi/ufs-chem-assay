@@ -15,6 +15,12 @@
 - **never, ever, ever** commit code or use git actions that perform updates - the user always updates
 - always prefer the harness's logging implementation over raw python print statements
 - no need for wrapping when writing to the `./design` folder. wrapping will be handled by the user's ide
+- persist the agy session id and resume command in any design/refined files for resumability
+
+# session
+
+- **Session ID**: `<session-id>`
+- **Resume Command**: `agy --resume <session-id>`
 
 ## testing
 
