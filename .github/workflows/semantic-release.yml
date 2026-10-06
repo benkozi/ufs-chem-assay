@@ -1,35 +1,202 @@
-# Manual-only releases: dispatch this workflow against develop (produces
-# X.Y.Z-rc.N prereleases) or main (full releases) via the Run-workflow
-# branch picker; any other ref fails the guard. The official PSR action
-# reads [tool.semantic_release] from pyproject.toml and pushes the
-# version-bump commit + tag + CHANGELOG.md update back to the dispatched
-# branch (contents: write). vcs_release: false means no GitHub Release
-# object; nothing is published to PyPI or anywhere else. Dispatch only on
-# a green branch — this workflow deliberately does not gate on ci.yaml.
+# Reusable release workflow (workflow_call only; ci.yaml calls it). Two
+# modes: dry_run (release-preview on PRs / manual dispatch) evaluates what
+# python-semantic-release would do for a merge commit AND for a squash
+# merge of the PR, with nothing committed, tagged, or pushed; production
+# (push to develop/main) lets the official PSR v10 action push the
+# version-bump commit + tag + CHANGELOG.md back to the branch. No GitHub
+# Release object (vcs_release: false), nothing published anywhere.
+#
+# Credentials: the develop ruleset requires pull requests with no bypass
+# actors, so github.token cannot push the bump commit. A GitHub App
+# (secrets SEMVER_APP_ID / SEMVER_APP_PRIVATE_KEY; Contents: Read and
+# write; listed as an always-bypass actor on the ruleset) does the push.
+# github.token is the fallback so previews — including fork PRs, which get
+# no secrets — always work. verify-credentials gates production runs;
+# verify-secrets.yml re-runs the same checks daily.
+#
+# Permissions come from the calling job (contents: write for the release
+# job in ci.yaml, read otherwise).
 name: semantic-release
 on:
-  workflow_dispatch:
-permissions:
-  contents: write
+  workflow_call:
+    inputs:
+      dry_run:
+        description: Preview only — never commit, tag, or push
+        required: false
+        type: boolean
+        default: false
+      target_branch:
+        description: Branch whose release rules apply (develop, main)
+        required: false
+        type: string
+        default: ''
+      pr_title:
+        description: PR title — the squash-merge commit subject to preview
+        required: false
+        type: string
+        default: ''
+    outputs:
+      current_version:
+        description: Version before this evaluation
+        value: ${{ jobs.release.outputs.current_version }}
+      new_release_version:
+        description: Version of the (projected) release
+        value: ${{ jobs.release.outputs.new_release_version }}
+      new_release_published:
+        description: Whether a release was (would be) published
+        value: ${{ jobs.release.outputs.new_release_published }}
+      is_prerelease:
+        description: Whether the release is a prerelease
+        value: ${{ jobs.release.outputs.is_prerelease }}
+      tag:
+        description: Git tag of the (projected) release
+        value: ${{ jobs.release.outputs.tag }}
 jobs:
-  release:
+  verify-credentials:
+    name: Verify Semantic Release Credentials
+    # Never on forks: they have no App and must never release.
+    if: github.repository == 'benkozi/ufs-chem-assay'
     runs-on: ubuntu-latest
     steps:
-      - name: Guard — releases run only against develop or main
+      - uses: actions/checkout@v7
+      - name: Validate secrets presence
+        id: check
+        env:
+          SEMVER_APP_ID: ${{ secrets.SEMVER_APP_ID }}
+          SEMVER_APP_PRIVATE_KEY: ${{ secrets.SEMVER_APP_PRIVATE_KEY }}
+        # Previews tolerate missing secrets (skip_verification=true);
+        # production runs fail here before PSR touches anything.
         run: |
-          case "$GITHUB_REF_NAME" in
-            develop|main) ;;
-            *)
-              echo "::error::dispatched against '$GITHUB_REF_NAME'; pick develop or main"
-              exit 1
-              ;;
-          esac
+          python3 .github/workflows/scripts/verify_semantic_release_credentials.py check-secrets \
+            ${{ (inputs.dry_run || github.event_name == 'pull_request') && '--allow-missing' || '' }}
+      - name: Generate GitHub App token
+        if: steps.check.outputs.skip_verification != 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.SEMVER_APP_ID }}
+          private-key: ${{ secrets.SEMVER_APP_PRIVATE_KEY }}
+      - name: Verify repository write and ruleset bypass
+        if: steps.check.outputs.skip_verification != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          APP_ID: ${{ secrets.SEMVER_APP_ID }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          BRANCHES: ${{ inputs.target_branch || github.base_ref || github.ref_name }}
+        run: |
+          python3 .github/workflows/scripts/verify_semantic_release_credentials.py check-permissions \
+            --branches "$BRANCHES"
+  release:
+    name: Semantic Release
+    needs:
+      - verify-credentials
+    # skipped = fork (never releases; previews still run).
+    if: >-
+      !cancelled() &&
+      (needs.verify-credentials.result == 'success' || needs.verify-credentials.result == 'skipped')
+    runs-on: ubuntu-latest
+    outputs:
+      current_version: ${{ steps.eval.outputs.current_version }}
+      new_release_version: >-
+        ${{ steps.release-prod.outputs.version ||
+            steps.release-merge.outputs.version ||
+            steps.release-squash.outputs.version }}
+      new_release_published: >-
+        ${{ steps.release-prod.outputs.released ||
+            steps.release-merge.outputs.released ||
+            steps.release-squash.outputs.released }}
+      is_prerelease: ${{ steps.eval.outputs.is_prerelease }}
+      tag: >-
+        ${{ steps.release-prod.outputs.tag ||
+            steps.release-merge.outputs.tag ||
+            steps.release-squash.outputs.tag }}
+    env:
+      SEMVER_APP_ID: ${{ secrets.SEMVER_APP_ID }}
+      SEMVER_APP_PRIVATE_KEY: ${{ secrets.SEMVER_APP_PRIVATE_KEY }}
+      PREVIEW: ${{ inputs.dry_run || github.event_name == 'pull_request' }}
+      TARGET: ${{ inputs.target_branch || github.base_ref || github.ref_name }}
+    steps:
+      - name: Generate GitHub App token (if configured)
+        id: app-token
+        if: env.SEMVER_APP_ID != '' && env.SEMVER_APP_PRIVATE_KEY != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ env.SEMVER_APP_ID }}
+          private-key: ${{ env.SEMVER_APP_PRIVATE_KEY }}
+      # PSR pushes through the checkout's persisted credential: the App
+      # token when configured (bypasses the ruleset; its push re-triggers
+      # CI, which ci.yaml/integration.yaml gate on the bump-commit marker).
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token || github.token }}
           persist-credentials: true
-      - name: Python Semantic Release
+      # --- preview: merge-commit projection ---------------------------------
+      - name: Prepare branch for merge preview
+        if: env.PREVIEW == 'true'
+        env:
+          PR_TITLE: ${{ inputs.pr_title }}
+        run: python3 .github/workflows/scripts/prepare_release_preview.py --strategy merge
+      - name: Python Semantic Release (merge preview)
+        if: env.PREVIEW == 'true'
+        id: release-merge
         uses: python-semantic-release/python-semantic-release@v10
         with:
-          github_token: ${{ github.token }}
+          github_token: ${{ steps.app-token.outputs.token || github.token }}
+          commit: false
+          tag: false
+          push: false
           vcs_release: false
+      - name: Capture merge preview diff
+        if: env.PREVIEW == 'true'
+        run: git diff HEAD > /tmp/merge_preview.diff || true
+      # --- preview: squash-merge projection (needs the PR title) ------------
+      - name: Prepare branch for squash preview
+        if: env.PREVIEW == 'true' && inputs.pr_title != ''
+        env:
+          PR_TITLE: ${{ inputs.pr_title }}
+        run: python3 .github/workflows/scripts/prepare_release_preview.py --strategy squash
+      - name: Python Semantic Release (squash preview)
+        if: env.PREVIEW == 'true' && inputs.pr_title != ''
+        id: release-squash
+        uses: python-semantic-release/python-semantic-release@v10
+        with:
+          github_token: ${{ steps.app-token.outputs.token || github.token }}
+          commit: false
+          tag: false
+          push: false
+          vcs_release: false
+      - name: Capture squash preview diff
+        if: env.PREVIEW == 'true' && inputs.pr_title != ''
+        run: git diff HEAD > /tmp/squash_preview.diff || true
+      # --- production --------------------------------------------------------
+      - name: Python Semantic Release (production)
+        if: env.PREVIEW != 'true'
+        id: release-prod
+        uses: python-semantic-release/python-semantic-release@v10
+        with:
+          github_token: ${{ steps.app-token.outputs.token || github.token }}
+          commit: true
+          tag: true
+          push: true
+          vcs_release: false
+      - name: Evaluate and report release
+        id: eval
+        if: always()
+        env:
+          DRY_RUN: ${{ env.PREVIEW }}
+          VERSION: ${{ steps.release-prod.outputs.version }}
+          TAG: ${{ steps.release-prod.outputs.tag }}
+          RELEASED: ${{ steps.release-prod.outputs.released }}
+          VERSION_MERGE: ${{ steps.release-merge.outputs.version }}
+          TAG_MERGE: ${{ steps.release-merge.outputs.tag }}
+          RELEASED_MERGE: ${{ steps.release-merge.outputs.released }}
+          VERSION_SQUASH: ${{ steps.release-squash.outputs.version }}
+          TAG_SQUASH: ${{ steps.release-squash.outputs.tag }}
+          RELEASED_SQUASH: ${{ steps.release-squash.outputs.released }}
+          DIFF_MERGE_FILE: /tmp/merge_preview.diff
+          DIFF_SQUASH_FILE: /tmp/squash_preview.diff
+        run: python3 .github/workflows/scripts/report_release.py
