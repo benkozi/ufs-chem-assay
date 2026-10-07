@@ -52,8 +52,8 @@ _INSTALL_HINT = (
 
 
 def s3_uri_from_arn(arn: str) -> str:
-    """`arn:aws:s3:::bucket[/key]` -> `s3://bucket[/key]`; anything else is a
-    ValueError (only S3 bucket/object ARNs have this shape)."""
+    """`arn:aws:s3:::bucket[/key]` -> `s3://bucket[/key]`: only S3 bucket and
+    object ARNs have this shape."""
     if not arn.startswith(_S3_ARN_PREFIX) or len(arn) == len(_S3_ARN_PREFIX):
         raise ValueError(f"not an S3 bucket ARN: {arn!r}")
     return _S3_SCHEME + arn[len(_S3_ARN_PREFIX) :]
@@ -122,8 +122,8 @@ class S3SyncConfig(BaseModel):
         None,
         gt=0,
         description=(
-            "subprocess timeout; the child is killed and TimeoutExpired raised "
-            "— re-run the same config to resume. None waits indefinitely"
+            "subprocess timeout; the child is killed — re-run the same config "
+            "to resume. None waits indefinitely"
         ),
     )
     aws_executable: str = Field(
@@ -206,12 +206,10 @@ class S3SyncResult(BaseModel):
 
 def sync(config: S3SyncConfig) -> S3SyncResult:
     """Run one `aws s3 sync`, the child inheriting this process's environment
-    (credentials and region are resolved by the CLI itself).
-
-    Raises FileNotFoundError (aws not on PATH, with the install hint),
-    CalledProcessError (nonzero exit — including the CLI's own "Unable to
-    locate credentials" — with the output attached), TimeoutExpired
-    (timeout_s). The argv carries no secrets; nothing else is logged.
+    (credentials and region are resolved by the CLI itself). A nonzero exit —
+    including the CLI's own "Unable to locate credentials" — fails the call
+    with the output attached. The argv carries no secrets; nothing else is
+    logged.
     """
     executable = shutil.which(config.aws_executable)
     if executable is None:

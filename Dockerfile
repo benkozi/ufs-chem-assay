@@ -22,9 +22,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # AWS CLI v2 (src/s3_sync.py shells out to `aws s3 sync`; the data_integration
-# test runs in this image by hand). v1 on PyPI is in maintenance mode, v2 is
-# not on PyPI: the official zip per architecture (uname -m: x86_64/aarch64).
-# The layer caches whichever version it first fetched until this text changes.
+# test runs in this image by hand): the official zip per architecture
+# (uname -m: x86_64/aarch64). The layer caches whichever version it first
+# fetched until this text changes.
 RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
     && unzip -q /tmp/awscliv2.zip -d /tmp \
     && /tmp/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli \

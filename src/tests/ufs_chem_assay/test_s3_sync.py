@@ -4,9 +4,8 @@ mocked. Credentials are the AWS CLI's own business (its credentials file,
 profiles, environment, SSO); the wrapper never sees them.
 
 The one live test (`data_integration`) talks to the real private test
-bucket, arn:aws:s3:::ufs-chem, and is deselected unless asked for:
-
-    uv run pytest -m data_integration src/tests/ufs_chem_assay/test_s3_sync.py
+bucket, arn:aws:s3:::ufs-chem, and is deselected unless asked for with
+`-m data_integration`.
 """
 
 from __future__ import annotations
@@ -22,16 +21,14 @@ from pydantic import ValidationError
 from pytest_mock import MockerFixture
 from ulid import ULID
 
-from logs import LOGGER_NAME
 from s3_sync import S3SyncConfig, S3SyncResult, s3_uri_from_arn, sync
+from s3_sync import logger as s3_logger
 
 # The private test bucket: always this one (user direction, 2026-10-06), as a
 # constant rather than configuration. The live test writes only under
 # TEST_PREFIX/<ULID>/ and empties exactly that.
 TEST_BUCKET_ARN = "arn:aws:s3:::ufs-chem"
 TEST_PREFIX = "ufs-chem-assay-tests"
-
-_LOGGER = f"{LOGGER_NAME}.s3_sync"
 
 
 @pytest.fixture()
@@ -236,7 +233,7 @@ def test_sync_runs_exactly_once_with_resolved_executable(
             argv, output=b"upload: probe.txt to s3://ufs-chem/prefix/probe.txt\n"
         ),
     )
-    with caplog.at_level(logging.DEBUG, logger=_LOGGER):
+    with caplog.at_level(logging.DEBUG, logger=s3_logger.name):
         result = sync(config)
 
     assert run.call_count == 1
@@ -267,7 +264,7 @@ def test_sync_dry_run_passes_the_flag_and_logs_the_plan_at_info(
         "s3_sync.subprocess.run",
         side_effect=lambda argv, **kw: _completed(argv, output=plan),
     )
-    with caplog.at_level(logging.INFO, logger=_LOGGER):
+    with caplog.at_level(logging.INFO, logger=s3_logger.name):
         result = sync(
             S3SyncConfig(source=local_dir, destination="s3://ufs-chem/x", dry_run=True)
         )
@@ -292,7 +289,7 @@ def test_sync_failure_raises_with_output(
     )
     config = S3SyncConfig(source=local_dir, destination="s3://ufs-chem/x")
     with (
-        caplog.at_level(logging.ERROR, logger=_LOGGER),
+        caplog.at_level(logging.ERROR, logger=s3_logger.name),
         pytest.raises(subprocess.CalledProcessError) as excinfo,
     ):
         sync(config)
@@ -367,7 +364,6 @@ def test_private_bucket_round_trip(tmp_path: Path) -> None:
     prove the second upload is a no-op, and empty the prefix — nothing left
     behind, even on a failed assertion. Fails (never skips) without
     credentials the CLI can find, or without the aws CLI."""
-    logger = logging.getLogger(_LOGGER)
     ulid = str(ULID())
     prefix = f"{s3_uri_from_arn(TEST_BUCKET_ARN)}/{TEST_PREFIX}/{ulid}/"
 
@@ -407,4 +403,6 @@ def test_private_bucket_round_trip(tmp_path: Path) -> None:
             if body_passed:
                 raise
             # Best effort: the body's own failure is the one to report.
-            logger.exception("cleanup of %s failed after the test body failed", prefix)
+            s3_logger.exception(
+                "cleanup of %s failed after the test body failed", prefix
+            )

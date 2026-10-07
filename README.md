@@ -28,8 +28,7 @@ application. Design rationale lives in [design/design.md](design/design.md).
   [S3 data sync](#s3-data-sync)): the [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
   on `PATH` — a laptop installs it with its package manager, the Ursa
   runbook installs it user-locally, and the toolchain image
-  (`Dockerfile`) carries it. v1 (`pip install awscli`) is in
-  maintenance mode and is not what this harness targets.
+  (`Dockerfile`) carries it.
 
 ## Setup
 
@@ -65,8 +64,7 @@ uv run pytest -x                   # fail fast: stop at the first failure
 uv run pytest -k map-consd         # run a subset by combo name
 uv run pytest --combo-clean-root   # delete an existing output root first
 
-uv run pytest src/tests/ufs_chem_assay                  # harness only: fast, no docker, no network
-                                                        #   (the live S3 test is deselected: `1 deselected`)
+uv run pytest src/tests/ufs_chem_assay                  # harness only: fast, no docker
 uv run pytest src/tests/ufs_chem_assay/applications/cece  # the CECE adapter's tests only
 uv run pytest src/tests/test_driver_combos.py  # integration only (real docker)
 
