@@ -79,5 +79,7 @@ def test_readme_documents_the_new_surfaces() -> None:
         "CECE_ROOT_DIR",
         "harness_commit",
         "applications:",
+        "arn:aws:s3:::ufs-chem",
+        "data_integration",
     ):
         assert needle in text, needle
