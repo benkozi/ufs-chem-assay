@@ -40,6 +40,33 @@ No root, no conda, no `rdhpcs-python` module needed. Put the three
 `export`s in your shell profile (or a small `source`-able file under
 `$ROOT`) so batch scripts and later logins see them.
 
+### AWS CLI (once, for S3 data sync)
+
+The harness syncs data with `aws s3 sync` (today: the `data_integration`
+test against the private `ufs-chem` bucket). Check for a site-provided
+binary first, then install v2 user-locally if there is none:
+
+```bash
+which aws && aws --version                            # present? note the version and skip the install
+curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip
+unzip -q /tmp/awscliv2.zip -d /tmp
+/tmp/aws/install --install-dir $ROOT/aws-cli --bin-dir $ROOT/bin
+rm -rf /tmp/aws /tmp/awscliv2.zip
+export PATH="$ROOT/bin:$PATH"                         # beside the uv exports above
+aws --version
+```
+
+Credentials are the CLI's own: `aws configure` (or `aws sso login`)
+writes `~/.aws/credentials` and `~/.aws/config` with a region — the harness
+reads nothing AWS-related itself, and nothing goes in `.env`. The login
+node has network; compute nodes do not, so syncs never run inside a job.
+Confirm the credentials from `$ROOT/ufs-chem-assay` once the harness is
+set up (step 2):
+
+```bash
+uv run pytest -m data_integration src/tests/ufs_chem_assay/test_s3_sync.py -v
+```
+
 ## 2. The harness
 
 ```bash

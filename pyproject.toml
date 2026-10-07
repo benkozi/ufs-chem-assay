@@ -61,6 +61,14 @@ testpaths = ["src/tests"]
 # The CI helper scripts (.github/workflows/scripts) import by module name
 # in the harness suite.
 pythonpath = ["src", ".github/workflows/scripts"]
+# data_integration tests talk to the real private test bucket
+# (arn:aws:s3:::ufs-chem; credentials via the aws CLI's own chain); skipped (deselected)
+# unless asked for -- a command-line -m replaces this one:
+#   uv run pytest -m data_integration src/tests/ufs_chem_assay/test_s3_sync.py
+addopts = ["--strict-markers", "-m", "not data_integration"]
+markers = [
+    "data_integration: live S3 round trip against the private test bucket s3://ufs-chem (needs the aws CLI and credentials it can find on its own: credentials file, profile, environment, SSO); deselected by default",
+]
 
 [tool.mypy]
 files = ["src", ".github/workflows/scripts"]

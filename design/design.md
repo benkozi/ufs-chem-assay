@@ -53,7 +53,12 @@ the harness test package `src/tests/ufs_chem_assay/`. See
 - No online baseline retrieval or baseline manifest yet — baselines are
   local directories keyed by ULID (see
   `design/feat/20260716-1113-compare-with-baseline/20260716-1113-compare-with-baseline.md`); no stats-CSV
-  diffing (the comparison targets the NetCDF files themselves).
+  diffing (the comparison targets the NetCDF files themselves). The
+  primitive that will carry retrieval — and application data staging —
+  exists since 2026-10-07: `s3_sync.py`, a stand-alone `aws s3 sync`
+  wrapper (see S3 data sync below and
+  `design/feat/20261006-1710-basic-s3-auth/20261006-1710-basic-s3-auth.md`);
+  nothing calls it from the session or the CLI yet.
 
 ## Applications
 
@@ -552,6 +557,11 @@ exit is the failure condition. The environment variables mirror `setup.sh`
   its parent. The default temp root needs no
   guard: `tmp_path_factory` allocates a fresh directory every session.
 - **Selection**: `pytest -k <expr>` against the combo-name ids runs subsets.
+- **One registered marker, `data_integration`** (`--strict-markers` is on):
+  tests that talk to the real private S3 bucket. `addopts` deselects them
+  (`-m "not data_integration"`, so every summary reads `1 deselected`); a
+  command-line `-m data_integration` replaces the default and runs only
+  them. Selected without credentials they fail, never skip.
 
 ## Settings
 
@@ -573,6 +583,39 @@ since the one cwd-relative **`.env` file** (gitignored — it carries
 per-machine absolute paths) holds both namespaces' keys. Matching is
 case-insensitive, so lowercase `cece_root_dir=` keys work. pydantic-settings
 ships `python-dotenv`; no extra dependency.
+
+AWS credentials are deliberately **not** a settings class: the AWS CLI
+resolves its own chain (credentials file, profiles, environment, SSO) and
+the harness knows nothing about it. See S3 data sync.
+
+## S3 data sync
+
+`s3_sync.py` (2026-10-07, full design in
+`design/feat/20261006-1710-basic-s3-auth/20261006-1710-basic-s3-auth.md`)
+wraps `aws s3 sync`: one frozen `S3SyncConfig` (source, destination — at
+least one an `s3://` URI, never both; `dry_run`, `delete`,
+`only_show_errors`, exclude-then-include filters, `profile`,
+`timeout_s`), exactly **one subprocess call** per `sync()`, one
+`S3SyncResult` (argv as executed, exit status, captured output). Sync is
+the primitive because it is reentrant: an interrupted transfer resumes by
+re-running the same config. `dry_run` tunnels into `--dryrun` and the
+CLI's `(dryrun) …` lines are the plan (logged at INFO). Guards: `delete`
+is refused on a bucket root (`s3://bucket` and `s3://bucket/` alike), a
+local source must be an existing directory, local paths are resolved
+absolute, `only_show_errors` and `dry_run` exclude each other.
+Credentials are the CLI's business: the child inherits the environment
+unchanged and the CLI's own chain (credentials file, profiles, environment,
+SSO) applies; `profile` is a pass-through of `--profile`; missing
+credentials are the CLI's nonzero exit, raised as `CalledProcessError`.
+Transfer tuning (`max_concurrent_requests`) lives in the user's own
+`~/.aws/config`, which the CLI honours, never in the harness. The module
+is deliberately stand-alone — its one harness import is `logs.get_logger`
+— so it can be lifted into another repository. The AWS CLI v2 is an
+external tool like docker, git, and sbatch (in the toolchain image;
+user-local on Ursa; v1 is in maintenance mode). The live
+`data_integration` test always targets `arn:aws:s3:::ufs-chem` under
+`ufs-chem-assay-tests/<ULID>/` and empties its own prefix with a
+`delete=True` sync from an empty directory.
 
 ## Type checking
 
@@ -686,6 +729,8 @@ All code under `src/`; the project is `uv`-managed with its own
     resolution.py         # pure path-resolution rules (suite path, output roots)
     runner.py             # driver command per runtime (docker run / native +
                           #   launcher / sbatch), check_output, .out writing
+    s3_sync.py            # stand-alone `aws s3 sync` wrapper; credentials are
+                          #   the CLI's own; one harness import (the logger)
     settings.py           # harness-wide pydantic-settings (ASSAY_*, CECE_* fallback)
     tests/
       config/
@@ -705,7 +750,9 @@ Dependencies: `pytest`, `pytest-mock`, `pydantic>=2`, `pydantic-settings`,
 `python-ulid`, `pyyaml`, the analysis stack (`pandas`, `xarray`, `netcdf4`,
 `dask[distributed]`), and the plotting stack (`matplotlib`, `cartopy`,
 `pillow`). Nothing
-imported from any application repository outside this one.
+imported from any application repository outside this one. External tools
+located on `PATH`, never installed by the harness: `docker`, `git`,
+`sbatch`/`srun`, and the AWS CLI v2 (`s3_sync.py`).
 
 ## README (user documentation)
 
@@ -746,6 +793,8 @@ mechanics:
   `.dockerignore` to `pyproject.toml`/`uv.lock`/`.pre-commit-config.yaml` so
   `.env` can never enter): official uv base (`python3.14-bookworm-slim`),
   `git` + `g++` (cartopy has no CPython 3.14 wheels — source build), the
+  AWS CLI v2 (official zip installer; for the by-hand `data_integration`
+  run and future data staging — CI never talks to S3), the
   frozen dependency set synced into `/opt/venv`
   (`UV_PROJECT_ENVIRONMENT`), and pre-baked pre-commit hook environments
   (`PRE_COMMIT_HOME=/opt/pre-commit`) so CI needs no network for hooks.

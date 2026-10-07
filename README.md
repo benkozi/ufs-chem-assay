@@ -24,6 +24,12 @@ application. Design rationale lives in [design/design.md](design/design.md).
   - the target driver built at `./build/cece_standalone_driver` (relative
     to the checkout root).
 - [uv](https://docs.astral.sh/uv/) installed.
+- For anything that syncs with S3 (today: the `data_integration` test, see
+  [S3 data sync](#s3-data-sync)): the [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+  on `PATH` — a laptop installs it with its package manager, the Ursa
+  runbook installs it user-locally, and the toolchain image
+  (`Dockerfile`) carries it. v1 (`pip install awscli`) is in
+  maintenance mode and is not what this harness targets.
 
 ## Setup
 
@@ -59,7 +65,8 @@ uv run pytest -x                   # fail fast: stop at the first failure
 uv run pytest -k map-consd         # run a subset by combo name
 uv run pytest --combo-clean-root   # delete an existing output root first
 
-uv run pytest src/tests/ufs_chem_assay                  # harness only: fast, no docker
+uv run pytest src/tests/ufs_chem_assay                  # harness only: fast, no docker, no network
+                                                        #   (the live S3 test is deselected: `1 deselected`)
 uv run pytest src/tests/ufs_chem_assay/applications/cece  # the CECE adapter's tests only
 uv run pytest src/tests/test_driver_combos.py  # integration only (real docker)
 
@@ -221,6 +228,58 @@ Options:
   downloads 404 until local copies are placed in the checkout's `data/`. Outcomes land under the output root in `examples/`
   (`<stem>.out` per example plus a session `examples-report.md`); they
   are not part of `test-report.csv`.
+
+## S3 data sync
+
+`src/s3_sync.py` is a stand-alone wrapper around `aws s3 sync`: one
+`S3SyncConfig` in (source, destination, `dry_run`, `delete`, filters,
+`profile`, `timeout_s`), exactly one `aws s3 sync`
+subprocess call, one `S3SyncResult` out. Sync is the primitive because it
+is reentrant — an interrupted transfer resumes by re-running the same
+config, unchanged files are skipped. `dry_run=True` passes `--dryrun`
+straight through: the CLI's `(dryrun) upload:`/`download:`/`delete:` lines
+*are* the plan, returned in the result and logged at INFO. Nothing in the
+harness calls it yet (application data staging and baseline retrieval will).
+
+Credentials are the **AWS CLI's business, not the harness's**: the
+wrapper passes nothing and knows nothing, and the CLI resolves its own
+chain — `~/.aws/credentials` and `~/.aws/config` profiles (`aws configure`,
+`aws sso login`), environment variables, instance roles. Configure a region
+there too. `profile=` on the config is a pass-through of `--profile`;
+otherwise `AWS_PROFILE` or the default profile applies. Nothing AWS-related
+is read from `.env`, and no `AWS_*` setting exists in the harness. Missing
+credentials surface as the CLI's own `Unable to locate credentials`, raised
+as a `CalledProcessError` with the output attached.
+
+The mock tests (`src/tests/ufs_chem_assay/test_s3_sync.py`) run with the
+harness suite and need no network and no `aws`. One live test,
+`test_private_bucket_round_trip`, marked `data_integration`, authenticates
+to the private test bucket **`arn:aws:s3:::ufs-chem`** (fixed in the test),
+uploads a small tree under `ufs-chem-assay-tests/<ULID>/`, downloads it
+back, checks the bytes, proves the second upload is a no-op, and empties
+exactly that prefix — previewing each transfer with a dry run first. It is
+deselected by default and fails (never skips) when the CLI finds no
+credentials or `aws` is not on `PATH`:
+
+```sh
+# with the CLI configured (aws configure / aws sso login) for the account that owns the bucket;
+# a named profile is the CLI's own AWS_PROFILE (the test sets none)
+AWS_PROFILE=<profile> uv run pytest -m data_integration src/tests/ufs_chem_assay/test_s3_sync.py -v
+
+# the same inside the toolchain image: mount the CLI's configuration read-only,
+# and mask the repo .env (its CECE_ROOT_DIR is a host path the container cannot see)
+docker buildx build --load -t ufs-chem-assay:dev .
+: > /tmp/empty.env
+docker run --rm -v "$PWD":/repo -v /tmp/empty.env:/repo/.env:ro -w /repo \
+  -v "$HOME/.aws":/root/.aws:ro -e AWS_PROFILE=<profile> ufs-chem-assay:dev \
+  sh -c 'git config --global --add safe.directory /repo && uv sync --frozen \
+         && uv run pytest -m data_integration src/tests/ufs_chem_assay/test_s3_sync.py -v'
+```
+
+The credentials need `s3:ListBucket` on the bucket and `s3:GetObject`,
+`s3:PutObject`, `s3:DeleteObject` under `ufs-chem-assay-tests/`. On Ursa run
+it from a login node (compute nodes have no network) after the runbook's
+AWS CLI step.
 
 ## Configuring a run: `ufs-chem-assay run`
 
@@ -491,7 +550,9 @@ statistics (`count`, `sum`, `mean`, `std`, `min`, `max`, `median`).
 
 Every variable can also be set (lowercase works) in a gitignored `.env`
 file at the repo root, read when pytest runs from there; real environment
-variables override `.env`. Two namespaces: **harness-wide** settings under
+variables override `.env`. AWS credentials are not harness settings at
+all — the AWS CLI reads its own configuration (see
+[S3 data sync](#s3-data-sync)). Two namespaces: **harness-wide** settings under
 `ASSAY_*` (the pre-adapter `CECE_*` spellings are accepted as fallbacks
 and go away when the second application adapter lands; `ASSAY_X` wins over
 `CECE_X` when both are set), and each **application's** settings under its
@@ -524,3 +585,8 @@ The CECE adapter:
 | `CECE_DOCKER_IMAGE`             | container image (docker runtime)               | `cece/cece-dev`                  |
 | `CECE_DRIVER_PATH`              | driver path, relative to the checkout          | `./build/cece_standalone_driver` |
 | `CECE_MODULEFILE`               | modulefile each driver job loads before the driver (slurm runtime; recorded in `run.yaml`) | unset |
+
+There is no AWS table: the AWS CLI's own `~/.aws/credentials`,
+`~/.aws/config`, and `AWS_*` variables apply unchanged to
+[S3 data sync](#s3-data-sync), and the live test's bucket is fixed at
+`arn:aws:s3:::ufs-chem`, not a variable.
