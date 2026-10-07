@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.1.0-rc.3 (2026-10-07)
+
+### Features
+
+- Add initial s3 integration ([#20](https://github.com/benkozi/ufs-chem-assay/pull/20),
+  [`d2fac3e`](https://github.com/benkozi/ufs-chem-assay/commit/d2fac3ed587a4bef2038d7ffbfea1b8fbfea90cb))
+
+
 ## v0.1.0-rc.2 (2026-10-06)
 
 ### Documentation
