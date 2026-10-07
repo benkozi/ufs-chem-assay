@@ -44,15 +44,18 @@ No root, no conda, no `rdhpcs-python` module needed. Put the three
 
 The harness syncs data with `aws s3 sync` (today: the `data_integration`
 test against the private `ufs-chem` bucket). Check for a site-provided
-binary first, then install v2 user-locally if there is none:
+binary first, then install v2 user-locally if there is none. Install
+under `$HOME`, not `$ROOT`: a tool belongs with the other per-user
+binaries (`~/.local/bin/uv` above), not in the run tree — change the two
+directories if your layout differs:
 
 ```bash
 which aws && aws --version                            # present? note the version and skip the install
 curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip
 unzip -q /tmp/awscliv2.zip -d /tmp
-/tmp/aws/install --install-dir $ROOT/aws-cli --bin-dir $ROOT/bin
+/tmp/aws/install --install-dir $HOME/aws-cli --bin-dir $HOME/bin
 rm -rf /tmp/aws /tmp/awscliv2.zip
-export PATH="$ROOT/bin:$PATH"                         # beside the uv exports above
+export PATH="$HOME/bin:$PATH"                         # beside the uv exports above
 aws --version
 ```
 
