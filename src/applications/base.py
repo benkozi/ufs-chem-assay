@@ -170,6 +170,9 @@ class Application(ABC):
     checkout_dirname: ClassVar[str]  # default checkout under the CLI's run root
     data_dirname: ClassVar[str]  # input data directory under the checkout ("data")
     standard_dimensions: ClassVar[tuple[str, ...]]  # every output variable's dims
+    # Global attributes the driver stamps per run (creation time, a history
+    # line): the baseline comparison skips exactly these; () when none.
+    volatile_global_attributes: ClassVar[tuple[str, ...]] = ()
     settings_model: ClassVar[type[ApplicationSettings]]
     config_model: ClassVar[type[DriverConfig]]
     suite_model: ClassVar[type[SuiteConfig]]
@@ -195,6 +198,19 @@ class Application(ABC):
         name = f"{combo_id}.yaml"
         config.to_yaml(combo_dir / name)
         return PurePosixPath(name)
+
+    def generated_config_path(self, combo_dir: Path, combo_id: str) -> Path:
+        """Where write_config put a combination's generated configuration —
+        the same convention read back from a published baseline directory."""
+        return combo_dir / f"{combo_id}.yaml"
+
+    def config_fingerprint(self, path: Path) -> str:
+        """A generated configuration with its per-run paths normalised, as a
+        string two combinations can be compared by: equal fingerprints mean
+        the same configuration. The default loads the config model and
+        dumps it verbatim; an adapter whose generated configs carry run
+        paths (output directory, log file) overrides it to neutralise them."""
+        return self.config_model.from_yaml(path).model_dump_json()
 
     # -- enumeration and config generation (combos.py) ------------------------
 

@@ -16,6 +16,16 @@ logger = get_logger("cece.assertions")
 # exactly these named dimensions.
 STANDARD_DIMENSIONS = ("time", "lev", "lat", "lon")
 
+# Provenance the driver (develop, 2026-10-08) stamps into every file with
+# the simulation's wall-clock time: never equal across two runs, so the
+# baseline comparison skips them and compares every other attribute exactly.
+VOLATILE_GLOBAL_ATTRIBUTES = (
+    "date_created",
+    "date_modified",
+    "date_metadata_modified",
+    "history",
+)
+
 
 def expected_output_count(config: CeceConfig) -> int:
     """Expected NetCDF output file count from the generated combo config:

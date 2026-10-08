@@ -101,3 +101,48 @@ def test_output_variable_names_mixed_entries(maccity_config: CeceConfig) -> None
     assert maccity_config.output is not None
     maccity_config.output.fields = [OutputField(name="co"), "nox"]
     assert output_variable_names(maccity_config) == ["co", "nox"]
+
+
+def test_cece_declares_its_provenance_stamps_volatile() -> None:
+    # The develop driver stamps every file with the simulation time; a
+    # comparison across runs must skip exactly these and nothing else.
+    from applications.registry import get_application
+
+    assert get_application("cece").volatile_global_attributes == (
+        "date_created",
+        "date_modified",
+        "date_metadata_modified",
+        "history",
+    )
+
+
+def test_cece_config_fingerprint_ignores_only_the_run_paths(tmp_path: Path) -> None:
+    from pathlib import PurePosixPath
+
+    from applications.cece.config import CeceConfig, Mapalgo
+    from applications.registry import get_application
+
+    app = get_application("cece")
+    base = (
+        Path(__file__).resolve().parents[3]
+        / "config"
+        / "cece"
+        / "maccity"
+        / "maccity.yaml"
+    )
+
+    def write(name: str, mapalgo: str, directory: str) -> Path:
+        config = CeceConfig.from_yaml(base)
+        assert config.cece_data is not None and config.output is not None
+        config.cece_data.streams[0].mapalgo = Mapalgo(mapalgo)
+        config.output.directory = directory
+        config.driver.log_file = str(PurePosixPath(directory) / "cece.log")
+        config.to_yaml(tmp_path / name)
+        return tmp_path / name
+
+    a = write("a.yaml", "consd", "/combo_runs/01JA")
+    b = write("b.yaml", "consd", "/work/runs/01JB")
+    c = write("c.yaml", "bilinear", "/combo_runs/01JA")
+    assert app.config_fingerprint(a) == app.config_fingerprint(b)
+    assert app.config_fingerprint(a) != app.config_fingerprint(c)
+    assert app.generated_config_path(tmp_path, "01JA") == tmp_path / "01JA.yaml"

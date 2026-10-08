@@ -119,8 +119,9 @@ class Settings(BaseSettings):
     baseline_store: str = Field(
         DEFAULT_BASELINE_STORE,
         description=(
-            "The baselines' S3 prefix (s3://bucket/prefix, never a bucket root): "
-            "`publish-baselines` writes <store>/<ulid>/ there, append-only"
+            "Where baselines are published, append-only, as <store>/<ulid>/: an "
+            "S3 prefix (s3://bucket/prefix, never a bucket root) or a local "
+            "directory (a Dropbox folder, a scratch area)"
         ),
     )
     dask_nworkers: int | None = Field(
@@ -200,19 +201,28 @@ class Settings(BaseSettings):
 
     @field_validator("baseline_store", mode="after")
     @classmethod
-    def _store_is_a_prefix(cls, value: str) -> str:
-        # Normalised (no trailing slash) and never a bucket root: the store
-        # must stay apart from anything else the bucket holds.
-        value = value.rstrip("/")
-        if (
-            not re.fullmatch(S3_URI_PATTERN, value)
-            or not value[len("s3://") :].partition("/")[2]
-        ):
+    def _store_is_a_prefix_or_directory(cls, value: str) -> str:
+        # An S3 prefix: normalised (no trailing slash) and never a bucket
+        # root, so the store stays apart from anything else the bucket holds.
+        # Anything else is a local directory (a Dropbox folder, a scratch
+        # area): kept absolute; it need not exist until publication.
+        if value.startswith("s3://"):
+            value = value.rstrip("/")
+            if (
+                not re.fullmatch(S3_URI_PATTERN, value)
+                or not value[len("s3://") :].partition("/")[2]
+            ):
+                raise ValueError(
+                    f"baseline_store must be an s3://bucket/prefix (a key prefix, "
+                    f"not a bucket root) or a local directory, got {value!r}"
+                )
+            return value
+        if "://" in value or not value.strip():
             raise ValueError(
-                f"baseline_store must be an s3://bucket/prefix (a key prefix, not a "
-                f"bucket root), got {value!r}"
+                f"baseline_store must be an s3://bucket/prefix or a local directory, "
+                f"got {value!r}"
             )
-        return value
+        return str(Path(value).expanduser().resolve())
 
     @field_validator("suite_config_search_path", mode="before")
     @classmethod

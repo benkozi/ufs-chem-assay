@@ -100,6 +100,7 @@ def test_baseline_comparison(
     driver_run: DriverRunResult,
     run_context: RunContext,
     settings: Settings,
+    application: Application,
     baseline_comparisons: dict[str, BaselineComparison],
 ) -> None:
     """The combination's NetCDF output matches its configured baseline
@@ -132,6 +133,8 @@ def test_baseline_comparison(
         combo=driver_run.combo.name,
         combo_id=driver_run.combo.combo_id,
         baseline_ulid=entry.ulid,
+        ignore_global_attributes=application.volatile_global_attributes,
+        app=application,
     )
     write_comparison_csv(
         result,

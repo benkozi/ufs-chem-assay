@@ -138,8 +138,14 @@ cell bounds and other auxiliary tables are skipped — written to
 baseline: each `baseline_comparisons` entry carries a `sweep_selector` —
 mirroring the sweep structure with regexes at the leaves — that must select
 exactly one combination, a baseline `ulid` under `ASSAY_BASELINE_ROOT_DIR`,
-an optional per-entry `atol`, and a `plot` switch for bias plots; structure
-and attributes exact, data bit-for-bit or within `atol`; RMSE and
+an optional per-entry `atol`, and a `plot` switch for bias plots; the
+combination's generated driver configuration must equal the one the
+baseline directory carries (run paths aside) — a changed configuration
+needs a new baseline even when the output did not change, and a baseline
+published without its configuration cannot pass; structure and attributes
+exact — except the global attributes the application stamps per run (for
+CECE `date_created`, `date_modified`, `date_metadata_modified`,
+`history`), which are skipped — data bit-for-bit or within `atol`; RMSE and
 difference statistics recorded per file x variable in
 `<combo_id>-stats-comparison.csv`, concatenated to `stats-comparison.csv`
 at the root; bias maps + GIF render at session end into `plots-baselines/`
@@ -307,7 +313,9 @@ AWS CLI step.
 A baseline is one combination's whole output directory — the NetCDF, the
 generated config, the captured `.out`, the driver log, the stats CSVs, the
 plots and GIFs — published as `s3://ufs-chem/baselines/<ulid>/` with a
-`baseline.yaml` manifest beside the files (application, the application
+`baseline.yaml` manifest beside the files. The generated config in it is
+what later comparisons check the configuration against, so the published
+directory is the whole claim: this configuration produced this output (application, the application
 commit the run was built from, the run and combination, the effective
 parameters, every file with its digest, when and by whom it was published,
 and the ULID it supersedes). The ULID is the combination's runtime ULID,
@@ -338,8 +346,17 @@ are reported and left pinned to their previous ULID. `--no-suite-update`
 publishes without editing the suite files; `--suite-config` and
 `--application` select the suites as for pytest (default: the suites
 `run.yaml` records); `--store` overrides `ASSAY_BASELINE_STORE` for one
-call. With `ASSAY_BASELINE_ROOT_DIR` set, each published directory is also
-copied to `<root>/<ulid>/`, so the very next local run compares against it.
+call. **The store may be a local directory instead of an S3 prefix**
+(`--store=/path/to/baselines`, or the same in `ASSAY_BASELINE_STORE` /
+`baselines.store`): a Dropbox folder or a scratch area as the store of
+record, no AWS involved — the probe is an existence check and the upload a
+directory copy; everything else (the manifest, the gate, append-only, the
+suite repoint, the resume) is the same. With `ASSAY_BASELINE_ROOT_DIR` set,
+each published directory is also copied to `<root>/<ulid>/`, so the very
+next local run compares against it; when the store *is* that directory,
+one copy serves both. A ULID published to a local store is only
+reachable where that directory is, so the checked-in suites keep
+pointing at the bucket.
 A re-run of the same output root resumes: a directory whose `baseline.yaml`
 names the ULID already in the store is not uploaded again, only the suite
 is repointed. `pytest --publish-baselines` (the run config's
@@ -651,7 +668,7 @@ Harness-wide:
 | `ASSAY_DASK_NWORKERS`           | dask workers for the stats cluster (int > 0)   | unset → all available cores      |
 | `ASSAY_BASELINE_ROOT_DIR`       | baselines live at `<root>/<ulid>/`             | unset → current working directory |
 | `ASSAY_ENABLE_BASELINE_COMPARISONS` | global switch; `false` skips comparison tests | `true`                          |
-| `ASSAY_BASELINE_STORE`          | the baselines' S3 prefix (`s3://bucket/prefix`, never a bucket root); `publish-baselines` writes `<store>/<ulid>/` there | `s3://ufs-chem/baselines` |
+| `ASSAY_BASELINE_STORE`          | where `publish-baselines` writes `<store>/<ulid>/` (append-only): an `s3://bucket/prefix` (never a bucket root) or a local directory | `s3://ufs-chem/baselines` |
 | `ASSAY_CONFIG_SEARCH_PATH`      | prepended to relative `config_path` values     | unset                            |
 | `ASSAY_SUITE_CONFIG_SEARCH_PATH` | colon-separated dirs searched recursively for `--suite-config` selection | unset → built-in suite dir only |
 

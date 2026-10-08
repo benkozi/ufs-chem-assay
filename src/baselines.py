@@ -10,7 +10,9 @@ from content or configuration — so the store is append-only by construction
 and enforced by a probe: a prefix that already holds objects is refused.
 `baseline.yaml`, written into the directory before the sync, records what
 was published and from where; its presence is also what lets a re-run
-resume (the suite edit redone, the upload skipped).
+resume (the suite edit redone, the upload skipped). The store may also be
+a local directory (a Dropbox folder, a scratch area): then the probe is an
+existence check and the upload a directory copy, everything else the same.
 
 Generic: nothing here knows an application. The suite's
 `baseline_comparisons` entries are the contract for what is published —
@@ -94,7 +96,9 @@ class BaselineManifest(StrictModel):
     ulid: str = Field(
         description="The combination's runtime ULID: the store key and the directory name"
     )
-    store: str = Field(description="The s3://bucket/prefix it was published to")
+    store: str = Field(
+        description="Where it was published: an s3://bucket/prefix or a local directory"
+    )
     application: str = Field(description="Registry name of the application")
     application_commit: str = Field(
         description="HEAD commit of the application checkout the run was built from"
@@ -160,7 +164,7 @@ class PublishRecord(StrictModel):
         description="The ULID the entry pins before this publish"
     )
     source_dir: Path = Field(description="The combination's output directory")
-    store: str = Field(description="The s3://bucket/prefix published to")
+    store: str = Field(description="The s3://bucket/prefix or directory published to")
     action: Action = Field(
         description=(
             "published: in the store and (unless disabled) the suite repointed; "
@@ -174,7 +178,14 @@ class PublishRecord(StrictModel):
     suite_updated: bool = Field(description="Whether the suite file was rewritten")
 
     @property
+    def local_store(self) -> Path | None:
+        """The store as a directory when it is one; None for an S3 prefix."""
+        return None if self.store.startswith("s3://") else Path(self.store)
+
+    @property
     def destination(self) -> str:
+        if self.local_store is not None:
+            return str(self.local_store / self.ulid)
         return f"{self.store}/{self.ulid}/"
 
 
@@ -323,9 +334,13 @@ def load_run(
                 f"suite {suite.name!r} ({path}) was not executed by run {run.run_id} "
                 f"(recorded suites: {sorted(recorded)})"
             )
-        dumped = [e.model_dump() for e in suite.baseline_comparisons]
+        # The ulid is what publishing rewrites, so it is not an edit: a
+        # second publish of the same root must load and find "already
+        # published". Everything else about the entries must match.
+        dumped = [e.model_dump(exclude={"ulid"}) for e in suite.baseline_comparisons]
         recorded_dump = [
-            e.model_dump() for e in recorded[suite.name].baseline_comparisons
+            e.model_dump(exclude={"ulid"})
+            for e in recorded[suite.name].baseline_comparisons
         ]
         if dumped != recorded_dump:
             raise ValueError(
@@ -432,8 +447,15 @@ def _local_manifest(record: PublishRecord) -> tuple[bool, str | None]:
 
 
 def _prefix_occupied(record: PublishRecord) -> bool:
-    """One --dryrun download of the prefix into an empty directory: any
-    `(dryrun) download:` line means objects are there."""
+    """S3: one --dryrun download of the prefix into an empty directory — any
+    `(dryrun) download:` line means objects are there. A directory store:
+    the directory exists (a missing store is FileNotFoundError)."""
+    if record.local_store is not None:
+        if not record.local_store.is_dir():
+            raise FileNotFoundError(
+                f"store directory {record.local_store} does not exist"
+            )
+        return Path(record.destination).exists()
     with tempfile.TemporaryDirectory() as empty:
         result = sync(
             S3SyncConfig(
@@ -490,6 +512,20 @@ def _publish_one(
     detail = "published"
     if occupied:
         detail = "already in the store (resumed)"
+    elif record.local_store is not None:
+        if dry_run:
+            count = sum(1 for path in record.source_dir.rglob("*") if path.is_file())
+            logger.info(
+                "DRY RUN would copy %s file(s) from %s to %s",
+                count,
+                record.source_dir,
+                record.destination,
+            )
+        else:
+            try:
+                shutil.copytree(record.source_dir, record.destination)
+            except OSError as exc:
+                return _with(record, "failed", f"copy to {record.destination}: {exc}")
     else:
         try:
             sync(
@@ -503,17 +539,22 @@ def _publish_one(
         except (subprocess.CalledProcessError, FileNotFoundError) as exc:
             return _with(record, "failed", _error_detail(exc))
     if dry_run:
-        return _with(
-            record,
-            "would-publish",
-            "already in the store (would resume)"
-            if occupied
-            else "prefix empty; would upload",
-        )
+        if occupied:
+            would = "already in the store (would resume)"
+        elif record.local_store is not None:
+            would = "store directory free; would copy"
+        else:
+            would = "prefix empty; would upload"
+        return _with(record, "would-publish", would)
 
     if baseline_root is not None:
         cached = baseline_root / record.ulid
-        if cached.exists():
+        if (
+            record.local_store is not None
+            and cached.resolve() == Path(record.destination).resolve()
+        ):
+            pass  # the store is the cache: the copy above is the local copy
+        elif cached.exists():
             # Expected on a resume; worth a warning on a fresh publish.
             (logger.info if resume else logger.warning)(
                 "cache %s already exists; left as is", cached
@@ -524,7 +565,7 @@ def _publish_one(
                 logger.info("cached %s", cached)
             except OSError as exc:
                 logger.error("cache copy to %s failed: %s", cached, exc)
-    else:
+    elif record.local_store is None:
         logger.warning(
             "ASSAY_BASELINE_ROOT_DIR is unset: %s is in the store but not cached "
             "locally; the next local run of this suite needs it at <root>/%s",

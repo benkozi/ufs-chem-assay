@@ -26,7 +26,7 @@ data:
 baselines:
   root_dir:  # ASSAY_BASELINE_ROOT_DIR
   enabled: false  # ASSAY_ENABLE_BASELINE_COMPARISONS
-  store: s3://ufs-chem/baselines  # ASSAY_BASELINE_STORE: where publish-baselines writes <store>/<ulid>/
+  store: s3://ufs-chem/baselines  # ASSAY_BASELINE_STORE: an s3://bucket/prefix or a local directory
 harness:
   suite_config: simple-maccity-suite.yaml  # regex over *-suite.yaml names; every match runs
   output_root: ufs-chem-assay-output  # relative: under the checkout (docker: must stay there)

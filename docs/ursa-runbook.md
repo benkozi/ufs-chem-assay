@@ -216,7 +216,9 @@ the suite file's `ulid:` lines are repointed in your harness checkout —
 commit that change. Set `baselines.root_dir` in the run config (or
 `ASSAY_BASELINE_ROOT_DIR`) to also keep a local copy the next run reads;
 `harness.publish_baselines: true` does all of this at the end of the
-harness stage instead.
+harness stage instead. `--store=/path/to/dir` (or `baselines.store`)
+publishes into a local directory instead of the bucket — no credentials,
+but only reachable on this machine.
 
 The `native` runtime (the driver as a direct host process) is not a
 supported path on Ursa: the harness venv and the driver need conflicting

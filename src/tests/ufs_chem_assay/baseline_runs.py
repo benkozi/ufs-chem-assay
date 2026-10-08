@@ -7,6 +7,7 @@ failed (the republish case); everything else passed."""
 
 from __future__ import annotations
 
+import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -27,6 +28,13 @@ RUN_ID = "01JRUNRUNRUNRUNRUNRUNRUNRU"
 COMMIT = "36da92e0f02ec9aa05d4261596927527350509b8"
 HARNESS_VERSION = "0.1.0-rc.4"
 HARNESS_COMMIT = "abc123-dirty"
+# The ULIDs the fabricated suite pins before a publish (bilinear, consd,
+# passthrough): fixed here, whatever the checked-in suite pins today.
+PREVIOUS_ULIDS = (
+    "01JPREVBILINEAR00000000001",
+    "01JPREVCONSD00000000000002",
+    "01JPREVPASSTHROUGH00000003",
+)
 TESTS = (
     "test_driver_execution",
     "test_nc_file_count",
@@ -93,11 +101,19 @@ def fabricate_run(
     suites.mkdir()
     shutil.copy(suite_dir / "maccity.yaml", suites / "maccity.yaml")
     suite_path = suites / f"{name}-suite.yaml"
-    suite_path.write_text(
+    text = (
         (suite_dir / "simple-maccity-suite.yaml")
         .read_text()
         .replace("name: simple-maccity\n", f"name: {name}\n", 1)
     )
+    previous = iter(PREVIOUS_ULIDS)
+    text = re.sub(
+        r"^(\s*ulid:\s*)\S+$",
+        lambda m: m.group(1) + next(previous),
+        text,
+        flags=re.MULTILINE,
+    )
+    suite_path.write_text(text)
     app = get_application("cece")
     suite = load_suite(suite_path)
     base = app.config_model.from_yaml(suite.config_path)

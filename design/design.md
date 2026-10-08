@@ -96,7 +96,11 @@ the shared modules freely. Full rationale in
 The adapter surface: constants (`name`, `env_prefix` — its settings
 namespace and the `${<PREFIX>ROOT_DIR}` suite token, `container_workdir`,
 `default_suite`, `checkout_dirname`, `data_dirname` — where a suite's
-inputs are staged under the checkout, `standard_dimensions`), the models it
+inputs are staged under the checkout, `standard_dimensions`,
+`volatile_global_attributes` — the per-run stamps the comparison skips),
+the generated-configuration helpers (`generated_config_path`, where
+`write_config` put it; `config_fingerprint`, the configuration with its
+run paths normalised, which the comparison equates), the models it
 subclasses (`settings_model`, `config_model`, `suite_model` with the
 application's sweep and selector schemas, `run_section_model`), and the
 methods the shared code needs: `dimensions` (sweep → the generic
@@ -701,6 +705,30 @@ Publishing (2026-10-08, `baselines.py`; full design in
   `<root>/<ulid>/`, so the next local run compares against it without the
   download half. Credentials are the CLI's; publishing needs
   `s3:ListBucket` on the bucket and `s3:PutObject` under the prefix.
+- **A baseline is a claim about the output of a configuration** (user
+  decision, 2026-10-08): the comparison equates the combination's
+  generated driver configuration with the one the baseline directory
+  carries (`Application.config_fingerprint`, run paths normalised —
+  CECE's `output.directory` and `driver.log_file`); a changed configuration
+  fails the comparison even when the data is identical, so it gets a new
+  baseline, and a baseline published without its configuration (the July
+  ones, NetCDF only) cannot pass. `config_match` is a column of the
+  comparison CSVs and the first item of a failure summary.
+- **Volatile global attributes** (2026-10-08): the `develop` driver stamps
+  every file with `date_created`, `date_modified`,
+  `date_metadata_modified`, and a `history` line carrying the simulation's
+  wall-clock time, so "global attributes exact" could never pass across
+  runs. The adapter declares them (`Application.volatile_global_attributes`,
+  `()` by default; CECE's four in `applications/cece/assertions.py`) and
+  `compare_with_baseline(ignore_global_attributes=...)` skips exactly
+  those; every other attribute stays exact. Found by the first republish.
+- **The store may be a local directory** (2026-10-08, user use case: a
+  Dropbox folder as the store of record): `ASSAY_BASELINE_STORE` / `--store`
+  accept a path as well as an `s3://` prefix; the probe becomes an
+  existence check and the upload a `copytree`, nothing else changes. When
+  the store is also `ASSAY_BASELINE_ROOT_DIR`, one copy serves both. A ULID
+  published locally resolves only where that directory is, so the
+  checked-in suites keep pointing at the bucket.
 - **CI** keeps comparisons off (no credentials for the private store);
   the CECE pin is `ufs-community/CECE` at `develop` since 2026-10-08.
 
@@ -754,7 +782,7 @@ Harness-wide (`Settings`; `platform`, `runtime`, `launcher`, `sbatch_args`,
 | `log_level`      | `ASSAY_LOG_LEVEL`     | `INFO`               |
 | `baseline_root_dir` | `ASSAY_BASELINE_ROOT_DIR` | unset → cwd; baselines at `<root>/<ulid>/` |
 | `enable_baseline_comparisons` | `ASSAY_ENABLE_BASELINE_COMPARISONS` | `true`; false skips all comparison tests |
-| `baseline_store` | `ASSAY_BASELINE_STORE` | `s3://ufs-chem/baselines`; an `s3://bucket/prefix`, never a bucket root; `publish-baselines` writes `<store>/<ulid>/` |
+| `baseline_store` | `ASSAY_BASELINE_STORE` | `s3://ufs-chem/baselines`; an `s3://bucket/prefix` (never a bucket root) or a local directory; `publish-baselines` writes `<store>/<ulid>/` |
 | `dask_nworkers`  | `ASSAY_DASK_NWORKERS` | unset → all available; else int > 0 |
 | `config_search_path`       | `ASSAY_CONFIG_SEARCH_PATH`       | unset |
 | `suite_config_search_path` | `ASSAY_SUITE_CONFIG_SEARCH_PATH` | unset → built-in suite dir only; `os.pathsep`-separated list, searched recursively for suite selection |

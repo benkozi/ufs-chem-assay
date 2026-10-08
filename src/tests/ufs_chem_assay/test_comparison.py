@@ -144,6 +144,71 @@ def test_changed_global_attribute_fails(pair_dirs: tuple[Path, Path]) -> None:
     assert not result.files[0].global_attributes_match
 
 
+def test_volatile_global_attributes_are_ignored(pair_dirs: tuple[Path, Path]) -> None:
+    # Run stamps (creation time, a "Simulated on ..." history line) differ
+    # between any two runs; the adapter names them and the comparison skips
+    # them — every other global attribute stays exact.
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(
+        realization / "cece_a.nc",
+        values,
+        global_attrs={
+            "title": "t",
+            "date_created": "2026-10-08T22:55:24Z",
+            "history": "Simulated on 2026-10-08T22:55:24Z UTC",
+        },
+    )
+    _write_nc(
+        baseline / "cece_a.nc",
+        values,
+        global_attrs={
+            "title": "t",
+            "date_created": "2026-10-08T22:43:48Z",
+            "history": "Simulated on 2026-10-08T22:43:48Z UTC",
+        },
+    )
+    assert not _compare(realization, baseline).passed
+    result = compare_with_baseline(
+        realization,
+        baseline,
+        atol=0.0,
+        run_id="r",
+        application="cece",
+        suite="s",
+        combo="c",
+        combo_id="i",
+        baseline_ulid="b",
+        ignore_global_attributes=("date_created", "history"),
+    )
+    assert result.passed and result.files[0].global_attributes_match
+    # Only a stamp may differ: a changed title still fails (fresh file
+    # names: the first comparison's handles are cached by xarray).
+    _write_nc(
+        realization / "cece_b.nc",
+        values,
+        global_attrs={"title": "changed", "history": "x"},
+    )
+    _write_nc(
+        baseline / "cece_b.nc", values, global_attrs={"title": "t", "history": "y"}
+    )
+    (realization / "cece_a.nc").unlink()
+    (baseline / "cece_a.nc").unlink()
+    result = compare_with_baseline(
+        realization,
+        baseline,
+        atol=0.0,
+        run_id="r",
+        application="cece",
+        suite="s",
+        combo="c",
+        combo_id="i",
+        baseline_ulid="b",
+        ignore_global_attributes=("history",),
+    )
+    assert not result.passed
+
+
 def test_dimension_size_change_fails(pair_dirs: tuple[Path, Path]) -> None:
     realization, baseline = pair_dirs
     _write_nc(realization / "cece_a.nc", _values()[:, :2, :])  # lat 2 vs 3
@@ -277,3 +342,108 @@ def test_comparison_csvs_concatenate_to_root(
     )
     assert (tmp_path / "stats-comparison.csv").is_file()
     assert len(combined) == 2
+
+
+# ── configuration equality ────────────────────────────────────────────────────
+
+
+def _cece_config(path: Path, mapalgo: str, directory: str) -> None:
+    """A generated CECE config as build_config writes it: the maccity base
+    with one mapalgo and the per-run output paths."""
+    from pathlib import PurePosixPath
+
+    from applications.cece.config import CeceConfig, Mapalgo
+
+    base = (
+        Path(__file__).resolve().parents[1]
+        / "config"
+        / "cece"
+        / "maccity"
+        / "maccity.yaml"
+    )
+    config = CeceConfig.from_yaml(base)
+    assert config.cece_data is not None and config.output is not None
+    config.cece_data.streams[0].mapalgo = Mapalgo(mapalgo)
+    config.output.directory = directory
+    config.driver.log_file = str(PurePosixPath(directory) / "cece.log")
+    config.to_yaml(path)
+
+
+def _compare_with_app(realization: Path, baseline: Path) -> BaselineComparisonResult:
+    from applications.registry import get_application
+
+    return compare_with_baseline(
+        realization,
+        baseline,
+        atol=0.0,
+        run_id="r",
+        application="cece",
+        suite="s",
+        combo="c",
+        combo_id="01JREALREALREALREALREALREA",
+        baseline_ulid="01JBASEBASEBASEBASEBASEBAS",
+        app=get_application("cece"),
+    )
+
+
+def test_identical_configuration_up_to_run_paths_passes(
+    pair_dirs: tuple[Path, Path],
+) -> None:
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(realization / "cece_a.nc", values)
+    _write_nc(baseline / "cece_a.nc", values)
+    _cece_config(
+        realization / "01JREALREALREALREALREALREA.yaml", "consd", "/combo_runs/01JREAL"
+    )
+    _cece_config(
+        baseline / "01JBASEBASEBASEBASEBASEBAS.yaml", "consd", "/work/out/01JBASE"
+    )
+    result = _compare_with_app(realization, baseline)
+    assert result.passed and result.config_match and result.config_detail is None
+
+
+def test_changed_configuration_fails_even_with_identical_output(
+    pair_dirs: tuple[Path, Path],
+) -> None:
+    # A baseline is a claim about the output of a configuration: a changed
+    # configuration needs a new baseline even when the data did not move.
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(realization / "cece_a.nc", values)
+    _write_nc(baseline / "cece_a.nc", values)
+    _cece_config(realization / "01JREALREALREALREALREALREA.yaml", "bilinear", "/x")
+    _cece_config(baseline / "01JBASEBASEBASEBASEBASEBAS.yaml", "consd", "/x")
+    result = _compare_with_app(realization, baseline)
+    assert not result.passed and not result.config_match
+    assert result.config_detail is not None and "differs" in result.config_detail
+    assert "configuration" in result.failure_summary()
+    assert all(file.passed for file in result.files)  # the data was identical
+
+
+def test_baseline_without_a_configuration_fails(pair_dirs: tuple[Path, Path]) -> None:
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(realization / "cece_a.nc", values)
+    _write_nc(baseline / "cece_a.nc", values)
+    _cece_config(realization / "01JREALREALREALREALREALREA.yaml", "consd", "/x")
+    result = _compare_with_app(realization, baseline)
+    assert not result.passed and not result.config_match
+    assert (
+        result.config_detail is not None and "no configuration" in result.config_detail
+    )
+
+
+def test_comparison_csv_carries_config_match(
+    pair_dirs: tuple[Path, Path], tmp_path: Path
+) -> None:
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(realization / "cece_a.nc", values)
+    _write_nc(baseline / "cece_a.nc", values)
+    _cece_config(realization / "01JREALREALREALREALREALREA.yaml", "consd", "/x")
+    frame = write_comparison_csv(
+        _compare_with_app(realization, baseline), tmp_path / "c.csv"
+    )
+    assert "config_match" in frame.columns and not frame["config_match"].iloc[0]
+    assert not frame["passed"].iloc[0]

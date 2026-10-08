@@ -158,9 +158,25 @@ def test_baseline_store_from_env_trailing_slash_stripped(
 
 @pytest.mark.usefixtures("clean_env")
 @pytest.mark.parametrize(
-    "value",
-    ["s3://ufs-chem", "s3://ufs-chem/", "https://ufs-chem/baselines", "/local/dir"],
+    "value", ["s3://ufs-chem", "s3://ufs-chem/", "https://ufs-chem/baselines", ""]
 )
-def test_baseline_store_rejects_roots_and_non_s3(value: str) -> None:
+def test_baseline_store_rejects_bucket_roots_other_schemes_and_empty(
+    value: str,
+) -> None:
     with pytest.raises(ValidationError, match="baseline_store"):
         Settings(baseline_store=value)
+
+
+def test_baseline_store_accepts_a_directory(
+    clean_env: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A local store of record (a Dropbox folder, a scratch directory): the
+    # path is kept absolute; it need not exist until publication.
+    clean_env.setenv("ASSAY_BASELINE_STORE", str(tmp_path / "store") + "/")
+    assert Settings().baseline_store == str(tmp_path / "store")
+    assert Settings(baseline_store="relative/store").baseline_store == str(
+        Path("relative/store").resolve()
+    )
+    assert Settings(baseline_store="~/baselines").baseline_store == str(
+        Path("~/baselines").expanduser()
+    )

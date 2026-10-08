@@ -130,6 +130,16 @@ class BaselineComparisonResult(StrictModel):
     file_names_match: bool = Field(
         description="Whether the NetCDF file name sets are identical"
     )
+    config_match: bool = Field(
+        description=(
+            "Whether the combination's generated driver configuration equals the "
+            "baseline's (run paths normalised by the adapter): a changed "
+            "configuration needs a new baseline even with identical output"
+        )
+    )
+    config_detail: str | None = Field(
+        None, description="Why the configurations differ; None when they match"
+    )
     files: list[FileComparison] = Field(
         description="Per-file outcomes for the common files"
     )
@@ -137,6 +147,8 @@ class BaselineComparisonResult(StrictModel):
 
     def failure_summary(self) -> str:
         parts: list[str] = []
+        if not self.config_match:
+            parts.append(f"configuration: {self.config_detail}")
         if not self.file_names_match:
             parts.append("file name sets differ")
         for file in self.files:
@@ -310,7 +322,10 @@ def _netcdf_data_model(path: Path) -> str:
 
 
 def _compare_file(
-    realization_path: Path, baseline_path: Path, atol: float
+    realization_path: Path,
+    baseline_path: Path,
+    atol: float,
+    ignore_global_attributes: Sequence[str] = (),
 ) -> FileComparison:
     format_match = _netcdf_data_model(realization_path) == _netcdf_data_model(
         baseline_path
@@ -336,8 +351,13 @@ def _compare_file(
         real_vars = set(map(str, real.variables))
         base_vars = set(map(str, base.variables))
         variables_match = real_vars == base_vars
-        global_attributes_match = _stringified_attrs(real.attrs) == _stringified_attrs(
-            base.attrs
+        # Run stamps (the adapter's volatile_global_attributes) are skipped;
+        # every other global attribute is exact.
+        ignored = set(ignore_global_attributes)
+        global_attributes_match = _stringified_attrs(
+            {k: v for k, v in real.attrs.items() if k not in ignored}
+        ) == _stringified_attrs(
+            {k: v for k, v in base.attrs.items() if k not in ignored}
         )
 
         variables = [
@@ -367,6 +387,29 @@ def _compare_file(
     return comparison
 
 
+def _compare_configuration(
+    app: Application,
+    combo_dir: Path,
+    combo_id: str,
+    baseline_dir: Path,
+    baseline_ulid: str,
+) -> tuple[bool, str | None]:
+    realization = app.generated_config_path(combo_dir, combo_id)
+    baseline = app.generated_config_path(baseline_dir, baseline_ulid)
+    if not baseline.exists():
+        return False, (
+            f"baseline {baseline_ulid} carries no configuration ({baseline.name}); "
+            "published before configurations were part of a baseline — republish"
+        )
+    if app.config_fingerprint(realization) != app.config_fingerprint(baseline):
+        return False, (
+            f"the generated configuration differs from the baseline's "
+            f"({realization.name} vs {baseline_ulid}/{baseline.name}); a changed "
+            "configuration needs a new baseline"
+        )
+    return True, None
+
+
 def compare_with_baseline(
     combo_dir: Path,
     baseline_dir: Path,
@@ -377,8 +420,17 @@ def compare_with_baseline(
     combo: str,
     combo_id: str,
     baseline_ulid: str,
+    ignore_global_attributes: Sequence[str] = (),
+    app: Application | None = None,
 ) -> BaselineComparisonResult:
-    """Compare every NetCDF of a combination against its baseline."""
+    """Compare every NetCDF of a combination against its baseline, and —
+    with `app` — the combination's generated configuration against the
+    one the baseline directory carries (the adapter normalises run paths):
+    a baseline is a claim about the output of a configuration, so a
+    changed configuration fails even when the data is identical, and a
+    baseline published without its configuration cannot pass.
+    `ignore_global_attributes`: the adapter's per-run stamps (creation
+    time, history), skipped in the global-attribute check."""
     logger.info(
         "comparing combo %s against baseline %s (atol=%s)", combo, baseline_ulid, atol
     )
@@ -394,10 +446,19 @@ def compare_with_baseline(
         )
 
     files = [
-        _compare_file(combo_dir / name, baseline_dir / name, atol)
+        _compare_file(
+            combo_dir / name, baseline_dir / name, atol, ignore_global_attributes
+        )
         for name in sorted(real_names & base_names)
     ]
-    passed = file_names_match and all(file.passed for file in files)
+    config_match, config_detail = (
+        _compare_configuration(app, combo_dir, combo_id, baseline_dir, baseline_ulid)
+        if app is not None
+        else (True, None)
+    )
+    if not config_match:
+        logger.error("configuration differs for combo %s: %s", combo, config_detail)
+    passed = config_match and file_names_match and all(file.passed for file in files)
     result = BaselineComparisonResult(
         run_id=run_id,
         application=application,
@@ -407,6 +468,8 @@ def compare_with_baseline(
         baseline_ulid=baseline_ulid,
         atol=atol,
         file_names_match=file_names_match,
+        config_match=config_match,
+        config_detail=config_detail,
         files=files,
         passed=passed,
     )
@@ -427,6 +490,7 @@ _COMPARISON_COLUMNS = [
     "combo",
     "baseline_ulid",
     "atol",
+    "config_match",
     "file",
     "file_names_match",
     "format_match",
@@ -468,6 +532,7 @@ def write_comparison_csv(
                     "combo": result.combo,
                     "baseline_ulid": result.baseline_ulid,
                     "atol": result.atol,
+                    "config_match": result.config_match,
                     "file": file.file,
                     "file_names_match": result.file_names_match,
                     "format_match": file.format_match,

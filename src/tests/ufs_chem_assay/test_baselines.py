@@ -36,6 +36,7 @@ from tests.ufs_chem_assay.baseline_runs import (
     COMMIT,
     HARNESS_COMMIT,
     HARNESS_VERSION,
+    PREVIOUS_ULIDS,
     RUN_ID,
     Run,
     fabricate_run,
@@ -125,7 +126,7 @@ def test_plan_one_would_publish_record_per_entry(run: Run) -> None:
     bilinear = records[0]
     assert bilinear.suite == "simple-maccity" and bilinear.suite_path == run.suite_path
     assert bilinear.ulid == run.combo("MACCITY.map-bilinear").combo_id
-    assert bilinear.previous_ulid == "01KXNXCJ858EE6R4FPF39BC8V2"
+    assert bilinear.previous_ulid == PREVIOUS_ULIDS[0]
     assert bilinear.source_dir == run.combo_dir("MACCITY.map-bilinear")
     assert bilinear.store == _STORE
     assert bilinear.destination == f"{_STORE}/{bilinear.ulid}/"
@@ -149,7 +150,7 @@ def test_plan_skips_gated_out_combinations(run: Run) -> None:
 
 def test_plan_skips_an_already_pinned_ulid(run: Run) -> None:
     consd = run.combo("MACCITY.map-consd")
-    rewrite_suite_ulid(run.suite_path, "01KXNXCJ86E8Z2FKVAXRER5ND4", consd.combo_id)
+    rewrite_suite_ulid(run.suite_path, PREVIOUS_ULIDS[1], consd.combo_id)
     suite = load_suite(run.suite_path)
     suite_input = run.suite_input.model_copy(
         update={
@@ -203,8 +204,19 @@ def test_load_run_reads_the_output_root_and_joins_combos_csv(run: Run) -> None:
 
 
 def test_load_run_refuses_a_suite_edited_since_the_run(run: Run) -> None:
+    # A repointed ulid is not an edit (that is what publishing does — a
+    # second publish of the same root must still load and skip); any other
+    # change to the entries is.
     consd = run.combo("MACCITY.map-consd")
-    rewrite_suite_ulid(run.suite_path, "01KXNXCJ86E8Z2FKVAXRER5ND4", consd.combo_id)
+    rewrite_suite_ulid(run.suite_path, PREVIOUS_ULIDS[1], consd.combo_id)
+    _, suites, _ = load_run(
+        run.root, run.app, [(run.suite_path, load_suite(run.suite_path))]
+    )
+    assert suites[0].baselines["MACCITY.map-consd"].ulid == consd.combo_id
+    text = run.suite_path.read_text().replace(
+        f"    ulid: {consd.combo_id}\n", f"    ulid: {consd.combo_id}\n    atol: 0.5\n"
+    )
+    run.suite_path.write_text(text)
     edited = load_suite(run.suite_path)
     with pytest.raises(ValueError, match="simple-maccity.*baseline_comparisons"):
         load_run(run.root, run.app, [(run.suite_path, edited)])
@@ -267,7 +279,7 @@ def test_publish_probes_writes_the_manifest_syncs_and_repoints(
     assert manifest.platform is Platform.LOCAL and manifest.runtime is Runtime.DOCKER
     assert manifest.published_at.tzinfo is not None and manifest.published_at >= before
     assert "@" in manifest.published_by
-    assert manifest.superseded_ulid == "01KXNXCJ858EE6R4FPF39BC8V2"
+    assert manifest.superseded_ulid == PREVIOUS_ULIDS[0]
     swept = [p for p in manifest.parameters if p.swept]
     assert [(p.target, p.field, p.value) for p in swept] == [
         ("MACCITY", "mapalgo", "bilinear")
@@ -322,7 +334,7 @@ def test_publish_refuses_an_occupied_prefix_on_a_fresh_publish(
     ]
     assert len(uploads) == 2  # the refused one was never uploaded
     text = run.suite_path.read_text()
-    assert "01KXNXCJ86E8Z2FKVAXRER5ND4" in text  # the consd entry untouched
+    assert PREVIOUS_ULIDS[1] in text  # the consd entry untouched
     assert records[0].previous_ulid not in text
 
 
@@ -392,7 +404,7 @@ def test_publish_without_suite_update_leaves_the_file_alone(
     assert not any(r.suite_updated for r in results)
     assert run.suite_path.read_text() == original
     manifest = yaml.safe_load((results[0].source_dir / BASELINE_MANIFEST).read_text())
-    assert manifest["superseded_ulid"] == "01KXNXCJ858EE6R4FPF39BC8V2"
+    assert manifest["superseded_ulid"] == PREVIOUS_ULIDS[0]
 
 
 def test_publish_sync_failure_is_recorded_not_raised(
@@ -412,7 +424,7 @@ def test_publish_sync_failure_is_recorded_not_raised(
     assert "fatal: no" in results[1].detail
     # The manifest stays as the record of the attempt (the next run resumes).
     assert (results[1].source_dir / BASELINE_MANIFEST).is_file()
-    assert "01KXNXCJ86E8Z2FKVAXRER5ND4" in run.suite_path.read_text()
+    assert PREVIOUS_ULIDS[1] in run.suite_path.read_text()
 
 
 def test_publish_only_touches_would_publish_records(
@@ -445,11 +457,82 @@ def test_publish_session_reads_run_yaml_and_publishes(
     assert all(f"ulid: {r.ulid}\n" in run.suite_path.read_text() for r in results)
 
 
+# ── a directory store ─────────────────────────────────────────────────────────
+
+
+def test_publish_to_a_directory_store_copies_and_repoints(
+    run: Run, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    sync = mocker.patch("baselines.sync")
+    store = tmp_path / "dropbox-store"
+    store.mkdir()
+    records = _plan(run, store=str(store))
+    assert records[0].destination == str(store / records[0].ulid)
+    results = _publish(run, records, baseline_root=store)  # the store is the cache
+    assert [r.action for r in results] == ["published"] * 3
+    assert all(r.suite_updated for r in results)
+    sync.assert_not_called()
+    for record in results:
+        published = store / record.ulid
+        manifest = BaselineManifest.model_validate(
+            yaml.safe_load((published / BASELINE_MANIFEST).read_text())
+        )
+        assert manifest.store == str(store) and manifest.ulid == record.ulid
+        assert (published / "plots-overview" / "co.gif").is_file()
+        assert sorted(p.name for p in published.glob("*.nc")) == sorted(
+            p.name for p in record.source_dir.glob("*.nc")
+        )
+    assert all(f"ulid: {r.ulid}\n" in run.suite_path.read_text() for r in results)
+
+
+def test_directory_store_is_append_only_and_resumes(
+    run: Run, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    mocker.patch("baselines.sync")
+    store = tmp_path / "store"
+    store.mkdir()
+    records = _plan(run, store=str(store))
+    (store / records[1].ulid).mkdir()  # occupied by something else
+    results = _publish(run, records, baseline_root=None)
+    assert [r.action for r in results] == ["published", "failed", "published"]
+    assert "append-only" in results[1].detail
+    # A reverted suite: the directories' manifests name the store -> resume.
+    original_text = run.suite_path.read_text()
+    for record in results:
+        if record.action == "published":
+            run.suite_path.write_text(
+                run.suite_path.read_text().replace(record.ulid, record.previous_ulid)
+            )
+    again = _publish(run, _plan(run, store=str(store)), baseline_root=None)
+    assert [r.action for r in again] == ["published", "failed", "published"]
+    assert all(
+        "already in the store" in r.detail for r in again if r.action == "published"
+    )
+    assert run.suite_path.read_text() == original_text
+
+
+def test_directory_store_must_exist_and_dry_run_writes_nothing(
+    run: Run, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    mocker.patch("baselines.sync")
+    store = tmp_path / "absent"
+    results = _publish(run, _plan(run, store=str(store)))
+    assert {r.action for r in results} == {"failed"}
+    assert all("does not exist" in r.detail for r in results)
+    store.mkdir()
+    original = run.suite_path.read_text()
+    results = _publish(run, _plan(run, store=str(store)), dry_run=True)
+    assert [r.action for r in results] == ["would-publish"] * 3
+    assert all("would copy" in r.detail for r in results)
+    assert list(store.iterdir()) == []
+    assert run.suite_path.read_text() == original
+
+
 # ── rewrite_suite_ulid ────────────────────────────────────────────────────────
 
 
 def test_rewrite_keeps_every_other_byte(run: Run) -> None:
-    old = "01KXNXCJ86E8Z2FKVAXRER5ND4"
+    old = PREVIOUS_ULIDS[1]
     new = "01JNEWNEWNEWNEWNEWNEWNEWNE"
     before = run.suite_path.read_text()
     rewrite_suite_ulid(run.suite_path, old, new)
@@ -463,13 +546,11 @@ def test_rewrite_refuses_zero_and_ambiguous_matches(run: Run) -> None:
         rewrite_suite_ulid(
             run.suite_path, "01JABSENTABSENTABSENTABSEN", "01JNEWNEWNEWNEWNEWNEWNEWNE"
         )
-    text = run.suite_path.read_text().replace(
-        "01KXNXCJ87190QGHQZV2913JAW", "01KXNXCJ86E8Z2FKVAXRER5ND4"
-    )
+    text = run.suite_path.read_text().replace(PREVIOUS_ULIDS[2], PREVIOUS_ULIDS[1])
     run.suite_path.write_text(text)
     with pytest.raises(ValueError, match="2 `ulid:` lines"):
         rewrite_suite_ulid(
-            run.suite_path, "01KXNXCJ86E8Z2FKVAXRER5ND4", "01JNEWNEWNEWNEWNEWNEWNEWNE"
+            run.suite_path, PREVIOUS_ULIDS[1], "01JNEWNEWNEWNEWNEWNEWNEWNE"
         )
     assert run.suite_path.read_text() == text
 
@@ -477,7 +558,5 @@ def test_rewrite_refuses_zero_and_ambiguous_matches(run: Run) -> None:
 def test_rewrite_restores_the_file_when_the_reload_differs(run: Run) -> None:
     before = run.suite_path.read_text()
     with pytest.raises(ValueError, match="reload"):
-        rewrite_suite_ulid(
-            run.suite_path, "01KXNXCJ86E8Z2FKVAXRER5ND4", "not a ulid: ["
-        )
+        rewrite_suite_ulid(run.suite_path, PREVIOUS_ULIDS[1], "not a ulid: [")
     assert run.suite_path.read_text() == before

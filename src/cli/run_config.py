@@ -38,8 +38,8 @@ class BaselinesSection(StrictModel):
     store: str = Field(
         default=DEFAULT_BASELINE_STORE,
         description=(
-            "ASSAY_BASELINE_STORE: the baselines' S3 prefix, where "
-            "publish-baselines writes <store>/<ulid>/ (append-only)"
+            "ASSAY_BASELINE_STORE: where publish-baselines writes <store>/<ulid>/ "
+            "(append-only): an s3://bucket/prefix or a local directory"
         ),
     )
 

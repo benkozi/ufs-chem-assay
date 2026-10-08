@@ -600,3 +600,19 @@ def test_publish_baselines_primes_the_cache_from_the_setting(
     assert main(["publish-baselines", f"--output-root={publish_env.root}"]) == 0
     for combo in publish_env.combos:
         assert (cache / combo.combo_id / "baseline.yaml").is_file()
+
+
+def test_publish_baselines_to_a_directory_store(
+    publish_env: Run, mocker: MockerFixture, tmp_path: Path
+) -> None:
+    sync = mocker.patch("baselines.sync")
+    store = tmp_path / "dropbox"
+    store.mkdir()
+    code = main(
+        ["publish-baselines", f"--output-root={publish_env.root}", f"--store={store}"]
+    )
+    assert code == 0
+    sync.assert_not_called()
+    assert sorted(p.name for p in store.iterdir()) == sorted(
+        c.combo_id for c in publish_env.combos
+    )

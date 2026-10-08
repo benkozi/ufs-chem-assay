@@ -181,7 +181,10 @@ def _parser() -> argparse.ArgumentParser:
         "--store",
         default=None,
         metavar="S3_PREFIX",
-        help="override ASSAY_BASELINE_STORE (s3://bucket/prefix) for this call",
+        help=(
+            "override ASSAY_BASELINE_STORE for this call: an s3://bucket/prefix "
+            "or a local directory"
+        ),
     )
     publish_parser.add_argument(
         "--dry-run",
