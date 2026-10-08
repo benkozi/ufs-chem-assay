@@ -15,6 +15,16 @@ unwrapped per-combo tests then assert on the outcome (driver exit code,
 NetCDF file count and names, per-species variable attributes), and an
 analysis step computes descriptive statistics and spatial plots.
 
+**What is tested is a configuration (2026-10-08).** The harness tests
+specific configurations of an application: a suite names a base
+configuration, the inputs it reads, and how it is swept, asserted, and
+analysed. The configurations the harness carries live under
+`src/tests/config/<application>/<configuration>/`, each beside the suites
+that sweep it (`cece/maccity/`: `maccity.yaml` and its three suites). The
+earlier notion of an application's shipped "examples" — run verbatim
+through its own tooling, or wrapped as suites — is retired entirely; see
+`design/feat/20261007-1555-retire-examples/20261007-1555-retire-examples.md`.
+
 **Identity (2026-09-01).** The harness was renamed `ufs-chem-assay` when its
 scope widened to testing, verification, and benchmarking across UFS-Chem
 applications (the previous identity is recorded in the spike below). The name
@@ -58,7 +68,14 @@ the harness test package `src/tests/ufs_chem_assay/`. See
   exists since 2026-10-07: `s3_sync.py`, a stand-alone `aws s3 sync`
   wrapper (see S3 data sync below and
   `design/feat/20261006-1710-basic-s3-auth/20261006-1710-basic-s3-auth.md`);
-  nothing calls it from the session or the CLI yet.
+  `ufs-chem-assay fetch` is its first caller (inputs); baseline sourcing
+  through it is designed but deferred (the retire-examples design doc's
+  "Deferred" section).
+- **The session never downloads.** Inputs are declared by the suite and
+  staged by the CLI's `fetch` (the run config's `data` stage calls it);
+  a session whose declared inputs are absent fails at collection, naming
+  the command. Ursa's compute nodes have no network, and a test that
+  silently fetches would hide a provisioning step.
 
 ## Applications
 
@@ -76,15 +93,20 @@ the shared modules freely. Full rationale in
 
 The adapter surface: constants (`name`, `env_prefix` — its settings
 namespace and the `${<PREFIX>ROOT_DIR}` suite token, `container_workdir`,
-`default_suite`, `checkout_dirname`, `standard_dimensions`), the models it
+`default_suite`, `checkout_dirname`, `data_dirname` — where a suite's
+inputs are staged under the checkout, `standard_dimensions`), the models it
 subclasses (`settings_model`, `config_model`, `suite_model` with the
-application's sweep and selector schemas, `run_section_model`), an
-optional `examples` support, and the methods the shared code needs:
-`dimensions` (sweep → the generic `(Dimension, values)` list),
-`build_config`, `effective_parameters` (combos.csv rows), the derived
-expectations (`expected_output_count`, `expected_output_filenames`,
+application's sweep and selector schemas, `run_section_model`), and the
+methods the shared code needs: `dimensions` (sweep → the generic
+`(Dimension, values)` list), `build_config`, `write_config` (writes a
+combination's generated configuration into its directory and names the
+driver's argument — the base class's single-file default serves CECE; an
+application whose configuration is a directory overrides it),
+`effective_parameters` (combos.csv rows), the derived expectations
+(`expected_output_count`, `expected_output_filenames`,
 `output_variable_names`), `selector_matches` (baseline selectors), and
-`stage_lines` (the CLI's source/build/data bodies). Each adapter narrows
+`stage_lines` (the CLI's source/build bodies, plus any application-specific
+data lines after the shared `fetch`). Each adapter narrows
 the generic base types it receives with one `isinstance` per method — a
 wrong `application:` cannot reach it, since its suite model validated the
 input.
@@ -122,7 +144,7 @@ values. The combination space is the cartesian product of the listed values.
 ```yaml
 # simple-maccity-suite.yaml — initial suite
 name: simple-maccity                       # unique suite name (lowercase slug)
-config_path: ../cece/simple-maccity.yaml   # base driver config (suite-relative)
+config_path: maccity.yaml   # base driver config (suite-relative: beside the suite)
 application: cece                          # optional; selects the adapter (default cece)
 timeout_s: 10                              # per combination; capped by ASSAY_RUN_TIMEOUT_S
 assertions:
@@ -214,14 +236,32 @@ as the single combination named `base` (its id a runtime ULID like every
 combo's).
 A `config_path` starting with the literal `${CECE_ROOT_DIR}` token — the
 adapter's own root variable, `${<PREFIX>ROOT_DIR}` — anchors on the
-application checkout (the adapter settings' `root_dir`) — how the checked-in
-`ex1-suite.yaml` … `ex7-suite.yaml` run the checkout's shipped example
-configs (`examples/config/cece_config_ex*.yaml`) as ordinary suites with
-the full pipeline; using such a suite without a configured root is the
-standard root-dir usage error. Generated combo configs also always point
-`driver.log_file` into the combo's output directory, so no base config —
-the examples set relative paths — can write a log into the checkout. See
-`design/feat/20260724-0907-examples-as-suites/20260724-0907-examples-as-suites.md`.
+application checkout (the adapter settings' `root_dir`): the portable way
+for a suite to reference a configuration living in the checkout rather
+than in this repository; using such a suite without a configured root is
+the standard root-dir usage error. `config_path` may name a directory for
+an application whose configuration spans several files (resolution checks
+existence; the adapter's loader decides the shape). Generated combo
+configs always point `driver.log_file` into the combo's output directory,
+so no base config can write a log into the checkout.
+
+**Inputs (2026-10-08).** A suite declares the files its base configuration
+reads: `inputs:` is a list of `{url, public, dst, sha256}` — an
+`s3://bucket/key` object, whether the bucket allows anonymous reads
+(`--no-sign-request`; CECE's sources are all public), the destination
+relative to the checkout's data directory (the adapter's `data_dirname`),
+and the expected digest. `ufs-chem-assay fetch` (`src/staging.py`) stages
+the merged inputs of the selected suites: a present file with the declared
+digest is skipped without the network; otherwise one filtered
+`aws s3 sync` of the object's parent prefix into `<data>/.staging/<ulid>/`,
+verified, then moved into place — a killed or wrong fetch never leaves a
+half or foreign file under the real name. Identical entries across suites
+deduplicate; a `dst` declared two ways is refused before any transfer. The
+session only checks presence (collection-time usage error naming the
+command) and records every input in `run.yaml` (path, url, declared
+digest, size or null). Suites are discovered by the `-suite.yaml` rule
+(`resolution.select_suites` globs `*-suite.yaml`), so configuration files
+beside suites are never mistaken for them.
 
 Reusing the enums from the adapter's config model means invalid values fail
 at suite-load time with a pydantic error, before any container runs.
@@ -231,7 +271,7 @@ The **initial suite** sweeps only `Mapalgo` over `bilinear`, `consd`, and
 remains expressible later purely by editing the suite YAML.
 
 The suite file path is a pytest option (`--suite-config`, default:
-`src/tests/config/suite/simple-maccity-suite.yaml`,
+`src/tests/config/cece/maccity/simple-maccity-suite.yaml`,
 checked in with the initial sweep).
 
 ## Combination space
@@ -301,7 +341,7 @@ across runs on `suite` + `combo` name or the parameter columns). See
 
 Combinations are diffs applied to a **base config** — a known-good driver
 config selected by the suite's `config_path` (the initial
-`src/tests/config/cece/simple-maccity.yaml`, modeled on
+`src/tests/config/cece/maccity/maccity.yaml`, modeled on
 `examples/cece_config_ex1.yaml`: single species `co`, single `MACCITY` stream
 reading `/work/data/MACCity_4x5.nc`, coarse global grid, three-hour run). Base
 configs live inside this repository, preserving zero runtime dependency
@@ -475,10 +515,12 @@ exit is the failure condition. The environment variables mirror `setup.sh`
     file path is used verbatim (escape hatch); otherwise the value is a
     regex fullmatched (the sweep-regex convention) against each candidate
     suite's file name or search-root-relative posix path. Candidates are
-    every `*.yaml` discovered recursively under the
+    every `*-suite.yaml` discovered recursively under the
     `suite_config_search_path` directories plus the built-in
-    `src/tests/config/suite/` (always the final root), deduplicated by
-    resolved path. **Every match runs** — one match is a single-suite
+    `src/tests/config/` tree (always the final root), deduplicated by
+    resolved path; the sequence from selector to loaded suites of one
+    application is `selection.resolve_suites`, shared with the CLI's
+    `fetch`. **Every match runs** — one match is a single-suite
     session, several a multi-suite session over the same flat output root
     (per-suite timeouts/assertions/plots via each combo's owning
     `SuiteContext`; test ids `<suite>/<combo>`-qualified when several;
@@ -504,30 +546,12 @@ exit is the failure condition. The environment variables mirror `setup.sh`
     client never starts). Validates any suite — notably the exhaustive
     one — before paying for containers. With the default temp output root
     it needs no environment at all — no CECE checkout required.
-  - `--run-examples` — flag, off by default; runs the application checkout's (CECE's)
-    shipped `examples/config/cece_config_ex*.yaml` through the checkout's
-    own `examples/run-example.py` entrypoint, wrapped in docker by this
-    runner (the entrypoint is container-agnostic and never spawns docker
-    itself; exit 0 = pass). Data comes from one session-scoped pass of
-    `examples/download-example-data.py`, invoked per example id with
-    `--dst-dir <root>/data` (a failing download is logged and recorded,
-    never fatal). All
-    examples are expected green since the consolidation fix
-    (`design/fix/20260720-1500-fix-cece-examples/20260720-1500-fix-cece-examples.md`). ex1/ex7's
-    CAMS-TEMPO inputs have no public download source yet: they run from
-    local `data/` copies, and their download-script fetches 404 on a
-    fresh machine until the data is published.
-    Examples are **external artifacts under test**: they are
-    deliberately not loaded through `CeceConfig` (they may use schemas the
-    driver no longer reads — the documented exception to the
-    config-construction rule, which governs generated configs only), and
-    failures are honest, never masked. Outputs land in `examples/` under
-    the output root (`<stem>.out` per example plus a session
-    `examples-report.md`); examples carry no combo_id and stay out of
-    `test-report.csv`. `--dry-run` wins over `--run-examples`; without a
-    configured root, `--run-examples` fails at collection via the root_dir
-    guard (example tests don't request `driver_run`, so the guard carries
-    a separate examples condition).
+  - **Declared inputs must be present** (no flag): when combo tests are
+    collected without `--dry-run`, after the root-dir check below, any
+    selected suite's `inputs` entry absent from `<root>/<data_dirname>` is
+    a `UsageError` listing the paths and the `ufs-chem-assay fetch
+    --suite-config=<selector>` command that stages them. The session never
+    downloads.
   - The application checkout root has **no flag** (the former
     `--cece-root-dir` was retired with the adapter extraction): the
     adapter's `ROOT_DIR` variable, `.env`, or the run config's export is
@@ -595,8 +619,9 @@ the harness knows nothing about it. See S3 data sync.
 wraps `aws s3 sync`: one frozen `S3SyncConfig` (source, destination — at
 least one an `s3://` URI, never both; `dry_run`, `delete`,
 `only_show_errors`, exclude-then-include filters, `profile`,
-`timeout_s`), exactly **one subprocess call** per `sync()`, one
-`S3SyncResult` (argv as executed, exit status, captured output). Sync is
+`no_sign_request`, `timeout_s`), exactly **one subprocess call** per
+`sync()`, one `S3SyncResult` (argv as executed, exit status, captured
+output). Sync is
 the primitive because it is reentrant: an interrupted transfer resumes by
 re-running the same config. `dry_run` tunnels into `--dryrun` and the
 CLI's `(dryrun) …` lines are the plan (logged at INFO). Guards: `delete`
@@ -606,8 +631,10 @@ absolute, `only_show_errors` and `dry_run` exclude each other.
 Credentials are the CLI's business: the child inherits the environment
 unchanged and the CLI's own chain (credentials file, profiles, environment,
 SSO) applies; `profile` is a pass-through of `--profile`; missing
-credentials are the CLI's nonzero exit, raised as `CalledProcessError`.
-Transfer tuning (`max_concurrent_requests`) lives in the user's own
+credentials are the CLI's nonzero exit, raised as `CalledProcessError`;
+`no_sign_request` passes `--no-sign-request` for publicly readable buckets
+(anonymous, no credentials looked up; refused together with `profile`) —
+how `fetch` reads CECE's public source buckets (2026-10-08). Transfer tuning (`max_concurrent_requests`) lives in the user's own
 `~/.aws/config`, which the CLI honours, never in the harness. The module
 is deliberately stand-alone — its one harness import is `logs.get_logger`
 — so it can be lifted into another repository. The AWS CLI v2 is an
@@ -696,8 +723,8 @@ All code under `src/`; the project is `uv`-managed with its own
   design/design.md
   src/
     applications/
-      base.py             # Application ABC, ApplicationSettings, DriverConfig, SweepBase,
-                          #   SweepSelectorBase, ApplicationRunSection, ExamplesSupport
+      base.py             # Application ABC (incl. data_dirname, write_config), ApplicationSettings,
+                          #   DriverConfig, SweepBase, SweepSelectorBase, ApplicationRunSection
       registry.py         # REGISTRY (name -> adapter), get_application, load_suite
       cece/
         application.py    # CeceApplication: the wiring, registered by name
@@ -706,15 +733,15 @@ All code under `src/`; the project is `uv`-managed with its own
         suite.py          # CeceSweep + selectors, CeceSuiteConfig, selector matching
         combos.py         # dimensions, build_config (cece.log), effective-parameter rows
         assertions.py     # expected count/filenames/variable names, STANDARD_DIMENSIONS
-        examples.py       # example discovery, download, run command
-        cli.py            # CeceRunSection, source/build/data stage bodies
+        cli.py            # CeceRunSection, source/build stage bodies
     models/
       base.py             # StrictModel: extra="forbid" base for all config models
-      suite_config.py     # generic SuiteConfig, Assertions, Analysis, Plotting,
-                          #   BaselineComparison, RunManifest
+      suite_config.py     # generic SuiteConfig, InputFile, Assertions, Analysis, Plotting,
+                          #   BaselineComparison, RecordedInput, RunManifest
       yaml.py             # the YAML-1.2-boolean loader (configs, override values)
     cli/                  # `ufs-chem-assay run`: run config model (applications map),
-                          #   overrides, per-application stage scripts, bash execution
+                          #   overrides, per-application stage scripts, bash execution;
+                          #   `ufs-chem-assay fetch`: stage the selected suites' inputs
     identity.py           # HARNESS_NAME, HARNESS_ROOT, harness_version/commit
     platforms.py          # Platform / Runtime enums, hostname detection
     templates/driver-job.sbatch.j2  # the slurm runtime's per-driver job script
@@ -722,28 +749,30 @@ All code under `src/`; the project is `uv`-managed with its own
     assertions.py         # generic post-run assertions (expectations passed in)
     combos.py             # Dimension, Combo, enumerate_combos, write_combos_csv
     comparison.py         # baseline resolution (via the adapter) + NetCDF comparison
-    examples.py           # generic example result models + the session report
     logs.py               # namespace logger, level from ASSAY_LOG_LEVEL
     plotting.py           # session-end spatial plots + GIFs (cartopy/matplotlib)
     report.py             # test-report.csv: row model, outcome precedence, writer
-    resolution.py         # pure path-resolution rules (suite path, output roots)
+    resolution.py         # pure path-resolution rules (suite discovery by *-suite.yaml, output roots)
+    selection.py          # selector -> the loaded suites of one application (pytest + fetch)
+    staging.py            # inputs: merge across suites, stage via s3_sync, verify, record
     runner.py             # driver command per runtime (docker run / native +
                           #   launcher / sbatch), check_output, .out writing
     s3_sync.py            # stand-alone `aws s3 sync` wrapper; credentials are
                           #   the CLI's own; one harness import (the logger)
     settings.py           # harness-wide pydantic-settings (ASSAY_*, CECE_* fallback)
     tests/
-      config/
-        cece/simple-maccity.yaml          # base driver config
-        suite/simple-maccity-suite.yaml   # initial suite (--suite-config default)
-        suite/exhaustive-maccity-run-only-suite.yaml  # every enum value via ".*"
+      config/             # <application>/<configuration>/: the configuration's files
+                          #   and the *-suite.yaml files that sweep it, side by side
+        cece/maccity/maccity.yaml                     # base driver config
+        cece/maccity/simple-maccity-suite.yaml        # initial suite (--suite-config default)
+        cece/maccity/exhaustive-maccity-asserted-suite.yaml
+        cece/maccity/exhaustive-maccity-run-only-suite.yaml  # every enum value via ".*"
                                           #   regex sweeps; on-demand, run-only
       ufs_chem_assay/     # the harness's own tests: mocked process call, no docker
         applications/cece/  # the CECE adapter's tests (test_cece_*.py)
         stubs.py          # an inert second adapter for several-application tests
       conftest.py         # options, session fixture (generate yamls), param fixture
       test_driver_combos.py               # integration tests (real docker)
-      test_examples.py                    # shipped-example execution (--run-examples)
 ```
 
 Dependencies: `pytest`, `pytest-mock`, `pydantic>=2`, `pydantic-settings`,
@@ -818,6 +847,17 @@ mechanics:
   baked hook (title passed via environment variable only — PR titles are
   attacker-controlled). Squash-merge subjects come from PR titles;
   python-semantic-release parses them to compute versions.
+- **The integration job** (`integration.yaml`; design in
+  `design/feat/20260727-1633-simple-maccity-ci/20260727-1633-simple-maccity-ci.md`,
+  2026-10-08 changes in the retire-examples design doc) clones the CECE
+  ref in its `env` block, restores `cece/build` from `actions/cache` keyed
+  by CECE SHA and **skips the build step on an exact hit** — the driver is
+  in the restored tree, and a hit used to recompile every CECE object
+  because the fresh checkout's mtimes postdate the restored ones (2 min 41 s
+  of a 4-minute job); the save step is gated on the build succeeding so a
+  partial tree never lands under the exact key. The uv cache is keyed on
+  `uv.lock`. Inputs come from `ufs-chem-assay fetch`; baselines stay off
+  there until the deferred baseline sourcing lands.
 - **Releases are automatic** (full design in
   `design/feat/20261006-1250-psr-ci/20261006-1250-psr-ci.md`): the `release-psr`
   job of `ci.yaml` runs on every push to `develop` (rc prereleases) or
@@ -863,8 +903,9 @@ mechanics:
   no `.gitignore` entries are needed. An explicit `--combo-output-root` opts
   into a `/work`-relative root that persists in the checkout. Either way the
   root is bind-mounted, so artifacts survive `--rm`.
-- Input data (`/work/data/MACCity_4x5.nc`) is guaranteed present in the
-  mounted checkout.
+- Input data is declared by the suite (`inputs:`) and staged by
+  `ufs-chem-assay fetch`; the session only checks presence and fails fast
+  (2026-10-08; before that `/work/data/MACCity_4x5.nc` was assumed present).
 - Exit code 0 is the sole pass criterion for v1; log/NetCDF inspection comes
   with the future evaluation step.
 - The sweep is YAML-configured from day one; the initial suite covers only

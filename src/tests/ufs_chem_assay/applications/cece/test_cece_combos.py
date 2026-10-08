@@ -114,7 +114,7 @@ def test_normalization_declaration_order_never_matters(base_config: CeceConfig) 
 
 def test_empty_sweep_enumerates_identity_combo(base_config: CeceConfig) -> None:
     # A sweep attaching no dimensions runs the base config as the single
-    # combination (sweep-less suites; examples-as-suites design).
+    # combination (sweep-less suites).
     (combo,) = _enumerate(CeceSweep(), base_config)
     assert combo.values == ()
     assert combo.name == "base"

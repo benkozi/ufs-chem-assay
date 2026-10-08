@@ -15,7 +15,6 @@ from applications.base import (
 )
 from applications.cece import assertions, cli, combos, suite
 from applications.cece.config import CeceConfig
-from applications.cece.examples import CeceExamples
 from applications.cece.settings import CONTAINER_WORKDIR, ENV_PREFIX, CeceSettings
 from cli.stages import Stage
 from combos import Combo, Dimension, ParameterRow
@@ -34,12 +33,12 @@ class CeceApplication(Application):
     container_workdir = CONTAINER_WORKDIR
     default_suite = "simple-maccity-suite.yaml"
     checkout_dirname = "CECE"
+    data_dirname = "data"
     standard_dimensions = assertions.STANDARD_DIMENSIONS
     settings_model = CeceSettings
     config_model = CeceConfig
     suite_model = suite.CeceSuiteConfig
     run_section_model = cli.CeceRunSection
-    examples = CeceExamples()
 
     def dimensions(
         self, sweep: SweepBase, base_config: DriverConfig

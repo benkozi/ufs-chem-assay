@@ -1,7 +1,6 @@
 """Native runtime: the driver as a host process, host-side paths throughout."""
 
 import subprocess
-import sys
 from pathlib import Path, PurePosixPath
 
 from pytest_mock import MockerFixture
@@ -106,34 +105,13 @@ def test_docker_output_roots_keep_the_work_rule() -> None:
     assert driver == PurePosixPath("/work/runs")
 
 
-def test_native_example_command_runs_entrypoint_with_harness_python() -> None:
-    # The entrypoint needs Python >= 3.11 (StrEnum); natively the harness's
-    # own interpreter is the one guaranteed to satisfy that.
-    assert _APP.examples is not None
-    assert _APP.examples.run_command(_native(), _CECE, "ex3") == [
-        sys.executable,
-        "/host/cece/examples/run-example.py",
-        "--example",
-        "ex3",
-    ]
-
-
-def test_docker_prefix_is_shared_by_driver_and_examples_commands() -> None:
-    # One docker preamble (mounts, cwd, MPI-as-root env, image) serves both
-    # the driver and the examples entrypoint; only the tail differs.
+def test_docker_prefix_precedes_the_driver_command() -> None:
+    # One docker preamble (mounts, cwd, MPI-as-root env, image), then the
+    # driver and its config.
     settings = Settings(platform=Platform.LOCAL)
     app_settings = CeceSettings(root_dir=Path("/host/cece"), docker_image="img:tag")
     prefix = docker_prefix(app_settings, CONTAINER_WORKDIR)
     assert prefix[0:3] == ["docker", "run", "--rm"] and prefix[-1] == "img:tag"
     driver = build_command(settings, _APP, app_settings, PurePosixPath("/work/x.yaml"))
-    assert _APP.examples is not None
-    example = _APP.examples.run_command(settings, app_settings, "ex3")
     assert driver[: len(prefix)] == prefix
-    assert example[: len(prefix)] == prefix
     assert driver[len(prefix) :] == ["./build/cece_standalone_driver", "/work/x.yaml"]
-    assert example[len(prefix) :] == [
-        "python3",
-        "examples/run-example.py",
-        "--example",
-        "ex3",
-    ]

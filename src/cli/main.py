@@ -1,7 +1,14 @@
-"""`ufs-chem-assay run --config-file=X [--override K:P=V ...]`: render the
+"""The harness CLI.
+
+`ufs-chem-assay run --config-file=X [--override K:P=V ...]`: render the
 stage scripts for every configured application and run them in order with
 bash, on this node. Under the slurm runtime the harness itself submits one
-Slurm job per driver call."""
+Slurm job per driver call.
+
+`ufs-chem-assay fetch [--application NAME] [--suite-config SELECTOR]
+[--dry-run]`: stage the inputs the selected suites declare into the
+application checkout's data directory — the same selection and settings a
+pytest session would use; the run config's data stage calls it."""
 
 from __future__ import annotations
 
@@ -16,7 +23,9 @@ from cli.shell import run_bash, write_script
 from cli.stages import Stage, render_stage
 from logs import configure_logging, get_logger
 from platforms import Platform
-from settings import ENV_PREFIX, LEGACY_ENV_PREFIX
+from selection import resolve_suites
+from settings import ENV_PREFIX, LEGACY_ENV_PREFIX, Settings
+from staging import merge_inputs, stage_inputs
 
 logger = get_logger("cli")
 
@@ -100,6 +109,34 @@ def _parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="write every script under <root_dir>/scripts/ and stop: nothing executes",
+    )
+    fetch = subparsers.add_parser(
+        "fetch",
+        help=(
+            "stage the inputs the selected suites declare into the application "
+            "checkout's data directory (present, verified files are skipped)"
+        ),
+    )
+    fetch.add_argument(
+        "--application",
+        default=None,
+        metavar="NAME",
+        help="the session's application (overrides ASSAY_APPLICATION), as for pytest",
+    )
+    fetch.add_argument(
+        "--suite-config",
+        default=None,
+        metavar="SELECTOR",
+        help=(
+            "suite selector, exactly as pytest's --suite-config: an existing file "
+            "or a regex fullmatched against *-suite.yaml names and search-root-"
+            "relative paths; default: the application's default suite"
+        ),
+    )
+    fetch.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what is present and what would be fetched; transfer nothing",
     )
     return parser
 
@@ -199,12 +236,69 @@ def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fetch(args: argparse.Namespace) -> int:
+    """Stage the selected suites' inputs. Settings come from the environment
+    and .env exactly as in a pytest session (the flag wins over
+    ASSAY_APPLICATION, as there); every failure is one ERROR line and exit 1,
+    and a failed transfer never hides the others' outcomes."""
+    settings = (
+        Settings()
+        if args.application is None
+        else Settings(application=args.application)
+    )
+    try:
+        resolved = resolve_suites(settings, args.suite_config)
+        inputs = merge_inputs([suite for _, suite in resolved.suites])
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 1
+    app, app_settings = resolved.application, resolved.app_settings
+    if app_settings.root_dir is None:
+        logger.error(
+            "fetch stages inputs into the %s checkout, which is not configured; set %sROOT_DIR",
+            app.name,
+            app.env_prefix,
+        )
+        return 1
+    if not app_settings.root_dir.is_dir():
+        logger.error(
+            "%s root %s is not an existing directory; check %sROOT_DIR",
+            app.name,
+            app_settings.root_dir,
+            app.env_prefix,
+        )
+        return 1
+    data_dir = app.data_dir(app_settings.root_dir)
+    logger.info(
+        "%s%s input(s) declared by %s into %s",
+        "dry run: " if args.dry_run else "staging ",
+        len(inputs),
+        ", ".join(suite.name for _, suite in resolved.suites),
+        data_dir,
+    )
+    results = stage_inputs(inputs, data_dir, dry_run=args.dry_run)
+    failed = [result for result in results if result.action == "failed"]
+    for result in failed:
+        logger.error("%s: %s", result.path, result.detail)
+    counts = {
+        action: sum(1 for r in results if r.action == action)
+        for action in ("skipped", "downloaded", "would-fetch", "failed")
+    }
+    logger.info(
+        "fetch summary: %s",
+        ", ".join(f"{count} {action}" for action, count in counts.items() if count),
+    )
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # The harness's namespace logger, level from the same variable pytest
-    # honours (settings.log_level, with the legacy spelling as fallback); the
-    # CLI never loads Settings itself.
+    # honours (settings.log_level, with the legacy spelling as fallback).
     level = os.environ.get(f"{ENV_PREFIX}LOG_LEVEL") or os.environ.get(
         f"{LEGACY_ENV_PREFIX}LOG_LEVEL", "INFO"
     )
     configure_logging(level)
-    return _run(_parser().parse_args(argv))  # `run` is the only subcommand
+    args = _parser().parse_args(argv)
+    if args.command == "fetch":
+        return _fetch(args)
+    return _run(args)

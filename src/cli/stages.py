@@ -5,9 +5,11 @@ under <root_dir>/scripts/ for review, `--dry-run` stops after rendering, and
 the Ursa runbook (docs/ursa-runbook.md) is the same commands by hand — when
 one changes, the other does. Every stage runs where the CLI runs; under the
 slurm runtime the harness stage's driver runs submit their own jobs. Paths
-and values are shell-quoted. The source, build, and data bodies are the
-application adapter's; the harness stage is shared and renders its exports
-from the settings' field names.
+and values are shell-quoted. The source and build bodies are the
+application adapter's; the data and harness stages are shared — one export
+block, rendered from the settings' field names, precedes both the harness's
+`fetch` (data) and its pytest session (harness), so both resolve the same
+suites — with an adapter hook for application-specific data lines.
 """
 
 from __future__ import annotations
@@ -103,9 +105,12 @@ def _env_value(value: object) -> str | None:
     return q(value)
 
 
-def _harness(
+def _exports(
     config: RunConfig, app: Application, section: ApplicationRunSection
-) -> list[str]:
+) -> list[tuple[str, str]]:
+    """The environment both shared stages export: the application's settings
+    under its prefix, every mirrored harness setting under ASSAY_, the slurm
+    bits, uv's cache, and the user's env."""
     harness = config.harness
     prefix = app.env_prefix
     exports: list[tuple[str, str]] = [
@@ -150,7 +155,13 @@ def _harness(
     if config.runtime is not Runtime.SLURM:
         # docker/native run the driver as a local process: env applies here.
         exports += [(key, q(value)) for key, value in harness.env.items()]
+    return exports
 
+
+def _harness(
+    config: RunConfig, app: Application, section: ApplicationRunSection
+) -> list[str]:
+    harness = config.harness
     pytest_args = [
         f"--application={app.name}",
         f"--suite-config={harness.suite_config}",
@@ -160,12 +171,10 @@ def _harness(
         pytest_args.append("--combo-clean-root")
     if harness.pytest_dry_run:
         pytest_args.append("--dry-run")
-    if harness.run_examples:
-        pytest_args.append("--run-examples")
     pytest_args += harness.pytest_args
     return [
         *clean_python_env(section),
-        *(f"export {key}={value}" for key, value in exports),
+        *(f"export {key}={value}" for key, value in _exports(config, app, section)),
         f"cd {q(HARNESS_ROOT)}",
         f"uv run --no-sync pytest {_DRIVER_COMBOS} "
         + " ".join(q(arg) for arg in pytest_args),
@@ -175,9 +184,16 @@ def _harness(
 def _data(
     config: RunConfig, app: Application, section: ApplicationRunSection, shared: bool
 ) -> list[str]:
-    # Everything here runs the harness venv's interpreter (the application's
-    # tooling may need a newer Python than the OS one after `module purge`).
-    lines = [*clean_python_env(section), f"cd {q(HARNESS_ROOT)}"]
+    # The harness's own fetch, under the harness stage's exports (so it
+    # resolves the same suites against the same checkout), from the harness
+    # checkout; then whatever data lines the adapter adds.
+    lines = [
+        *clean_python_env(section),
+        *(f"export {key}={value}" for key, value in _exports(config, app, section)),
+        f"cd {q(HARNESS_ROOT)}",
+        "uv run --no-sync ufs-chem-assay fetch "
+        f"--application={app.name} --suite-config={q(config.harness.suite_config)}",
+    ]
     lines += app.stage_lines(Stage.DATA, config, section)
     if shared and config.data.warm_cartopy:
         snippet = (

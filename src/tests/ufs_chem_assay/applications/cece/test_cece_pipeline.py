@@ -109,3 +109,26 @@ def test_maccity_pipeline_runs_all_combos_mocked(
         assert command[:3] == ["docker", "run", "--rm"]
         assert f"{tmp_path}:/combo_runs" in command
         assert call.kwargs["timeout"] == effective_timeout
+
+
+def test_write_config_default_writes_the_single_yaml(
+    tmp_path: Path, suite_path: Path
+) -> None:
+    """The base-class default: one <combo_id>.yaml in the combo directory,
+    the driver's argument being that file name. A directory-configuration
+    adapter overrides it."""
+    app = get_application("cece")
+    suite = load_suite(suite_path)
+    base_config = CeceConfig.from_yaml(suite.config_path)
+    (combo,) = enumerate_combos(app.dimensions(suite.sweep, base_config))[:1]
+    config = app.build_config(
+        combo, output_directory="/out", config_path=suite.config_path
+    )
+    combo_dir = tmp_path / "01ABC"
+    combo_dir.mkdir()
+
+    written = app.write_config(config, combo_dir, "01ABC")
+
+    assert written == PurePosixPath("01ABC.yaml")
+    assert (combo_dir / "01ABC.yaml").is_file()
+    assert CeceConfig.from_yaml(combo_dir / "01ABC.yaml").output is not None

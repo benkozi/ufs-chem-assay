@@ -161,8 +161,7 @@ def docker_prefix(
     """`docker run` up to and including the image: the checkout bind-mounted
     at the application's workdir (plus the output root when it lies outside
     it), cwd there, and the run-as-root MPI environment (harmless where not
-    needed). The driver and the examples entrypoint share it; only what runs
-    in the container differs."""
+    needed)."""
     command = [
         "docker",
         "run",

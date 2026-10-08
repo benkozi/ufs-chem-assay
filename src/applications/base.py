@@ -26,9 +26,7 @@ if TYPE_CHECKING:
     from cli.run_config import RunConfig
     from cli.stages import Stage
     from combos import Combo, Dimension, ParameterRow
-    from examples import DownloadResult
     from models.suite_config import SuiteConfig
-    from settings import Settings
 
 
 class ApplicationSettings(BaseSettings):
@@ -158,27 +156,6 @@ class ApplicationRunSection(StrictModel):
     )
 
 
-class ExamplesSupport(ABC):
-    """An application's shipped, runnable examples (--run-examples): how to
-    find them, name them, stage their data, and run one."""
-
-    @abstractmethod
-    def discover(self, root_dir: Path) -> list[Path]: ...
-
-    @abstractmethod
-    def example_id(self, config_path: Path) -> str: ...
-
-    @abstractmethod
-    def download(
-        self, root_dir: Path, timeout_s: int = 300
-    ) -> list[DownloadResult]: ...
-
-    @abstractmethod
-    def run_command(
-        self, settings: Settings, app_settings: ApplicationSettings, eid: str
-    ) -> list[str]: ...
-
-
 class Application(ABC):
     """One application the harness can test. Class attributes are the
     adapter's constants; the methods are the points where the shared code
@@ -191,18 +168,33 @@ class Application(ABC):
     container_workdir: ClassVar[PurePosixPath]  # checkout mount point under docker
     default_suite: ClassVar[str]  # what a bare `--application=<name>` runs
     checkout_dirname: ClassVar[str]  # default checkout under the CLI's run root
+    data_dirname: ClassVar[str]  # input data directory under the checkout ("data")
     standard_dimensions: ClassVar[tuple[str, ...]]  # every output variable's dims
     settings_model: ClassVar[type[ApplicationSettings]]
     config_model: ClassVar[type[DriverConfig]]
     suite_model: ClassVar[type[SuiteConfig]]
     run_section_model: ClassVar[type[ApplicationRunSection]]
-    examples: ClassVar[ExamplesSupport | None]  # None: ships no runnable examples
 
     @property
     def root_dir_token(self) -> str:
         """The literal config_path prefix that anchors a suite on the
         application checkout: `${CECE_ROOT_DIR}` — the variable's own name."""
         return "${" + self.env_prefix + "ROOT_DIR}"
+
+    def data_dir(self, root_dir: Path) -> Path:
+        """Where a suite's `inputs` are staged: <checkout>/<data_dirname>."""
+        return root_dir / self.data_dirname
+
+    def write_config(
+        self, config: DriverConfig, combo_dir: Path, combo_id: str
+    ) -> PurePosixPath:
+        """Write a combination's generated configuration into its directory
+        and return the driver's argument relative to that directory. The
+        default is the single-file form, `<combo_id>.yaml`; an application
+        whose configuration is a directory overrides it."""
+        name = f"{combo_id}.yaml"
+        config.to_yaml(combo_dir / name)
+        return PurePosixPath(name)
 
     # -- enumeration and config generation (combos.py) ------------------------
 

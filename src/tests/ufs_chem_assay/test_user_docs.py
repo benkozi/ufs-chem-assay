@@ -33,7 +33,7 @@ def test_templates_carry_the_applications_map(name: str) -> None:
     raw = yaml.safe_load((TEMPLATES_DIR / name).read_text())
     assert list(raw["applications"]) == ["cece"]
     assert "cece" not in raw  # the old top-level section is gone
-    assert "examples" not in raw["data"]  # example ids are the application's
+    assert "example" not in (TEMPLATES_DIR / name).read_text().lower()  # retired
 
 
 @pytest.mark.parametrize("path", _user_facing_files(), ids=lambda p: p.name)
@@ -81,5 +81,16 @@ def test_readme_documents_the_new_surfaces() -> None:
         "applications:",
         "arn:aws:s3:::ufs-chem",
         "data_integration",
+        "ufs-chem-assay fetch",
+        "inputs:",
+        "sha256",
+        "--no-sign-request",
     ):
         assert needle in text, needle
+
+
+def test_user_docs_never_say_example() -> None:
+    # "Example" is not a thing the harness has: it tests specific
+    # configurations of an application, declared by suites.
+    for path in (_README, _RUNBOOK, *sorted(TEMPLATES_DIR.glob("*.yaml"))):
+        assert "example" not in path.read_text().lower(), path.name

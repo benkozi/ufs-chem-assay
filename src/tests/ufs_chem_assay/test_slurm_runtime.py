@@ -287,12 +287,6 @@ def test_slurm_roots_are_host_roots() -> None:
     )
 
 
-def test_examples_are_not_supported_under_slurm_yet() -> None:
-    assert _APP.examples is not None
-    with pytest.raises(NotImplementedError, match="slurm"):
-        _APP.examples.run_command(_slurm(), _CECE, "ex3")
-
-
 def test_docker_and_native_paths_unchanged_by_the_new_runtime() -> None:
     docker = Settings(platform=Platform.LOCAL)
     assert (

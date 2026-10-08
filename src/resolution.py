@@ -42,14 +42,21 @@ def resolve_output_roots(
     return root_dir / relative, container_workdir / relative
 
 
+# The suite naming rule: suite X lives in X-suite.yaml. Discovery globs it, so
+# a configuration's own YAML files beside a suite are never mistaken for one.
+SUITE_SUFFIX = "-suite.yaml"
+
+
 def select_suites(option: str, search_paths: list[Path]) -> list[Path]:
     """Select every suite file matching --suite-config.
 
     An existing file path is used verbatim (escape hatch). Otherwise the
     option is a regex matched (fullmatch, like sweep regexes) against every
-    *.yaml found recursively under the search roots — against each file's
-    name and its posix path relative to its root; the same file reachable
-    via overlapping roots counts once. Every match is selected — one match
+    *-suite.yaml found recursively under the search roots — against each
+    file's name and its posix path relative to its root; the same file
+    reachable via overlapping roots counts once. Only files ending in
+    -suite.yaml are suites: a configuration's own YAML files sit beside the
+    suites that sweep them and are never candidates. Every match is selected — one match
     is a single-suite session, several a multi-suite session — ordered by
     file name (then path) for determinism. Zero matches raise ValueError
     listing the candidates.
@@ -68,7 +75,7 @@ def select_suites(option: str, search_paths: list[Path]) -> list[Path]:
     candidates: list[str] = []
     matches: list[Path] = []
     for root in search_paths:
-        for path in sorted(root.rglob("*.yaml")):
+        for path in sorted(root.rglob(f"*{SUITE_SUFFIX}")):
             resolved = path.resolve()
             if resolved in seen:
                 continue

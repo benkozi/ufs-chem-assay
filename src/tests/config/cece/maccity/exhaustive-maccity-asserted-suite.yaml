@@ -4,8 +4,16 @@
 # run at their defaults — did the driver write what its exit code claims?
 # Output-content checks (species attributes, stats, plots) stay off.
 name: exhaustive-maccity-asserted
-config_path: ../cece/simple-maccity.yaml
+config_path: maccity.yaml
 timeout_s: 10  # per combination; capped by ASSAY_RUN_TIMEOUT_S when smaller
+# Inputs the base config reads; `uv run ufs-chem-assay fetch --suite-config=<this file>`
+# stages them into <CECE_ROOT_DIR>/data (a present file with this sha256 is skipped;
+# public: anonymous reads, no AWS credentials needed).
+inputs:
+  - url: s3://geos-chem/HEMCO/MACCITY/v2014-07/MACCity_4x5.nc
+    public: true
+    dst: MACCity_4x5.nc
+    sha256: ef70975af53499ab45f620a778043ff6fd29ec4e7e2777f3fd1f2db59a12aab9
 # assertions: defaults apply — validate_file_count and validate_filenames
 # true, expected_nc_file_count null (derived: 3 for the 3-hour base config),
 # no species block.

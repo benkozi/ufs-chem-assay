@@ -16,6 +16,7 @@ from applications.base import Application
 from applications.registry import REGISTRY
 from cli.main import main
 from logs import LOGGER_NAME
+from staging import Action, StagedInput
 from tests.ufs_chem_assay.stubs import stub_application
 from tests.ufs_chem_assay.run_configs import run_config_file
 
@@ -307,3 +308,143 @@ def test_unconfigured_application_is_a_clean_error(
     assert code == 1
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
     assert len(errors) == 1 and "catchem" in errors[0] and "['cece']" in errors[0]
+
+
+# ── `ufs-chem-assay fetch` ───────────────────────────────────────────────────
+
+_MACCITY_URL = "s3://geos-chem/HEMCO/MACCITY/v2014-07/MACCity_4x5.nc"
+_MACCITY_SHA = "ef70975af53499ab45f620a778043ff6fd29ec4e7e2777f3fd1f2db59a12aab9"
+
+
+@pytest.fixture()
+def fetch_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cece_config_path: Path
+) -> Path:
+    """A neutral cwd (the repo .env out of scope), a fabricated checkout as
+    CECE_ROOT_DIR, and a suite root with two suites declaring inputs."""
+    monkeypatch.chdir(tmp_path)
+    for key in ("CECE_ROOT_DIR", "ASSAY_SUITE_CONFIG_SEARCH_PATH", "ASSAY_APPLICATION"):
+        monkeypatch.delenv(key, raising=False)
+    checkout = tmp_path / "checkout"
+    (checkout / "data").mkdir(parents=True)
+    suites = tmp_path / "suites"
+    suites.mkdir()
+    (suites / "one-suite.yaml").write_text(
+        f"name: one\nconfig_path: {cece_config_path}\ntimeout_s: 5\ninputs:\n"
+        f"  - url: {_MACCITY_URL}\n    public: true\n    dst: MACCity_4x5.nc\n    sha256: {_MACCITY_SHA}\n"
+    )
+    (suites / "two-suite.yaml").write_text(
+        f"name: two\nconfig_path: {cece_config_path}\ntimeout_s: 5\ninputs:\n"
+        f"  - url: {_MACCITY_URL}\n    public: true\n    dst: MACCity_4x5.nc\n    sha256: {_MACCITY_SHA}\n"
+        "  - url: s3://ufs-chem/private/extra.nc\n    dst: extra.nc\n"
+    )
+    monkeypatch.setenv("CECE_ROOT_DIR", str(checkout))
+    monkeypatch.setenv("ASSAY_SUITE_CONFIG_SEARCH_PATH", str(suites))
+    return checkout
+
+
+def _staged(url: str, path: Path, action: Action) -> StagedInput:
+    return StagedInput(url=url, path=path, action=action, detail="t", sha256=None)
+
+
+def test_fetch_stages_the_merged_inputs_of_the_selected_suites(
+    fetch_env: Path, mocker: MockerFixture
+) -> None:
+    stage = mocker.patch(
+        "cli.main.stage_inputs",
+        side_effect=lambda inputs, data_dir, dry_run: [
+            _staged(i.url, data_dir / i.dst, "skipped") for i in inputs
+        ],
+    )
+    code = main(["fetch", "--application=cece", r"--suite-config=.*-suite\.yaml"])
+    assert code == 0
+    stage.assert_called_once()
+    inputs, data_dir = stage.call_args.args
+    assert data_dir == fetch_env / "data"
+    assert stage.call_args.kwargs == {"dry_run": False}
+    # The shared file once, the private extra once: merged across both suites.
+    assert [(str(i.dst), i.public) for i in inputs] == [
+        ("MACCity_4x5.nc", True),
+        ("extra.nc", False),
+    ]
+
+
+def test_fetch_default_selects_the_applications_default_suite(
+    fetch_env: Path, mocker: MockerFixture
+) -> None:
+    stage = mocker.patch("cli.main.stage_inputs", return_value=[])
+    assert main(["fetch"]) == 0
+    inputs, data_dir = stage.call_args.args
+    assert data_dir == fetch_env / "data"
+    # The checked-in simple-maccity suite's own declaration.
+    assert [str(i.dst) for i in inputs] == ["MACCity_4x5.nc"]
+
+
+def test_fetch_exit_code_follows_the_results(
+    fetch_env: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch(
+        "cli.main.stage_inputs",
+        return_value=[
+            _staged("s3://bkt/a.nc", fetch_env / "data" / "a.nc", "downloaded"),
+            _staged("s3://bkt/b.nc", fetch_env / "data" / "b.nc", "failed"),
+        ],
+    )
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["fetch", "--suite-config=one-suite.yaml"])
+    assert code == 1
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any("b.nc" in m for m in errors)
+
+
+def test_fetch_dry_run_passes_through(fetch_env: Path, mocker: MockerFixture) -> None:
+    stage = mocker.patch("cli.main.stage_inputs", return_value=[])
+    assert main(["fetch", "--suite-config=one-suite.yaml", "--dry-run"]) == 0
+    assert stage.call_args.kwargs == {"dry_run": True}
+
+
+def test_fetch_without_the_application_root_is_a_clean_error(
+    fetch_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.delenv("CECE_ROOT_DIR")
+    stage = mocker.patch("cli.main.stage_inputs")
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["fetch", "--suite-config=one-suite.yaml"])
+    assert code == 1
+    stage.assert_not_called()
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1 and "CECE_ROOT_DIR" in errors[0]
+
+
+def test_fetch_no_matching_suite_is_a_clean_error(
+    fetch_env: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    stage = mocker.patch("cli.main.stage_inputs")
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["fetch", "--suite-config=absent-suite.yaml"])
+    assert code == 1
+    stage.assert_not_called()
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1 and "matches no suite" in errors[0]
+
+
+def test_fetch_conflicting_inputs_is_a_clean_error(
+    fetch_env: Path,
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
+    cece_config_path: Path,
+) -> None:
+    (fetch_env.parent / "suites" / "three-suite.yaml").write_text(
+        f"name: three\nconfig_path: {cece_config_path}\ntimeout_s: 5\ninputs:\n"
+        f"  - url: s3://elsewhere/MACCity_4x5.nc\n    dst: MACCity_4x5.nc\n"
+    )
+    stage = mocker.patch("cli.main.stage_inputs")
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["fetch", r"--suite-config=.*-suite\.yaml"])
+    assert code == 1
+    stage.assert_not_called()
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1 and "declared differently" in errors[0]

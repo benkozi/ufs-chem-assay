@@ -43,7 +43,7 @@ def test_invalid_sweep_value_fails_at_load(
 
 def test_sweep_optional_defaults_empty(tmp_path: Path, cece_config_path: Path) -> None:
     # A suite without sweep: runs the base config as the single combination
-    # (examples-as-suites design).
+    # (sweep-less suites).
     suite_file = tmp_path / "sweepless-suite.yaml"
     suite_file.write_text(
         f"name: sweepless\nconfig_path: {cece_config_path}\ntimeout_s: 5\n"

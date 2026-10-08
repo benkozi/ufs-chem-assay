@@ -5,12 +5,20 @@
 # question, and inapplicable value combinations may fail; that is this
 # suite's data. Run on demand (never the default):
 #   uv run pytest src/tests/test_driver_combos.py \
-#     --suite-config=src/tests/config/suite/exhaustive-maccity-run-only-suite.yaml
+#     --suite-config=exhaustive-maccity-run-only-suite.yaml
 # Add --dry-run to generate every config and the test-report.csv without
 # executing the driver.
 name: exhaustive-maccity-run-only
-config_path: ../cece/simple-maccity.yaml
+config_path: maccity.yaml
 timeout_s: 10  # per combination; capped by ASSAY_RUN_TIMEOUT_S when smaller
+# Inputs the base config reads; `uv run ufs-chem-assay fetch --suite-config=<this file>`
+# stages them into <CECE_ROOT_DIR>/data (a present file with this sha256 is skipped;
+# public: anonymous reads, no AWS credentials needed).
+inputs:
+  - url: s3://geos-chem/HEMCO/MACCITY/v2014-07/MACCity_4x5.nc
+    public: true
+    dst: MACCity_4x5.nc
+    sha256: ef70975af53499ab45f620a778043ff6fd29ec4e7e2777f3fd1f2db59a12aab9
 assertions:
   validate_file_count: false
   validate_filenames: false

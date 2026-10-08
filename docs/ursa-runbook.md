@@ -19,7 +19,7 @@ export CECE_REF=<branch or SHA>                        # CECE ref to build (conf
 Conventions:
 
 - `epic` / `debug` / `u1-compute` are the Slurm account, QOS, and
-  partition used in the examples; substitute your own. `debug` caps
+  partition used in the commands below; substitute your own. `debug` caps
   jobs at 30 minutes, which fits `simple-maccity`; use `batch` (8 h)
   for the exhaustive suites.
 - Steps 1–5 run on a **login node**: editing, compiling, downloads,
@@ -120,13 +120,16 @@ First-run checks:
 
 ```bash
 cd $ROOT/ufs-chem-assay
-uv run --no-sync python $ROOT/CECE/examples/download-example-data.py --example ex3 --dst-dir $ROOT/CECE/data
+CECE_ROOT_DIR=$ROOT/CECE uv run --no-sync ufs-chem-assay fetch --suite-config=simple-maccity-suite.yaml
 ```
 
-`ex3` is the MACCity file, the only input `simple-maccity` reads. The
-download runs under the harness venv's Python: CECE's examples tooling
-needs 3.11 or newer, and after `module purge` the only `python3` left is
-the OS one.
+The suite declares its inputs (`inputs:` in the suite file); `fetch`
+stages them into `$ROOT/CECE/data` through the AWS CLI, anonymously for
+public buckets (the MACCity file, the only input `simple-maccity` reads,
+comes from the public `geos-chem` bucket — no AWS account needed). A file
+already present with the declared `sha256` is skipped without touching the
+network, so re-running is free. The data stage of the run config does the
+same.
 
 ## 6. Render and read the scripts
 

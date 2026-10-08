@@ -76,6 +76,16 @@ def test_dry_run_generates_everything_but_never_executes(tmp_path: Path) -> None
         text=True,
     ).stdout.strip()
     assert manifest["harness_commit"] in (head, f"{head}-dirty")
+    # The suite's declared inputs as found: absent in this fabricated checkout.
+    assert manifest["inputs"] == [
+        {
+            "suite": "simple-maccity",
+            "url": "s3://geos-chem/HEMCO/MACCITY/v2014-07/MACCity_4x5.nc",
+            "path": str(tmp_path / "data" / "MACCity_4x5.nc"),
+            "sha256": "ef70975af53499ab45f620a778043ff6fd29ec4e7e2777f3fd1f2db59a12aab9",
+            "bytes": None,
+        }
+    ]
 
     combos = pd.read_csv(root / "combos.csv")
     assert list(combos.columns)[:4] == ["run_id", "combo_id", "application", "suite"]
@@ -330,3 +340,49 @@ def test_unknown_application_is_a_usage_error(tmp_path: Path) -> None:
     assert result.returncode == 4, result.stdout + result.stderr  # USAGE_ERROR
     assert "unknown application 'catchem'" in result.stderr
     assert "['cece']" in result.stderr
+
+
+def test_run_yaml_records_a_present_inputs_size(tmp_path: Path) -> None:
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CECE_", "ASSAY_"))}
+    env["CECE_ROOT_DIR"] = str(tmp_path)
+    env["ASSAY_PLATFORM"] = "local"
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "x",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "MACCity_4x5.nc").write_bytes(b"12345")  # size, not content
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(_RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"),
+            "--dry-run",
+            "--combo-output-root=combo_runs",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    manifest = yaml.safe_load((tmp_path / "combo_runs" / "run.yaml").read_text())
+    assert manifest["inputs"][0]["bytes"] == 5

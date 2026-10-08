@@ -215,6 +215,46 @@ def test_argv_has_no_profile_by_default(local_dir: Path) -> None:
     assert "--profile" not in config.argv
 
 
+def test_argv_no_sign_request_flag_and_position(local_dir: Path) -> None:
+    # Anonymous reads of a public bucket: the flag sits with the other
+    # boolean flags, after --only-show-errors and before any filter.
+    config = S3SyncConfig(
+        source="s3://geos-chem/HEMCO/MACCITY/v2014-07/",
+        destination=local_dir,
+        no_sign_request=True,
+        only_show_errors=True,
+        exclude=["*"],
+        include=["MACCity_4x5.nc"],
+    )
+    argv = config.argv
+    assert argv[5:] == [
+        "--no-progress",
+        "--only-show-errors",
+        "--no-sign-request",
+        "--exclude",
+        "*",
+        "--include",
+        "MACCity_4x5.nc",
+    ]
+
+
+def test_no_sign_request_absent_by_default(local_dir: Path) -> None:
+    config = S3SyncConfig(source=local_dir, destination="s3://ufs-chem/x")
+    assert config.no_sign_request is False
+    assert "--no-sign-request" not in config.argv
+
+
+def test_no_sign_request_with_profile_rejected(local_dir: Path) -> None:
+    # Anonymous access and a named credential profile contradict each other.
+    with pytest.raises(ValidationError, match="no_sign_request"):
+        S3SyncConfig(
+            source="s3://geos-chem/x/",
+            destination=local_dir,
+            no_sign_request=True,
+            profile="work",
+        )
+
+
 # --- sync() --------------------------------------------------------------------
 
 
@@ -355,6 +395,36 @@ def _files(root: Path) -> dict[str, bytes]:
         for p in sorted(root.rglob("*"))
         if p.is_file()
     }
+
+
+# The one public object the harness's maccity suites declare (CECE's own
+# source bucket); its digest matches the checked-in suites' sha256.
+PUBLIC_MACCITY_PREFIX = "s3://geos-chem/HEMCO/MACCITY/v2014-07/"
+PUBLIC_MACCITY_FILE = "MACCity_4x5.nc"
+PUBLIC_MACCITY_SHA256 = (
+    "ef70975af53499ab45f620a778043ff6fd29ec4e7e2777f3fd1f2db59a12aab9"
+)
+
+
+@pytest.mark.data_integration
+def test_public_bucket_single_object(tmp_path: Path) -> None:
+    """A filtered, unsigned sync of a public bucket fetches exactly one
+    object — no credentials involved (AWS_PROFILE may be unset)."""
+    import hashlib
+
+    result = sync(
+        S3SyncConfig(
+            source=PUBLIC_MACCITY_PREFIX,
+            destination=tmp_path,
+            no_sign_request=True,
+            exclude=["*"],
+            include=[PUBLIC_MACCITY_FILE],
+        )
+    )
+    assert result.returncode == 0
+    assert [p.name for p in tmp_path.iterdir()] == [PUBLIC_MACCITY_FILE]
+    digest = hashlib.sha256((tmp_path / PUBLIC_MACCITY_FILE).read_bytes()).hexdigest()
+    assert digest == PUBLIC_MACCITY_SHA256
 
 
 @pytest.mark.data_integration

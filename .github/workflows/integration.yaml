@@ -1,12 +1,17 @@
 # Integration: the real simple-maccity suite against CECE (repo/ref in env) —
-# clone CECE (nested submodules), build its image (gha buildx cache, loaded
-# into the host daemon as cece/cece-dev), compile the driver in the container
-# (build/ cached by CECE SHA), download the one dataset the suite needs
-# (MACCity_4x5.nc = the ex3 data set, cached), then run the harness on the
-# host (docker-in-docker avoided) and upload the whole output root.
+# clone CECE (submodules), build its image (gha buildx cache, loaded into the
+# host daemon as cece/cece-dev), restore build/ from the cache keyed by CECE
+# SHA and compile the driver in the container ONLY on a miss (an exact hit
+# already holds the driver; re-running the build on a hit recompiled every
+# CECE object because the fresh checkout's mtimes postdate the restored
+# objects — 2m41s of a 4-minute job), stage the suite's declared inputs with
+# the harness's own `fetch` (public bucket, anonymous), then run the harness
+# on the host (docker-in-docker avoided) and upload the whole output root.
 #
 # The push trigger exists to create develop-scoped caches PR runs can
 # restore — a pull_request-only workflow never shares caches across PRs.
+# A CECE SHA unused for 7 days is evicted and rebuilds cold once; a new SHA
+# seeds an incremental build from the `cece-build-` prefix fallback.
 #
 # Baselines are OFF (ASSAY_ENABLE_BASELINE_COMPARISONS=false): the baseline
 # store has no public home yet. TODO: re-enable once it does (see
@@ -32,11 +37,11 @@ permissions:
 concurrency:
   group: integration-${{ github.ref }}
   cancel-in-progress: true
-# The fork branch carries the CECE-side script change (--target/--jobs);
-# retargeting upstream later is this one edit.
+# The head of ufs-community/CECE#154 (upstream develop + the build script's
+# --target/--jobs); once it merges, this becomes ufs-community/CECE + develop.
 env:
   CECE_REPOSITORY: benkozi/CECE
-  CECE_REF: fix/all-examples-pass
+  CECE_REF: feature/buid-test-tweaks
 jobs:
   simple-maccity:
     # head_commit is absent on pull_request events: contains(null, …) is
@@ -67,10 +72,13 @@ jobs:
       - name: Resolve the CECE commit
         id: cece
         run: echo "sha=$(git -C cece rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      # Restore/save are split so a timed-out or failed build still persists
-      # its partial tree (the save step runs if: always()) and the next run
-      # resumes incrementally instead of looping on cold builds.
+      # Restore/save are split: the build runs only when the exact key missed
+      # (a hit holds the driver already), and the save runs only after a
+      # successful build so a partial tree never lands under the exact key
+      # — where it would skip the build forever for that SHA. A new SHA
+      # restores the prefix fallback and builds incrementally.
       - name: Restore the CECE build directory
+        id: restore-build
         uses: actions/cache/restore@v6
         with:
           path: cece/build
@@ -85,44 +93,47 @@ jobs:
       - name: Re-own the restored build tree for the container
         run: |
           if [ -d cece/build ]; then sudo chown -R 0:0 cece/build; fi
-      - name: Cache the maccity dataset
-        uses: actions/cache@v6
-        with:
-          path: cece/data
-          key: maccity-data-v2014-07
       # CECE's own entrypoint: configure-if-no-cache + cmake --build in the
       # already-loaded image (it never builds an image; ESMF stays off via
       # the Dockerfile's BUILD_ESMF=OFF default). Only the driver target —
       # googletest/gmock and the test stack are not in its dependency graph
       # — at bounded parallelism (bare -j thrashes a 4-vCPU/16 GB runner).
       - name: Build CECE in the container
+        id: build
+        if: steps.restore-build.outputs.cache-hit != 'true'
         run: >-
           python3 cece/scripts/build-and-test-container.py --no-test
           --target cece_standalone_driver --jobs 4
       - name: Save the CECE build directory
-        if: always()
+        if: always() && steps.restore-build.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
         uses: actions/cache/save@v6
         with:
           path: cece/build
           key: cece-build-${{ steps.cece.outputs.sha }}
-      # The suite reads exactly /work/data/MACCity_4x5.nc — the ex3 data
-      # set; the stdlib-only entrypoint skips files the cache restored.
-      - name: Download the maccity dataset
-        run: >-
-          python3 cece/examples/download-example-data.py
-          --example ex3 --dst-dir cece/data
+      # The uv cache (wheels, the built cartopy) keyed on the lock file alone,
+      # so a comment edit in pyproject.toml does not invalidate it.
       - name: Install uv (interpreter matches the runner Dockerfile)
         uses: astral-sh/setup-uv@v10.2.0
         with:
           python-version: '3.14'
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      # The suite declares its inputs (the one MACCity file, from a public
+      # bucket: anonymous, no credentials); fetch verifies by digest.
+      - name: Stage the suite's inputs
+        env:
+          CECE_ROOT_DIR: ${{ github.workspace }}/cece
+        run: |
+          uv sync --frozen
+          uv run ufs-chem-assay fetch --suite-config=simple-maccity-suite.yaml
       - name: Run simple-maccity-suite.yaml
         env:
           CECE_ROOT_DIR: ${{ github.workspace }}/cece
-          # No public baseline store yet; the suite's three comparisons
-          # skip. TODO: drop this once baselines are downloadable.
+          # Baselines stay off: the store has no reachable home yet, and the
+          # three maccity baselines must be republished from this driver
+          # first (see design/feat/20261007-1555-*/ in the harness repo).
           ASSAY_ENABLE_BASELINE_COMPARISONS: 'false'
         run: |
-          uv sync --frozen
           uv run pytest src/tests/test_driver_combos.py \
             --suite-config=simple-maccity-suite.yaml \
             --combo-output-root=ufs-chem-assay-ci-output

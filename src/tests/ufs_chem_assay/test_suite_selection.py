@@ -94,3 +94,18 @@ def test_suite_of_an_unknown_application_is_a_usage_error(tmp_path: Path) -> Non
     result = _run_pytest(["--dry-run", f"--suite-config={suite}"], tmp_path)
     assert result.returncode == _USAGE_ERROR, result.stdout + result.stderr
     assert "unknown application 'catchem'" in result.stderr
+
+
+def test_configuration_files_beside_suites_are_not_candidates(tmp_path: Path) -> None:
+    # The built-in tree holds maccity.yaml next to its suites; discovery is by
+    # the -suite.yaml rule, so the listing of candidates never names it.
+    result = _run_pytest(["--dry-run", "--suite-config=absent-suite.yaml"], tmp_path)
+    assert result.returncode == _USAGE_ERROR, result.stdout + result.stderr
+    assert "maccity.yaml" not in result.stderr.replace("-suite.yaml", "")
+
+
+def test_configuration_directory_selects_all_its_suites(tmp_path: Path) -> None:
+    # A root-relative path regex selects every suite of one configuration.
+    result = _run_pytest(["--dry-run", r"--suite-config=cece/maccity/.*"], tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "3 suite(s)" in result.stdout + result.stderr

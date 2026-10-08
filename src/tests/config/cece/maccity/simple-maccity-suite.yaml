@@ -1,14 +1,23 @@
 # Test-suite configuration (see design/design.md).
 # application names the adapter (optional; cece is the default) and
 # config_path its base driver config; relative paths resolve against this
-# file's directory (or ASSAY_CONFIG_SEARCH_PATH when set).
+# file's directory (or ASSAY_CONFIG_SEARCH_PATH when set). Suites live beside
+# the configuration they sweep: src/tests/config/<application>/<configuration>/.
 # The sweep mirrors the driver-config structure: dimensions attach to named
 # streams (or positional species entries); the combination space is the
 # cartesian product of all attached value lists. Fields absent from the
 # sweep stay at their base-config values.
 name: simple-maccity
-config_path: ../cece/simple-maccity.yaml
+config_path: maccity.yaml
 timeout_s: 10  # per combination; capped by ASSAY_RUN_TIMEOUT_S when that is smaller
+# Inputs the base config reads; `uv run ufs-chem-assay fetch --suite-config=<this file>`
+# stages them into <CECE_ROOT_DIR>/data (a present file with this sha256 is skipped;
+# public: anonymous reads, no AWS credentials needed).
+inputs:
+  - url: s3://geos-chem/HEMCO/MACCITY/v2014-07/MACCity_4x5.nc
+    public: true
+    dst: MACCity_4x5.nc
+    sha256: ef70975af53499ab45f620a778043ff6fd29ec4e7e2777f3fd1f2db59a12aab9
 assertions:
   expected_nc_file_count:  # null = derive from the combo config
   validate_filenames: true
