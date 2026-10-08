@@ -55,6 +55,15 @@ repos:
         # Whole-src/ run (config's files setting): per-file mypy is unsound
         # across module boundaries.
         pass_filenames: false
+      - id: vulture
+        name: vulture
+        entry: uv run vulture
+        language: system
+        types:
+          - python
+        # Whole-tree run ([tool.vulture] paths): a name's only use may be
+        # in another file.
+        pass_filenames: false
       - id: yamlfix
         name: yamlfix
         entry: uv run yamlfix

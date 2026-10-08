@@ -8,7 +8,13 @@ Slurm job per driver call.
 `ufs-chem-assay fetch [--application NAME] [--suite-config SELECTOR]
 [--dry-run]`: stage the inputs the selected suites declare into the
 application checkout's data directory — the same selection and settings a
-pytest session would use; the run config's data stage calls it."""
+pytest session would use; the run config's data stage calls it.
+
+`ufs-chem-assay publish-baselines --output-root PATH [--application NAME]
+[--suite-config SELECTOR] [--store s3://bucket/prefix] [--dry-run]
+[--no-suite-update]`: publish a finished run's compared combinations as
+new baselines in the store and repoint the suites at them (baselines.py;
+the pytest session's --publish-baselines does the same at session end)."""
 
 from __future__ import annotations
 
@@ -16,12 +22,16 @@ import argparse
 import os
 from pathlib import Path
 
+import yaml
+
 from applications.base import Application
 from applications.registry import get_application
+from baselines import default_selector, load_run, plan, publish
 from cli.run_config import RunConfig
 from cli.shell import run_bash, write_script
 from cli.stages import Stage, render_stage
 from logs import configure_logging, get_logger
+from models.suite_config import RunManifest
 from platforms import Platform
 from selection import resolve_suites
 from settings import ENV_PREFIX, LEGACY_ENV_PREFIX, Settings
@@ -137,6 +147,54 @@ def _parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="report what is present and what would be fetched; transfer nothing",
+    )
+    publish_parser = subparsers.add_parser(
+        "publish-baselines",
+        help=(
+            "publish a finished run's compared combinations (the suites' "
+            "baseline_comparisons entries) as new baselines in the S3 store and "
+            "repoint the suite files at the new ULIDs"
+        ),
+    )
+    publish_parser.add_argument(
+        "--output-root",
+        required=True,
+        type=Path,
+        help="the run's output root (the directory holding run.yaml), as a host path",
+    )
+    publish_parser.add_argument(
+        "--application",
+        default=None,
+        metavar="NAME",
+        help="the run's application (overrides ASSAY_APPLICATION), as for pytest",
+    )
+    publish_parser.add_argument(
+        "--suite-config",
+        default=None,
+        metavar="SELECTOR",
+        help=(
+            "suite selector, exactly as pytest's --suite-config; default: the "
+            "suites run.yaml records, by the <name>-suite.yaml convention"
+        ),
+    )
+    publish_parser.add_argument(
+        "--store",
+        default=None,
+        metavar="S3_PREFIX",
+        help="override ASSAY_BASELINE_STORE (s3://bucket/prefix) for this call",
+    )
+    publish_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "the full plan: the probe, the wrapper's own --dryrun upload lines, the "
+            "manifest each baseline would carry; nothing written, no suite edited"
+        ),
+    )
+    publish_parser.add_argument(
+        "--no-suite-update",
+        action="store_true",
+        help="publish, but leave the suite files alone (the ULIDs are logged)",
     )
     return parser
 
@@ -291,6 +349,77 @@ def _fetch(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _publish_baselines(args: argparse.Namespace) -> int:
+    """Publish a finished run: run.yaml names the suites and the application,
+    the selector (default: those suites) loads the files to repoint, and
+    the shared plan/publish do the rest. Every failure is one ERROR line
+    and exit 1; one baseline's failure never hides the others' outcomes."""
+    output_root = args.output_root.resolve()
+    run_yaml = output_root / "run.yaml"
+    if not run_yaml.is_file():
+        logger.error("%s is not a run's output root: no run.yaml", output_root)
+        return 1
+    with open(run_yaml) as f:
+        run = RunManifest.model_validate(yaml.safe_load(f))
+    try:
+        # Init kwargs beat the environment: the flags win, as for pytest.
+        if args.application is None and args.store is None:
+            settings = Settings()
+        elif args.store is None:
+            settings = Settings(application=args.application)
+        elif args.application is None:
+            settings = Settings(baseline_store=args.store)
+        else:
+            settings = Settings(application=args.application, baseline_store=args.store)
+        resolved = resolve_suites(settings, args.suite_config or default_selector(run))
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 1
+    if resolved.application.name != run.application:
+        logger.error(
+            "run %s is a %s run, but the selected suites are %s suites",
+            run.run_id,
+            run.application,
+            resolved.application.name,
+        )
+        return 1
+    recorded = {suite.name for suite in run.suites}
+    loaded = {suite.name for _, suite in resolved.suites}
+    if recorded - loaded:
+        logger.error(
+            "run %s executed suite(s) %s that the selection does not include "
+            "(loaded: %s); pass --suite-config to select them",
+            run.run_id,
+            sorted(recorded - loaded),
+            sorted(loaded),
+        )
+        return 1
+    try:
+        manifest, inputs, rows = load_run(
+            output_root, resolved.application, resolved.suites
+        )
+    except (ValueError, OSError) as exc:
+        logger.error("%s", exc)
+        return 1
+    records = plan(manifest, inputs, rows, output_root, settings.baseline_store)
+    logger.info(
+        "%s%s baseline(s) to publish from run %s to %s",
+        "dry run: " if args.dry_run else "",
+        sum(1 for r in records if r.action == "would-publish"),
+        manifest.run_id,
+        settings.baseline_store,
+    )
+    results = publish(
+        records,
+        run=manifest,
+        output_root=output_root,
+        baseline_root=settings.baseline_root_dir,
+        dry_run=args.dry_run,
+        suite_update=not args.no_suite_update,
+    )
+    return 1 if any(r.action == "failed" for r in results) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # The harness's namespace logger, level from the same variable pytest
     # honours (settings.log_level, with the legacy spelling as fallback).
@@ -301,4 +430,6 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "fetch":
         return _fetch(args)
+    if args.command == "publish-baselines":
+        return _publish_baselines(args)
     return _run(args)

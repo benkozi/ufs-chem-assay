@@ -23,7 +23,7 @@ def test_absolute_output_root_under_work_is_mapped() -> None:
     assert container == PurePosixPath("/work/nested/runs")
 
 
-def test_workdir_is_the_adapters(tmp_path: Path) -> None:
+def test_workdir_is_the_adapters() -> None:
     # A different mount convention (CATChem's /opt/project) changes both sides.
     host, container = resolve_output_roots(
         "runs", Path("/host/app"), container_workdir=PurePosixPath("/opt/project")

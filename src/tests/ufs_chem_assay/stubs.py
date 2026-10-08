@@ -75,7 +75,7 @@ class StubApplication(Application):
         raise NotImplementedError
 
     def stage_lines(
-        self, stage: Stage, config: object, section: ApplicationRunSection
+        self, stage: Stage, _config: object, _section: ApplicationRunSection
     ) -> list[str]:
         return [f"echo stub {stage.value}"]
 

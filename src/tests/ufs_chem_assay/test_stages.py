@@ -63,8 +63,8 @@ def test_source_stage_clones_when_missing_and_guards_submodules(
     script = render_stage(Stage.SOURCE, ursa, _CECE)
     clone = str(ursa.checkout_dir("cece"))
     assert (
-        "git clone --recurse-submodules --branch feature/buid-test-tweaks "
-        f"git@github.com:benkozi/CECE.git {clone}"
+        "git clone --recurse-submodules --branch develop "
+        f"git@github.com:ufs-community/CECE.git {clone}"
     ) in script.text
     assert f"{clone}/extern/helm/libs" in script.text
     assert "log -1 --oneline" in script.text
@@ -81,8 +81,8 @@ def test_source_stage_update_source_fast_forwards(tmp_path: Path) -> None:
     )
     script = render_stage(Stage.SOURCE, config, _CECE)
     assert "git -C" in script.text and "fetch origin" in script.text
-    assert "checkout feature/buid-test-tweaks" in script.text
-    assert "pull --ff-only origin feature/buid-test-tweaks" in script.text
+    assert "checkout develop" in script.text
+    assert "pull --ff-only origin develop" in script.text
     assert "submodule update --init --recursive" in script.text
 
 
@@ -186,6 +186,7 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "export ASSAY_SBATCH_ARGS='-A epic -q debug -p u1-compute -N 1 -n 1 -c 8'",
         "export ASSAY_JOB_ENV='I_MPI_FABRICS=shm FI_PROVIDER=tcp'",  # the driver jobs' env
         "export ASSAY_ENABLE_BASELINE_COMPARISONS=false",
+        "export ASSAY_BASELINE_STORE=s3://ufs-chem/baselines",
         "export ASSAY_RUN_TIMEOUT_S=300",
         "export ASSAY_DASK_NWORKERS=2",
         f"export UV_CACHE_DIR={ursa.root_dir}/uv-cache",
@@ -208,6 +209,8 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "CECE_RUNTIME",
         "--dry-run",
         "--run-examples",
+        "--publish-baselines",
+        "--no-suite-update",
     ):
         assert absent not in text, absent
 
@@ -336,3 +339,22 @@ def test_output_root_is_suffixed_only_with_several_applications(
     assert (
         render_stage(Stage.SOURCE, two, stub).text.rstrip().endswith("echo stub source")
     )
+
+
+def test_harness_stage_renders_the_publish_flags(tmp_path: Path) -> None:
+    config = RunConfig.from_yaml(
+        run_config_file(
+            tmp_path,
+            overrides={
+                "harness.publish_baselines": True,
+                "harness.no_suite_update": True,
+                "baselines.store": "s3://other/prefix",
+                "baselines.root_dir": "/scratch/baselines",
+            },
+            root_dir=_URSA_ROOT,
+        )
+    )
+    text = render_stage(Stage.HARNESS, config, _CECE).text
+    assert "export ASSAY_BASELINE_STORE=s3://other/prefix" in text
+    assert "export ASSAY_BASELINE_ROOT_DIR=/scratch/baselines" in text
+    assert "--combo-clean-root --publish-baselines --no-suite-update" in text

@@ -1,13 +1,9 @@
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
-
-if TYPE_CHECKING:
-    from dask.distributed import Client
 
 from analysis import (
     RunContext,
@@ -73,8 +69,9 @@ def _stats_rows() -> list[VariableStats]:
     ]
 
 
+@pytest.mark.usefixtures("dask_client")
 def test_compute_file_stats_matches_numpy(
-    dask_client: "Client", driver_like_nc: tuple[Path, np.ndarray]
+    driver_like_nc: tuple[Path, np.ndarray],
 ) -> None:
     from ulid import ULID
 
@@ -105,9 +102,8 @@ def test_compute_file_stats_matches_numpy(
     assert stats.median == pytest.approx(np.nanmedian(data))
 
 
-def test_compute_file_stats_null_time_without_time_coordinate(
-    dask_client: "Client", tmp_path: Path
-) -> None:
+@pytest.mark.usefixtures("dask_client")
+def test_compute_file_stats_null_time_without_time_coordinate(tmp_path: Path) -> None:
     dataset = xr.Dataset({"co": (("lat", "lon"), np.ones((2, 3)))})
     path = tmp_path / "timeless.nc"
     dataset.to_netcdf(path, engine="netcdf4")
@@ -188,8 +184,9 @@ def test_spatial_variables_are_those_with_lat_and_lon(
         assert spatial_variables(ds) == ["co", "nox"]
 
 
+@pytest.mark.usefixtures("dask_client")
 def test_compute_file_stats_skips_bounds_variables(
-    driver_like_nc: tuple[Path, np.ndarray], dask_client: "Client", tmp_path: Path
+    driver_like_nc: tuple[Path, np.ndarray], tmp_path: Path
 ) -> None:
     path, _ = driver_like_nc
     with xr.open_dataset(path) as ds:

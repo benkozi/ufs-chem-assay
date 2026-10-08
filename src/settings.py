@@ -12,6 +12,7 @@ thereafter.
 """
 
 import os
+import re
 import shlex
 from pathlib import Path
 from typing import Annotated
@@ -27,10 +28,12 @@ from pydantic_settings import (
 )
 
 from platforms import Platform, Runtime, default_runtime, detect_platform
+from s3_sync import S3_URI_PATTERN
 
 ENV_PREFIX = "ASSAY_"
 LEGACY_ENV_PREFIX = "CECE_"  # accepted as a fallback for every harness setting
 _ENV_FILE = ".env"
+DEFAULT_BASELINE_STORE = "s3://ufs-chem/baselines"
 
 
 class Settings(BaseSettings):
@@ -113,6 +116,13 @@ class Settings(BaseSettings):
         True,
         description="Global switch for baseline comparisons; false skips every test_baseline_comparison regardless of suite config",
     )
+    baseline_store: str = Field(
+        DEFAULT_BASELINE_STORE,
+        description=(
+            "The baselines' S3 prefix (s3://bucket/prefix, never a bucket root): "
+            "`publish-baselines` writes <store>/<ulid>/ there, append-only"
+        ),
+    )
     dask_nworkers: int | None = Field(
         None,
         gt=0,
@@ -177,10 +187,6 @@ class Settings(BaseSettings):
         return shlex.split(self.launcher)
 
     @property
-    def sbatch_argv(self) -> list[str]:
-        return shlex.split(self.sbatch_args)
-
-    @property
     def job_env_pairs(self) -> dict[str, str]:
         pairs: dict[str, str] = {}
         for token in shlex.split(self.job_env):
@@ -191,6 +197,22 @@ class Settings(BaseSettings):
                 )
             pairs[name] = value
         return pairs
+
+    @field_validator("baseline_store", mode="after")
+    @classmethod
+    def _store_is_a_prefix(cls, value: str) -> str:
+        # Normalised (no trailing slash) and never a bucket root: the store
+        # must stay apart from anything else the bucket holds.
+        value = value.rstrip("/")
+        if (
+            not re.fullmatch(S3_URI_PATTERN, value)
+            or not value[len("s3://") :].partition("/")[2]
+        ):
+            raise ValueError(
+                f"baseline_store must be an s3://bucket/prefix (a key prefix, not a "
+                f"bucket root), got {value!r}"
+            )
+        return value
 
     @field_validator("suite_config_search_path", mode="before")
     @classmethod

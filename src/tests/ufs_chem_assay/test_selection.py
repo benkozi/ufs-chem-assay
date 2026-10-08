@@ -43,9 +43,7 @@ def test_regex_selects_several_suites_in_name_order() -> None:
     ]
 
 
-def test_explicit_application_drops_other_applications_suites(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_explicit_application_drops_other_applications_suites(tmp_path: Path) -> None:
     other = tmp_path / "other-suite.yaml"
     other.write_text(
         "name: other\napplication: stub\nconfig_path: x.yaml\ntimeout_s: 5\n"

@@ -11,8 +11,8 @@ platform: ursa  # optional: detected from the hostname when absent; --platform w
 # Set it here, or pass --root-dir, only if your layout differs.
 applications:  # one section per application in the run, keyed by adapter name
   cece:
-    git_url: git@github.com:benkozi/CECE.git
-    ref: feature/buid-test-tweaks  # ufs-community/CECE#154's head; develop once it merges
+    git_url: git@github.com:ufs-community/CECE.git
+    ref: develop
     clone_dir:  # default <root_dir>/CECE; an existing checkout is used as-is
     update_source: false  # true: fetch, checkout ref, pull --ff-only, submodule update --init --recursive
     modulefile: cece_ursa.intelllvm  # CECE_MODULEFILE: from <clone>/modulefiles after `module purge`
@@ -28,12 +28,15 @@ data:  # the data stage runs `ufs-chem-assay fetch` for the selected suites' inp
 baselines:
   root_dir:  # ASSAY_BASELINE_ROOT_DIR
   enabled: false  # ASSAY_ENABLE_BASELINE_COMPARISONS; no public store yet
+  store: s3://ufs-chem/baselines  # ASSAY_BASELINE_STORE: where publish-baselines writes <store>/<ulid>/
 harness:
   suite_config: simple-maccity-suite.yaml  # regex over *-suite.yaml names; every match runs
   output_root: ufs-chem-assay-output  # relative: under the checkout; absolute: anywhere writable
   clean_root: true  # removes only a previous harness root (one with run.yaml)
   pytest_dry_run: false  # pytest --dry-run: generate everything, execute no driver
   pytest_args: []  # e.g. [-x, -k, map-consd]
+  publish_baselines: false  # pytest --publish-baselines: publish passing compared combos at session end
+  no_suite_update: false  # pytest --no-suite-update: publish without repointing the suite files
   runtime:  # ASSAY_RUNTIME; null = the platform's default (slurm here)
   launcher: ''  # ASSAY_LAUNCHER; ignored under slurm
   env:  # exported inside every driver job (ASSAY_JOB_ENV); the single-node MPI hints CECE's ctest uses

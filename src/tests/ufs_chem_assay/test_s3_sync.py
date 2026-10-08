@@ -293,8 +293,8 @@ def test_sync_runs_exactly_once_with_resolved_executable(
     assert output_records and all(r.levelno == logging.DEBUG for r in output_records)
 
 
+@pytest.mark.usefixtures("aws_on_path")
 def test_sync_dry_run_passes_the_flag_and_logs_the_plan_at_info(
-    aws_on_path: str,
     local_dir: Path,
     mocker: MockerFixture,
     caplog: pytest.LogCaptureFixture,
@@ -302,7 +302,7 @@ def test_sync_dry_run_passes_the_flag_and_logs_the_plan_at_info(
     plan = b"(dryrun) upload: local/probe.txt to s3://ufs-chem/x/probe.txt\n"
     mocker.patch(
         "s3_sync.subprocess.run",
-        side_effect=lambda argv, **kw: _completed(argv, output=plan),
+        side_effect=lambda argv, **kwargs: _completed(argv, output=plan),
     )
     with caplog.at_level(logging.INFO, logger=s3_logger.name):
         result = sync(
@@ -314,8 +314,8 @@ def test_sync_dry_run_passes_the_flag_and_logs_the_plan_at_info(
     assert any("(dryrun) upload:" in r.message for r in info)
 
 
+@pytest.mark.usefixtures("aws_on_path")
 def test_sync_failure_raises_with_output(
-    aws_on_path: str,
     local_dir: Path,
     mocker: MockerFixture,
     caplog: pytest.LogCaptureFixture,
@@ -325,7 +325,9 @@ def test_sync_failure_raises_with_output(
     message = b"fatal error: Unable to locate credentials\n"
     mocker.patch(
         "s3_sync.subprocess.run",
-        side_effect=lambda argv, **kw: _completed(argv, returncode=1, output=message),
+        side_effect=lambda argv, **kwargs: _completed(
+            argv, returncode=1, output=message
+        ),
     )
     config = S3SyncConfig(source=local_dir, destination="s3://ufs-chem/x")
     with (
@@ -339,9 +341,8 @@ def test_sync_failure_raises_with_output(
     assert any("Unable to locate credentials" in r.message for r in caplog.records)
 
 
-def test_sync_timeout_propagates(
-    aws_on_path: str, local_dir: Path, mocker: MockerFixture
-) -> None:
+@pytest.mark.usefixtures("aws_on_path")
+def test_sync_timeout_propagates(local_dir: Path, mocker: MockerFixture) -> None:
     mocker.patch(
         "s3_sync.subprocess.run", side_effect=subprocess.TimeoutExpired("aws", 5)
     )
@@ -369,11 +370,12 @@ def test_s3_uri_from_arn() -> None:
             s3_uri_from_arn(bad)
 
 
+@pytest.mark.usefixtures("aws_on_path")
 def test_round_trip_is_two_syncs_two_calls(
-    aws_on_path: str, local_dir: Path, tmp_path: Path, mocker: MockerFixture
+    local_dir: Path, tmp_path: Path, mocker: MockerFixture
 ) -> None:
     run = mocker.patch(
-        "s3_sync.subprocess.run", side_effect=lambda argv, **kw: _completed(argv)
+        "s3_sync.subprocess.run", side_effect=lambda argv, **kwargs: _completed(argv)
     )
     prefix = f"{s3_uri_from_arn(TEST_BUCKET_ARN)}/{TEST_PREFIX}/{ULID()}/"
     sync(S3SyncConfig(source=local_dir, destination=prefix))

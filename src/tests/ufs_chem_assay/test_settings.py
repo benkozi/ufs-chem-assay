@@ -20,6 +20,7 @@ _SCRUBBED = (
     "SUITE_CONFIG_SEARCH_PATH",
     "DASK_NWORKERS",
     "BASELINE_ROOT_DIR",
+    "BASELINE_STORE",
     "LOG_LEVEL",
 )
 
@@ -48,7 +49,8 @@ def test_no_application_settings_on_the_harness_model(
     assert not hasattr(Settings(), "root_dir")
 
 
-def test_application_defaults_to_none(clean_env: pytest.MonkeyPatch) -> None:
+@pytest.mark.usefixtures("clean_env")
+def test_application_defaults_to_none() -> None:
     assert Settings().application is None
 
 
@@ -77,9 +79,8 @@ def test_assay_wins_over_legacy_within_the_environment(
     assert Settings().dask_nworkers == 5
 
 
-def test_env_file_supplies_values_under_either_prefix(
-    clean_env: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+@pytest.mark.usefixtures("clean_env")
+def test_env_file_supplies_values_under_either_prefix(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text(
         "cece_root_dir=/from/dotenv\n"  # the adapter's key: ignored here
         "cece_baseline_root_dir=/baselines\n"
@@ -100,14 +101,14 @@ def test_real_env_beats_env_file_across_prefixes(
     assert Settings().dask_nworkers == 9
 
 
-def test_init_kwarg_beats_env_file(
-    clean_env: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+@pytest.mark.usefixtures("clean_env")
+def test_init_kwarg_beats_env_file(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("assay_platform=ursa\n")
     assert Settings(platform=Platform.LOCAL).platform is Platform.LOCAL
 
 
-def test_settings_is_frozen(clean_env: pytest.MonkeyPatch) -> None:
+@pytest.mark.usefixtures("clean_env")
+def test_settings_is_frozen() -> None:
     settings = Settings()
     with pytest.raises(ValidationError):
         settings.log_level = "DEBUG"  # type: ignore[misc]
@@ -130,10 +131,36 @@ def test_search_path_single_directory_legacy_spelling(
     assert Settings().suite_config_search_path == [Path("/suites/a")]
 
 
-def test_search_path_defaults_to_empty(clean_env: pytest.MonkeyPatch) -> None:
+@pytest.mark.usefixtures("clean_env")
+def test_search_path_defaults_to_empty() -> None:
     assert Settings().suite_config_search_path == []
 
 
 def test_runtime_from_legacy_env(clean_env: pytest.MonkeyPatch) -> None:
     clean_env.setenv("CECE_RUNTIME", "native")
     assert Settings(platform=Platform.LOCAL).runtime is Runtime.NATIVE
+
+
+# ── baseline_store ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.usefixtures("clean_env")
+def test_baseline_store_defaults_to_the_ufs_chem_baselines_prefix() -> None:
+    assert Settings().baseline_store == "s3://ufs-chem/baselines"
+
+
+def test_baseline_store_from_env_trailing_slash_stripped(
+    clean_env: pytest.MonkeyPatch,
+) -> None:
+    clean_env.setenv("ASSAY_BASELINE_STORE", "s3://other-bucket/some/prefix/")
+    assert Settings().baseline_store == "s3://other-bucket/some/prefix"
+
+
+@pytest.mark.usefixtures("clean_env")
+@pytest.mark.parametrize(
+    "value",
+    ["s3://ufs-chem", "s3://ufs-chem/", "https://ufs-chem/baselines", "/local/dir"],
+)
+def test_baseline_store_rejects_roots_and_non_s3(value: str) -> None:
+    with pytest.raises(ValidationError, match="baseline_store"):
+        Settings(baseline_store=value)

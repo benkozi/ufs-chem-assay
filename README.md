@@ -46,7 +46,7 @@ beside the suites that sweep it. Design rationale lives in
 ```sh
 uv sync                       # includes dev tools (mypy, pre-commit, stubs) and
                               #   installs the `ufs-chem-assay` command (editable)
-uv run pre-commit install     # ruff check/format + mypy on every commit, plus
+uv run pre-commit install     # ruff check/format + mypy + vulture on every commit, plus
                               #   the conventional-commit message gate (the
                               #   commit-msg hook type installs automatically)
 
@@ -81,7 +81,7 @@ uv run pytest src/tests/test_driver_combos.py  # integration only (real docker)
 
 uv run mypy                        # type checking (all of src/; zero errors expected)
 uv run pre-commit run --all-files  # everything the commit hook runs: ruff check/format,
-                                   #   mypy, yamlfix/yamllint, whitespace trimming
+                                   #   mypy, vulture (dead code), yamlfix/yamllint, whitespace
 
 # everything except driver execution (no docker needed); all combo tests skip
 uv run pytest src/tests/test_driver_combos.py --dry-run
@@ -229,6 +229,13 @@ Options:
   harness root (one with `run.yaml` at its top) is ever removed; any other
   existing directory is refused, since an absolute root under the native
   or slurm runtime can point anywhere.
+- `--publish-baselines` — at session end, publish every compared
+  combination (one per `baseline_comparisons` entry) whose driver run
+  passed, and no test but the old comparison failed, as a new baseline
+  under `ASSAY_BASELINE_STORE`, and repoint the suite files at the new
+  ULIDs (see [Publishing baselines](#publishing-baselines)). Needs the AWS
+  CLI and credentials it can find. `--no-suite-update` publishes without
+  touching the suite files; it is an error without `--publish-baselines`.
 - Inputs are never downloaded by the session. When driver execution is
   coming (no `--dry-run`) and a selected suite's declared input is absent
   from the checkout's `data/`, collection fails with a usage error naming
@@ -295,6 +302,52 @@ The credentials need `s3:ListBucket` on the bucket and `s3:GetObject`,
 it from a login node (compute nodes have no network) after the runbook's
 AWS CLI step.
 
+## Publishing baselines
+
+A baseline is one combination's whole output directory — the NetCDF, the
+generated config, the captured `.out`, the driver log, the stats CSVs, the
+plots and GIFs — published as `s3://ufs-chem/baselines/<ulid>/` with a
+`baseline.yaml` manifest beside the files (application, the application
+commit the run was built from, the run and combination, the effective
+parameters, every file with its digest, when and by whom it was published,
+and the ULID it supersedes). The ULID is the combination's runtime ULID,
+minted fresh every run, so the store is append-only: a prefix that already
+holds objects is refused, never overwritten, and nothing is ever deleted.
+
+The suite's `baseline_comparisons` entries say what gets published: each
+entry selects one combination and pins the ULID the next session compares
+against. After a run, publish it and repoint the suite in one command —
+dry-run first:
+
+```sh
+# the plan: which combinations, why any are skipped, the files each upload would
+# carry (the AWS CLI's own "(dryrun) upload:" lines), the manifest; nothing written
+AWS_PROFILE=<profile> uv run ufs-chem-assay publish-baselines \
+  --output-root="$CECE_ROOT_DIR/ufs-chem-assay-output" --dry-run
+AWS_PROFILE=<profile> uv run ufs-chem-assay publish-baselines \
+  --output-root="$CECE_ROOT_DIR/ufs-chem-assay-output"
+git diff src/tests/config   # the ulid: lines now name the new baselines; commit them
+```
+
+Only sound output becomes a baseline: a combination is published when its
+`test_driver_execution` passed and no other test of it failed — the
+comparison against the *old* baseline excepted, since republishing is
+exactly what follows an intentional driver change. Skipped tests (stats
+off, a `--dry-run` session) are allowed. Combinations the gate holds back
+are reported and left pinned to their previous ULID. `--no-suite-update`
+publishes without editing the suite files; `--suite-config` and
+`--application` select the suites as for pytest (default: the suites
+`run.yaml` records); `--store` overrides `ASSAY_BASELINE_STORE` for one
+call. With `ASSAY_BASELINE_ROOT_DIR` set, each published directory is also
+copied to `<root>/<ulid>/`, so the very next local run compares against it.
+A re-run of the same output root resumes: a directory whose `baseline.yaml`
+names the ULID already in the store is not uploaded again, only the suite
+is repointed. `pytest --publish-baselines` (the run config's
+`harness.publish_baselines: true`) does the same at session end; dry-run
+the output root with the subcommand afterwards if you want to see the plan.
+Credentials are the AWS CLI's (publishing needs `s3:ListBucket` on the
+bucket and `s3:PutObject` under `baselines/`); nothing is read from `.env`.
+
 ## Configuring a run: `ufs-chem-assay run`
 
 A whole run — the application's source and build, its input data, and
@@ -310,8 +363,8 @@ key and run as-is from a checkout laid out like the runbook:
 platform: ursa
 applications:            # one section per application in the run
   cece:
-    git_url: git@github.com:benkozi/CECE.git
-    ref: feature/buid-test-tweaks   # ufs-community/CECE#154's head; develop once it merges
+    git_url: git@github.com:ufs-community/CECE.git
+    ref: develop
     clone_dir:           # null: <root_dir>/CECE (CECE_ROOT_DIR)
     modulefile: cece_ursa.intelllvm
     ...
@@ -362,7 +415,9 @@ under `<output_root>/<application>`; `--application NAME` (repeatable)
 narrows such a run. Run the harness stage under `tmux` — it lives as
 long as the suite. The CLI never deletes anything except the harness
 output root (`clean_root`), and never mutates an existing checkout
-without `update_source`.
+without `update_source`. `baselines.store` (`ASSAY_BASELINE_STORE`),
+`harness.publish_baselines`, and `harness.no_suite_update` carry the
+[publishing](#publishing-baselines) options into the harness stage.
 
 ## Running on RDHPC (Ursa)
 
@@ -426,8 +481,9 @@ build step outright — the driver is in the restored tree), the suite's
 inputs staged with `ufs-chem-assay fetch`, and `simple-maccity-suite.yaml`
 runs for real.
 Baseline-comparison tests skip in CI
-(`ASSAY_ENABLE_BASELINE_COMPARISONS=false`: the baseline store has no
-public download source yet — re-enabling is a standing TODO). The full
+(`ASSAY_ENABLE_BASELINE_COMPARISONS=false`: the store is the private
+`s3://ufs-chem/baselines` prefix and the job has no AWS credentials —
+re-enabling is a standing TODO). The CECE ref is upstream `develop`. The full
 output root uploads as a workflow artifact on success and failure
 alike; `run.yaml` records the exact CECE commit (`application_commit`).
 Mirror it locally:
@@ -525,6 +581,8 @@ directory per combination:
     <combo_id>-stats-comparison.csv  # comparison rows (when configured)
     plots-overview/              #   spatial plot per NetCDF + per-variable GIF
     plots-baselines/             #   bias maps + GIF (compared combos only)
+    baseline.yaml                #   present once the combination was published as a
+                                 #     baseline (ufs-chem-assay publish-baselines)
     *.nc                         #   driver NetCDF output
 ```
 
@@ -593,6 +651,7 @@ Harness-wide:
 | `ASSAY_DASK_NWORKERS`           | dask workers for the stats cluster (int > 0)   | unset → all available cores      |
 | `ASSAY_BASELINE_ROOT_DIR`       | baselines live at `<root>/<ulid>/`             | unset → current working directory |
 | `ASSAY_ENABLE_BASELINE_COMPARISONS` | global switch; `false` skips comparison tests | `true`                          |
+| `ASSAY_BASELINE_STORE`          | the baselines' S3 prefix (`s3://bucket/prefix`, never a bucket root); `publish-baselines` writes `<store>/<ulid>/` there | `s3://ufs-chem/baselines` |
 | `ASSAY_CONFIG_SEARCH_PATH`      | prepended to relative `config_path` values     | unset                            |
 | `ASSAY_SUITE_CONFIG_SEARCH_PATH` | colon-separated dirs searched recursively for `--suite-config` selection | unset → built-in suite dir only |
 

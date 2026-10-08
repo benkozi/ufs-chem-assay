@@ -33,8 +33,9 @@ def test_detect_platform_from_hostname(hostname: str, expected: Platform) -> Non
     assert detect_platform(hostname) == expected
 
 
+@pytest.mark.usefixtures("clean_env")
 def test_settings_default_platform_is_detected_local(
-    clean_env: pytest.MonkeyPatch, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("platforms.socket.gethostname", lambda: "laptop")
     settings = Settings()
@@ -43,9 +44,8 @@ def test_settings_default_platform_is_detected_local(
     assert settings.launcher == ""
 
 
-def test_settings_detects_ursa_from_hostname(
-    clean_env: pytest.MonkeyPatch, monkeypatch: pytest.MonkeyPatch
-) -> None:
+@pytest.mark.usefixtures("clean_env")
+def test_settings_detects_ursa_from_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("platforms.socket.gethostname", lambda: "ufe02")
     settings = Settings()
     assert settings.platform is Platform.URSA
@@ -98,8 +98,9 @@ def test_run_manifest_records_platform_and_runtime(
     assert recorded["modulefile"] == "cece_ursa.intelllvm"
 
 
+@pytest.mark.usefixtures("clean_env")
 def test_explicit_local_platform_beats_an_ursa_hostname(
-    clean_env: pytest.MonkeyPatch, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The first Ursa run: tests that name no platform picked up the login
     node's hostname. An explicit platform must win regardless of where the

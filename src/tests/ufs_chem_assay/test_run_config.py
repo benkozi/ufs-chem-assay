@@ -213,6 +213,7 @@ def test_harness_section_mirrors_every_setting() -> None:
         "platform",
         "baseline_root_dir",
         "enable_baseline_comparisons",
+        "baseline_store",
         "sbatch_args",
         "slurm_queue_wait_s",
         "job_env",
@@ -335,3 +336,25 @@ def test_example_keys_are_rejected(tmp_path: Path, dotted: str) -> None:
     )
     with pytest.raises(ValidationError, match=dotted.split(".")[-1]):
         RunConfig.from_yaml(path)
+
+
+# ── Publishing baselines ──────────────────────────────────────────────────────
+
+
+def test_baselines_store_defaults_and_publish_keys_default_off() -> None:
+    for name in ("ursa.yaml", "local.yaml"):
+        config = RunConfig.from_yaml(TEMPLATES_DIR / name)
+        assert config.baselines.store == "s3://ufs-chem/baselines", name
+        assert config.harness.publish_baselines is False, name
+        assert config.harness.no_suite_update is False, name
+
+
+def test_no_suite_update_requires_publish_baselines(tmp_path: Path) -> None:
+    path = run_config_file(tmp_path, overrides={"harness.no_suite_update": True})
+    with pytest.raises(ValidationError, match="no_suite_update.*publish_baselines"):
+        RunConfig.from_yaml(path)
+    path = run_config_file(
+        tmp_path,
+        overrides={"harness.no_suite_update": True, "harness.publish_baselines": True},
+    )
+    assert RunConfig.from_yaml(path).harness.no_suite_update is True

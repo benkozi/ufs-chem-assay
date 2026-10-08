@@ -47,6 +47,7 @@ dev = [
     # resolving from the lock instead of whatever is on a machine's PATH.
     "ruff>=0.12,<0.13",
     "types-pyyaml>=6.0",
+    "vulture>=2.16",
     "yamlfix>=1.16",
     "yamllint>=1.35",
 ]
@@ -91,6 +92,26 @@ ignore_missing_imports = true
 [tool.pydantic-mypy]
 init_typed = true
 init_forbid_extra = true
+
+# Dead-code detection (pre-commit, whole tree). Names bound by frameworks
+# rather than by code are ignored: pydantic's model_config, pytest's hook
+# functions, pydantic-settings' source hook; validators, properties, and
+# pytest fixtures/hooks are called by their framework. CeceConfig mirrors
+# the driver's YAML schema -- its fields and enum members are read by
+# serialization and by the driver, never by name here -- so it is excluded.
+[tool.vulture]
+paths = ["src", ".github/workflows/scripts"]
+min_confidence = 60
+ignore_names = ["model_config", "pytest_*", "settings_customise_sources"]
+ignore_decorators = [
+    "@field_validator",
+    "@model_validator",
+    "@classmethod",
+    "@property",
+    "@pytest.fixture",
+    "@pytest.hookimpl",
+]
+exclude = ["src/applications/cece/config.py"]
 
 [tool.yamlfix]
 # Minimize churn on checked-in suite/driver configs: no forced document

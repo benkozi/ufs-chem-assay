@@ -9,6 +9,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, InstanceOf
 
 from analysis import RunContext, concatenate_stats_csvs
+from baselines import SuiteInput, publish_session
 from applications.base import Application, ApplicationSettings, DriverConfig
 from combos import Combo, ParameterRow, enumerate_combos, write_combos_csv
 from comparison import concatenate_comparison_csvs, resolve_baseline_comparisons
@@ -78,6 +79,7 @@ class SuiteContext(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    path: Path  # the suite file: what --publish-baselines repoints
     suite: InstanceOf[SuiteConfig]
     # InstanceOf: Combo is enumeration machinery (callables, enum members),
     # validated by isinstance rather than deep pydantic validation.
@@ -152,6 +154,21 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "every combo test skips."
         ),
     )
+    group.addoption(
+        "--publish-baselines",
+        action="store_true",
+        help=(
+            "At session end, publish every compared combination whose driver "
+            "run passed (and no test but the old comparison failed) as a new "
+            "baseline under ASSAY_BASELINE_STORE, and repoint the suite files "
+            "at the new ULIDs. Needs the AWS CLI and credentials it can find."
+        ),
+    )
+    group.addoption(
+        "--no-suite-update",
+        action="store_true",
+        help="With --publish-baselines: publish, but leave the suite files alone.",
+    )
 
 
 def _root_dir_source(app: Application) -> str:
@@ -169,6 +186,12 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         else Settings(application=application_option)
     )
     configure_logging(settings.log_level)
+    if config.getoption("--no-suite-update") and not config.getoption(
+        "--publish-baselines"
+    ):
+        raise pytest.UsageError(
+            "--no-suite-update has no effect without --publish-baselines"
+        )
 
     # Selection, application, suite loading: the same sequence the CLI's
     # fetch runs (selection.resolve_suites); every failure is a usage error.
@@ -191,7 +214,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     # Every match runs: one suite is a single-suite session, several a
     # multi-suite session over the same flat output root.
     contexts: list[SuiteContext] = []
-    for _suite_path, suite in resolved.suites:
+    for suite_path, suite in resolved.suites:
         # Selector validation happens here, against the loaded base config,
         # before any container runs.
         base_config = app.config_model.from_yaml(suite.config_path)
@@ -202,7 +225,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
             )
         except ValueError as exc:
             raise pytest.UsageError(str(exc)) from exc
-        contexts.append(SuiteContext(suite=suite, combos=combos, baselines=baselines))
+        contexts.append(
+            SuiteContext(
+                path=suite_path, suite=suite, combos=combos, baselines=baselines
+            )
+        )
 
     # One ULID per test run, generated at runtime only — never configuration.
     run_id = str(ULID())
@@ -308,7 +335,7 @@ def pytest_collection_modifyitems(
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(
-    item: pytest.Item, call: pytest.CallInfo[None]
+    item: pytest.Item,
 ) -> Generator[None, pytest.TestReport, pytest.TestReport]:
     """Collect every combo-parameterized test's outcome for test-report.csv.
     A test's phases combine via worst_result (failed > skipped > passed), so
@@ -338,7 +365,7 @@ def pytest_runtest_makereport(
     return report
 
 
-def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+def pytest_sessionfinish(session: pytest.Session) -> None:
     """Session-end artifact pipeline, in order: test report -> stats concat ->
     per-suite overview plots -> comparison-stats concat -> per-suite bias
     plots. The output root is flat across suites; concatenated CSVs carry
@@ -357,6 +384,38 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         write_test_report_csv(
             list(report_rows.values()), roots.host / "test-report.csv"
         )
+
+    # Publication right after the report is on disk and before the plots (a
+    # plotting failure must not cost a publish). Never raises into pytest:
+    # the session's exit status is the tests' verdict.
+    if config.getoption("--publish-baselines"):
+        settings = config.stash[_SETTINGS]
+        if not settings.enable_baseline_comparisons:
+            logger.info(
+                "baseline comparisons are disabled; publishing anyway (the gate "
+                "saw no comparison test)"
+            )
+        try:
+            publish_session(
+                roots.host,
+                [
+                    SuiteInput(
+                        path=context.path,
+                        suite=context.suite,
+                        baselines=context.baselines,
+                        combo_ids={
+                            combo.name: combo.combo_id for combo in context.combos
+                        },
+                    )
+                    for context in contexts
+                ],
+                list(report_rows.values()),
+                store=settings.baseline_store,
+                baseline_root=settings.baseline_root_dir,
+                suite_update=not config.getoption("--no-suite-update"),
+            )
+        except Exception as exc:  # the hook must not fail the session
+            logger.error("publishing baselines failed: %s", exc)
 
     # Only combos whose suite enabled stats produced a CSV, so the glob is
     # already gated; per-suite plot gates apply to each suite's slice.

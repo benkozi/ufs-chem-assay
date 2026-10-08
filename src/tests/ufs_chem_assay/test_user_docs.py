@@ -34,6 +34,8 @@ def test_templates_carry_the_applications_map(name: str) -> None:
     assert list(raw["applications"]) == ["cece"]
     assert "cece" not in raw  # the old top-level section is gone
     assert "example" not in (TEMPLATES_DIR / name).read_text().lower()  # retired
+    assert raw["applications"]["cece"]["ref"] == "develop"
+    assert "ufs-community/CECE" in raw["applications"]["cece"]["git_url"]
 
 
 @pytest.mark.parametrize("path", _user_facing_files(), ids=lambda p: p.name)
@@ -54,6 +56,9 @@ def test_runbook_uses_placeholders_and_ref_variables() -> None:
     assert "HARNESS_REF" in text and "CECE_REF" in text
     assert "feat/run-on-rdhpc" not in text
     assert "fix/all-examples-pass" not in text
+    assert (
+        "buid-test-tweaks" not in text and "benkozi/CECE" not in text
+    )  # upstream develop
     assert "tmux" in text and "squeue" in text
     assert "config/ursa.yaml --stage harness" in text  # the template runs as shipped
     assert "05-harness-cece.sh" in text and "05-harness.sh" not in text
@@ -85,8 +90,15 @@ def test_readme_documents_the_new_surfaces() -> None:
         "inputs:",
         "sha256",
         "--no-sign-request",
+        "publish-baselines",
+        "--publish-baselines",
+        "--no-suite-update",
+        "ASSAY_BASELINE_STORE",
+        "baseline.yaml",
+        "vulture",
     ):
         assert needle in text, needle
+    assert "buid-test-tweaks" not in text and "benkozi/CECE" not in text
 
 
 def test_user_docs_never_say_example() -> None:

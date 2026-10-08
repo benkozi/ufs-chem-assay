@@ -386,3 +386,76 @@ def test_run_yaml_records_a_present_inputs_size(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     manifest = yaml.safe_load((tmp_path / "combo_runs" / "run.yaml").read_text())
     assert manifest["inputs"][0]["bytes"] == 5
+
+
+def _fabricated_checkout(tmp_path: Path) -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CECE_", "ASSAY_"))}
+    env["CECE_ROOT_DIR"] = str(tmp_path)
+    env["ASSAY_PLATFORM"] = "local"
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "x",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    return env
+
+
+def _pytest(
+    tmp_path: Path, env: dict[str, str], *args: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(_RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"),
+            "--dry-run",
+            "--combo-output-root=combo_runs",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            *args,
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+
+def test_dry_run_with_publish_baselines_publishes_nothing(tmp_path: Path) -> None:
+    """Every driver test skipped -> the gate holds every combination back;
+    no aws call, no suite edit, exit 0."""
+    env = _fabricated_checkout(tmp_path)
+    env["ASSAY_LOG_LEVEL"] = "DEBUG"
+    suite = _RUNNER_ROOT / "src/tests/config/cece/maccity/simple-maccity-suite.yaml"
+    before = suite.read_text()
+    result = _pytest(tmp_path, env, "--publish-baselines")
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = result.stdout + result.stderr
+    assert "publish summary: 3 skipped" in output
+    assert "aws s3 sync" not in output
+    assert suite.read_text() == before
+    assert not list((tmp_path / "combo_runs").rglob("baseline.yaml"))
+
+
+def test_no_suite_update_requires_publish_baselines(tmp_path: Path) -> None:
+    env = _fabricated_checkout(tmp_path)
+    result = _pytest(tmp_path, env, "--no-suite-update")
+    assert result.returncode != 0
+    assert "--no-suite-update has no effect without --publish-baselines" in (
+        result.stdout + result.stderr
+    )

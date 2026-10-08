@@ -109,7 +109,7 @@ def _build(config: RunConfig, section: CeceRunSection) -> list[str]:
     ]
 
 
-def _data(config: RunConfig, section: CeceRunSection) -> list[str]:
+def _data(_config: RunConfig, _section: CeceRunSection) -> list[str]:
     # Nothing beyond the shared stage's fetch: CECE's inputs are declared by
     # its suites.
     return []

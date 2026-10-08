@@ -26,7 +26,8 @@ def clean_cece_env(
     return monkeypatch
 
 
-def test_defaults(clean_cece_env: pytest.MonkeyPatch) -> None:
+@pytest.mark.usefixtures("clean_cece_env")
+def test_defaults() -> None:
     settings = CeceSettings()
     assert settings.root_dir is None
     assert settings.docker_image == "cece/cece-dev"
@@ -54,15 +55,15 @@ def test_legacy_cece_root_env_has_no_effect(
     assert CeceSettings().root_dir is None
 
 
-def test_settings_is_frozen(clean_cece_env: pytest.MonkeyPatch) -> None:
+@pytest.mark.usefixtures("clean_cece_env")
+def test_settings_is_frozen() -> None:
     settings = CeceSettings()
     with pytest.raises(ValidationError):
         settings.root_dir = Path("/host/cece")  # type: ignore[misc]
 
 
-def test_env_file_supplies_values_and_ignores_harness_keys(
-    clean_cece_env: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+@pytest.mark.usefixtures("clean_cece_env")
+def test_env_file_supplies_values_and_ignores_harness_keys(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text(
         "cece_root_dir=/from/dotenv\ncece_modulefile=cece_ursa.gnu\n"
         "cece_dask_nworkers=2\nassay_log_level=DEBUG\n"

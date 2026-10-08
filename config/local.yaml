@@ -10,8 +10,8 @@ platform: local
 # --root-dir, only if your layout differs.
 applications:  # one section per application in the run, keyed by adapter name
   cece:
-    git_url: git@github.com:benkozi/CECE.git
-    ref: feature/buid-test-tweaks  # ufs-community/CECE#154's head; develop once it merges
+    git_url: git@github.com:ufs-community/CECE.git
+    ref: develop
     clone_dir:  # default <root_dir>/CECE; point at your sandbox checkout instead
     update_source: false  # true: fetch, checkout ref, pull --ff-only, submodule update --init --recursive
     modulefile:  # CECE_MODULEFILE; none locally
@@ -26,12 +26,15 @@ data:
 baselines:
   root_dir:  # ASSAY_BASELINE_ROOT_DIR
   enabled: false  # ASSAY_ENABLE_BASELINE_COMPARISONS
+  store: s3://ufs-chem/baselines  # ASSAY_BASELINE_STORE: where publish-baselines writes <store>/<ulid>/
 harness:
   suite_config: simple-maccity-suite.yaml  # regex over *-suite.yaml names; every match runs
   output_root: ufs-chem-assay-output  # relative: under the checkout (docker: must stay there)
   clean_root: true  # removes only a previous harness root (one with run.yaml)
   pytest_dry_run: false  # pytest --dry-run: generate everything, execute no driver
   pytest_args: []
+  publish_baselines: false  # pytest --publish-baselines: publish passing compared combos at session end
+  no_suite_update: false  # pytest --no-suite-update: publish without repointing the suite files
   runtime:  # ASSAY_RUNTIME; null = the platform's default (docker here)
   launcher: ''  # ASSAY_LAUNCHER; unused under docker
   env: {}

@@ -2,3 +2,11 @@
 # extended the CECE repo-root ruff.toml, whose only content was spack-specific
 # per-file-ignores that do not apply here).
 target-version = "py311"
+
+[lint]
+# ARG: unused function/method/lambda arguments (flake8-unused-arguments).
+extend-select = ["ARG"]
+
+[lint.flake8-unused-arguments]
+# `**kwargs` in a mock's side_effect lambda is the signature, not a value.
+ignore-variadic-names = true

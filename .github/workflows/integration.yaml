@@ -13,9 +13,10 @@
 # A CECE SHA unused for 7 days is evicted and rebuilds cold once; a new SHA
 # seeds an incremental build from the `cece-build-` prefix fallback.
 #
-# Baselines are OFF (ASSAY_ENABLE_BASELINE_COMPARISONS=false): the baseline
-# store has no public home yet. TODO: re-enable once it does (see
-# design/feat/20260727-1633-simple-maccity-ci/20260727-1633-simple-maccity-ci.md).
+# Baselines are OFF (ASSAY_ENABLE_BASELINE_COMPARISONS=false): the store is
+# the private s3://ufs-chem/baselines prefix (ufs-chem-assay publish-baselines)
+# and this job has no AWS credentials. TODO: OIDC credentials + the download
+# half, then re-enable (see design/feat/20261008-1433-baseline-sync/).
 #
 # The job is allowed to fail (continue-on-error): the long end-to-end run
 # must never block PRs to develop. Check the job's own status — a red
@@ -37,11 +38,11 @@ permissions:
 concurrency:
   group: integration-${{ github.ref }}
   cancel-in-progress: true
-# The head of ufs-community/CECE#154 (upstream develop + the build script's
-# --target/--jobs); once it merges, this becomes ufs-community/CECE + develop.
+# Upstream develop: it carries the build script's --target/--jobs the build
+# step needs (ufs-community/CECE#154, merged 2026-10-08).
 env:
-  CECE_REPOSITORY: benkozi/CECE
-  CECE_REF: feature/buid-test-tweaks
+  CECE_REPOSITORY: ufs-community/CECE
+  CECE_REF: develop
 jobs:
   simple-maccity:
     # head_commit is absent on pull_request events: contains(null, …) is
@@ -129,9 +130,8 @@ jobs:
       - name: Run simple-maccity-suite.yaml
         env:
           CECE_ROOT_DIR: ${{ github.workspace }}/cece
-          # Baselines stay off: the store has no reachable home yet, and the
-          # three maccity baselines must be republished from this driver
-          # first (see design/feat/20261007-1555-*/ in the harness repo).
+          # Baselines stay off: no credentials for the private store here
+          # (see the header note).
           ASSAY_ENABLE_BASELINE_COMPARISONS: 'false'
         run: |
           uv run pytest src/tests/test_driver_combos.py \

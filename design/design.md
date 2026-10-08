@@ -60,17 +60,19 @@ the harness test package `src/tests/ufs_chem_assay/`. See
   the run config — there is no command-line flag) and mounted at the
   adapter's container workdir (`/work` for CECE) in the driver container (see
   `design/fix/20260717-1029-portability-external-cece/20260717-1029-portability-external-cece.md`).
-- No online baseline retrieval or baseline manifest yet — baselines are
-  local directories keyed by ULID (see
+- **No online baseline retrieval yet** — the session reads baselines as
+  local directories keyed by ULID under `ASSAY_BASELINE_ROOT_DIR` (see
   `design/feat/20260716-1113-compare-with-baseline/20260716-1113-compare-with-baseline.md`); no stats-CSV
   diffing (the comparison targets the NetCDF files themselves). The
-  primitive that will carry retrieval — and application data staging —
-  exists since 2026-10-07: `s3_sync.py`, a stand-alone `aws s3 sync`
-  wrapper (see S3 data sync below and
-  `design/feat/20261006-1710-basic-s3-auth/20261006-1710-basic-s3-auth.md`);
-  `ufs-chem-assay fetch` is its first caller (inputs); baseline sourcing
-  through it is designed but deferred (the retire-examples design doc's
-  "Deferred" section).
+  *upload* half exists since 2026-10-08 (see Baselines below): a published
+  baseline carries a `baseline.yaml` manifest, which is the marker the
+  download half will use; downloading a pinned ULID the session lacks
+  locally remains the deferred follow-up (the baseline-sync design doc's
+  Future work). The transport is `s3_sync.py`, a stand-alone `aws s3 sync`
+  wrapper (S3 data sync below;
+  `design/feat/20261006-1710-basic-s3-auth/20261006-1710-basic-s3-auth.md`),
+  whose callers are `ufs-chem-assay fetch` (inputs) and
+  `ufs-chem-assay publish-baselines`.
 - **The session never downloads.** Inputs are declared by the suite and
   staged by the CLI's `fetch` (the run config's `data` stage calls it);
   a session whose declared inputs are absent fails at collection, naming
@@ -414,6 +416,7 @@ Layout under the output root is the same either way:
     plots-baselines/           # bias maps (realization - baseline) + GIF,
                                #   RdBu_r symmetric suite-wide scale from
                                #   that suite's comparison slice; compared combos only
+    baseline.yaml              # once published as a baseline (see Baselines)
     *.nc                       # driver NetCDF output (output.directory in
                                #   the yaml points here)
 ```
@@ -546,6 +549,13 @@ exit is the failure condition. The environment variables mirror `setup.sh`
     client never starts). Validates any suite — notably the exhaustive
     one — before paying for containers. With the default temp output root
     it needs no environment at all — no CECE checkout required.
+  - `--publish-baselines` — flag; at session end (right after
+    `test-report.csv` is written, before the plots), publish every
+    compared combination that passed the gate as a new baseline and
+    repoint the suite files (see Baselines). `--no-suite-update` — flag;
+    with it, publish without editing the suites (a `UsageError` without
+    it). A `--dry-run` session publishes nothing: every driver test
+    skipped, so the gate holds every combination back.
   - **Declared inputs must be present** (no flag): when combo tests are
     collected without `--dry-run`, after the root-dir check below, any
     selected suite's `inputs` entry absent from `<root>/<data_dirname>` is
@@ -644,6 +654,56 @@ user-local on Ursa; v1 is in maintenance mode). The live
 `ufs-chem-assay-tests/<ULID>/` and empties its own prefix with a
 `delete=True` sync from an empty directory.
 
+## Baselines
+
+Publishing (2026-10-08, `baselines.py`; full design in
+`design/feat/20261008-1433-baseline-sync/20261008-1434-baseline-sync.md`):
+
+- **A baseline is one combination's whole output directory** — NetCDF,
+  generated config, `.out`, driver log, stats CSVs, plots and GIFs —
+  published as `<store>/<ulid>/` with one unfiltered `aws s3 sync`. Its
+  name is the combination's **runtime ULID** (`combo_id`, minted at
+  enumeration, never from content or configuration), so every run mints
+  new ones and the store is **append-only**: a `--dryrun` download of the
+  prefix (the probe) finding objects refuses the publish; the harness has
+  no delete path for baselines. The comparison still reads the top-level
+  `*.nc` only; everything else is reference material.
+- **`baseline.yaml`** (`BaselineManifest`) is written into the directory
+  before the sync and uploaded with it: the ULID and store, application
+  and `application_commit`, suite, combination, `run_id`, harness version
+  and commit, platform and runtime, publication time (UTC) and
+  `user@host`, the ULID the suite entry pinned (`superseded_ulid`), the
+  combination's `combos.csv` rows, and every file with size and digest. Its
+  presence in a combination directory records that the combination was
+  published; a directory whose manifest names the ULID already in the
+  store **resumes** (no upload, the cache copy and suite edit redone) —
+  which covers a failed suite edit, a partial upload, and a reverted suite.
+- **The suite's `baseline_comparisons` entries are the contract**: each
+  selects one combination and pins the ULID the next session compares
+  against; publishing uploads the selected combinations and rewrites each
+  entry's `ulid` — a textual one-line substitution (the files are
+  hand-commented; a YAML dump would lose that), refused on zero or several
+  matches and verified by reloading the file. Combinations without an
+  entry are not baselines. The **gate**: `test_driver_execution` passed
+  and no other test of the combination failed, `test_baseline_comparison`
+  excepted (the old baseline is expected red when republishing); skips are
+  allowed.
+- **Two entry points, one path**: `ufs-chem-assay publish-baselines
+  --output-root <root>` reads `run.yaml`, `combos.csv`, `test-report.csv`,
+  reselects the run's suites (default selector: their names by the
+  `X-suite.yaml` rule), re-enumerates and resolves the entries (refusing a
+  suite edited since the run), and `plan`s and `publish`es; the pytest
+  session's `--publish-baselines` builds the same plan from its own
+  contexts and rows at session end (`publish_session`). `--dry-run` runs
+  the probe and the wrapper's `--dryrun` upload and logs the manifest,
+  writing nothing; `--no-suite-update` publishes without the edit. With
+  `ASSAY_BASELINE_ROOT_DIR` set the directory is also copied to
+  `<root>/<ulid>/`, so the next local run compares against it without the
+  download half. Credentials are the CLI's; publishing needs
+  `s3:ListBucket` on the bucket and `s3:PutObject` under the prefix.
+- **CI** keeps comparisons off (no credentials for the private store);
+  the CECE pin is `ufs-community/CECE` at `develop` since 2026-10-08.
+
 ## Type checking
 
 mypy runs over everything under `src/` (config in `pyproject.toml`
@@ -665,8 +725,14 @@ level in the root conftest), written once at sessionstart and read through
 attributes with `type: ignore` is retired; don't reintroduce it.
 
 Pre-commit (`.pre-commit-config.yaml`, install with
-`uv run pre-commit install`) runs ruff check, ruff format, a whole-`src/`
-mypy pass, and YAML formatting/linting (`yamlfix` in `[tool.yamlfix]`,
+`uv run pre-commit install`) runs ruff check (the default rules plus `ARG`,
+unused arguments — side-effect fixtures are declared with
+`pytest.mark.usefixtures`, unused interface parameters are `_`-prefixed,
+never `noqa`), ruff format, a whole-`src/` mypy pass, **vulture** (dead
+code, 2026-10-08; `[tool.vulture]` ignores framework-bound names and
+decorators and excludes `applications/cece/config.py`, a schema mirror
+whose fields are read by serialization, not by name), and YAML
+formatting/linting (`yamlfix` in `[tool.yamlfix]`,
 `yamllint` in `.yamllint.yaml` — the pair kept coherent: no `---` document
 start, 120-column lines, block-style sequences) as **local hooks through
 `uv run`** — the project venv is the single source of tool versions, so
@@ -688,6 +754,7 @@ Harness-wide (`Settings`; `platform`, `runtime`, `launcher`, `sbatch_args`,
 | `log_level`      | `ASSAY_LOG_LEVEL`     | `INFO`               |
 | `baseline_root_dir` | `ASSAY_BASELINE_ROOT_DIR` | unset → cwd; baselines at `<root>/<ulid>/` |
 | `enable_baseline_comparisons` | `ASSAY_ENABLE_BASELINE_COMPARISONS` | `true`; false skips all comparison tests |
+| `baseline_store` | `ASSAY_BASELINE_STORE` | `s3://ufs-chem/baselines`; an `s3://bucket/prefix`, never a bucket root; `publish-baselines` writes `<store>/<ulid>/` |
 | `dask_nworkers`  | `ASSAY_DASK_NWORKERS` | unset → all available; else int > 0 |
 | `config_search_path`       | `ASSAY_CONFIG_SEARCH_PATH`       | unset |
 | `suite_config_search_path` | `ASSAY_SUITE_CONFIG_SEARCH_PATH` | unset → built-in suite dir only; `os.pathsep`-separated list, searched recursively for suite selection |
@@ -741,11 +808,14 @@ All code under `src/`; the project is `uv`-managed with its own
       yaml.py             # the YAML-1.2-boolean loader (configs, override values)
     cli/                  # `ufs-chem-assay run`: run config model (applications map),
                           #   overrides, per-application stage scripts, bash execution;
-                          #   `ufs-chem-assay fetch`: stage the selected suites' inputs
+                          #   `ufs-chem-assay fetch`: stage the selected suites' inputs;
+                          #   `ufs-chem-assay publish-baselines`: a finished run -> the store
     identity.py           # HARNESS_NAME, HARNESS_ROOT, harness_version/commit
     platforms.py          # Platform / Runtime enums, hostname detection
     templates/driver-job.sbatch.j2  # the slurm runtime's per-driver job script
     analysis.py           # descriptive stats (dask distributed), CSV writing
+    baselines.py          # publishing: the gate, plan, manifest, probe + sync,
+                          #   cache copy, textual suite repoint (CLI + session)
     assertions.py         # generic post-run assertions (expectations passed in)
     combos.py             # Dimension, Combo, enumerate_combos, write_combos_csv
     comparison.py         # baseline resolution (via the adapter) + NetCDF comparison
@@ -857,7 +927,10 @@ mechanics:
   of a 4-minute job); the save step is gated on the build succeeding so a
   partial tree never lands under the exact key. The uv cache is keyed on
   `uv.lock`. Inputs come from `ufs-chem-assay fetch`; baselines stay off
-  there until the deferred baseline sourcing lands.
+  there (the store is private and the job has no credentials — the
+  download half and OIDC credentials are the follow-up). The CECE pin is
+  `ufs-community/CECE` at `develop` (ufs-community/CECE#154 merged
+  2026-10-08).
 - **Releases are automatic** (full design in
   `design/feat/20261006-1250-psr-ci/20261006-1250-psr-ci.md`): the `release-psr`
   job of `ci.yaml` runs on every push to `develop` (rc prereleases) or
@@ -923,6 +996,10 @@ mechanics:
   ULID — logged at session start, stamped into every stats row (`run_id`),
   and recorded with the resolved suite in `<output-root>/run.yaml`; it is
   never read from configuration.
+- **A baseline's identity is the combination's runtime ULID** (2026-10-08):
+  the store key, the manifest's `ulid`, and the suite's pinned value are
+  one and the same `combo_id`, so republishing always creates a new
+  baseline and an existing prefix is never written again.
 - Data-carrying objects (`ComboRoots`, `GeneratedCombo`, `DriverRunResult`)
   are frozen pydantic models, consistent with the config models — not
   dataclasses. The exception is the enumeration machinery in `combos.py`

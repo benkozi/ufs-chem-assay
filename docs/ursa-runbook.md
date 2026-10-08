@@ -87,7 +87,7 @@ Python 3.13 rather than 3.14: every dependency has Linux wheels for
 
 ```bash
 git clone --recurse-submodules --branch "$CECE_REF" \
-    git@github.com:benkozi/CECE.git $ROOT/CECE
+    git@github.com:ufs-community/CECE.git $ROOT/CECE
 ```
 
 ## 4. Driver build (native, modules from the checkout)
@@ -196,6 +196,27 @@ cd $ROOT/CECE && sbatch --wait $ROOT/CECE/ufs-chem-assay-output/<combo_id>/<comb
 then read the `.out` it rewrites. Edit the script in place to
 experiment (a different modulefile, an extra export); the harness
 regenerates it on the next run.
+
+**Publishing baselines.** Once a run is the one you want to compare
+future runs against, publish its compared combinations from the login
+node (the AWS CLI step above; `AWS_PROFILE` as you configured it) —
+dry-run first, then for real:
+
+```bash
+cd $ROOT/ufs-chem-assay
+AWS_PROFILE=<profile> uv run ufs-chem-assay publish-baselines \
+    --output-root=$ROOT/CECE/ufs-chem-assay-output --dry-run
+AWS_PROFILE=<profile> uv run ufs-chem-assay publish-baselines \
+    --output-root=$ROOT/CECE/ufs-chem-assay-output
+```
+
+Each combination the suite compares against goes to
+`s3://ufs-chem/baselines/<ulid>/` with a `baseline.yaml` manifest, and
+the suite file's `ulid:` lines are repointed in your harness checkout —
+commit that change. Set `baselines.root_dir` in the run config (or
+`ASSAY_BASELINE_ROOT_DIR`) to also keep a local copy the next run reads;
+`harness.publish_baselines: true` does all of this at the end of the
+harness stage instead.
 
 The `native` runtime (the driver as a direct host process) is not a
 supported path on Ursa: the harness venv and the driver need conflicting

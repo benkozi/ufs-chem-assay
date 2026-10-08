@@ -9,13 +9,14 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import yaml
-from pydantic import ConfigDict, Field, SerializeAsAny, field_validator
+from pydantic import ConfigDict, Field, SerializeAsAny, field_validator, model_validator
 
 from applications.base import ApplicationRunSection
 from cli.override import apply_overrides
 from identity import HARNESS_ROOT
 from models.base import StrictModel
 from platforms import Platform, Runtime, default_runtime, detect_platform
+from settings import DEFAULT_BASELINE_STORE
 
 __all__ = ["HARNESS_ROOT", "RunConfig"]
 
@@ -33,6 +34,13 @@ class BaselinesSection(StrictModel):
     )
     enabled: bool = Field(
         default=False, description="ASSAY_ENABLE_BASELINE_COMPARISONS for the session"
+    )
+    store: str = Field(
+        default=DEFAULT_BASELINE_STORE,
+        description=(
+            "ASSAY_BASELINE_STORE: the baselines' S3 prefix, where "
+            "publish-baselines writes <store>/<ulid>/ (append-only)"
+        ),
     )
 
 
@@ -74,6 +82,17 @@ class HarnessSection(StrictModel):
         default_factory=list,
         description="Extra pytest arguments, e.g. [-x, -k, map-consd]",
     )
+    publish_baselines: bool = Field(
+        default=False,
+        description=(
+            "Pass --publish-baselines: at session end, publish every compared "
+            "combination that passed as a new baseline and repoint the suites"
+        ),
+    )
+    no_suite_update: bool = Field(
+        default=False,
+        description="Pass --no-suite-update (publish, but leave the suite files alone)",
+    )
     runtime: Runtime | None = Field(
         default=None,
         description=(
@@ -112,6 +131,14 @@ class HarnessSection(StrictModel):
             "--suite-config selection (the built-in suite directory is always last)"
         ),
     )
+
+    @model_validator(mode="after")
+    def _no_suite_update_needs_publish(self) -> HarnessSection:
+        if self.no_suite_update and not self.publish_baselines:
+            raise ValueError(
+                "no_suite_update has no effect without publish_baselines; set both or neither"
+            )
+        return self
 
 
 class SlurmSection(StrictModel):

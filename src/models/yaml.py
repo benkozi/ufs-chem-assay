@@ -9,7 +9,6 @@ loader so the two agree.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import yaml
 
@@ -34,8 +33,3 @@ def load_yaml(text: str) -> object:
     """Parse YAML text with 1.2 booleans; scalars come back as Python
     scalars (int, float, bool, None, str), documents as dicts/lists."""
     return yaml.load(text, Loader=StrictBoolLoader)
-
-
-def load_yaml_file(path: Path) -> object:
-    with open(path) as f:
-        return yaml.load(f, Loader=StrictBoolLoader)
