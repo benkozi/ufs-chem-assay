@@ -154,3 +154,22 @@ def test_clean_root_removes_a_previous_harness_root(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert not (previous / "stale.txt").exists()
     assert (previous / "run.yaml").is_file()  # the new run's manifest
+
+
+def test_missing_declared_input_is_usage_error_naming_fetch(tmp_path: Path) -> None:
+    """A real run (no --dry-run) with the root configured but a declared
+    input absent fails at collection, before any driver, naming the file and
+    the command that stages it. The session itself never downloads."""
+    _git_checkout(tmp_path)
+    result = _run_pytest([], tmp_path, {"CECE_ROOT_DIR": str(tmp_path)})
+    assert result.returncode == _USAGE_ERROR, result.stdout + result.stderr
+    assert str(tmp_path / "data" / "MACCity_4x5.nc") in result.stderr
+    assert (
+        "ufs-chem-assay fetch --suite-config=simple-maccity-suite.yaml" in result.stderr
+    )
+
+
+def test_dry_run_needs_no_inputs(tmp_path: Path) -> None:
+    _git_checkout(tmp_path)
+    result = _run_pytest(["--dry-run"], tmp_path, {"CECE_ROOT_DIR": str(tmp_path)})
+    assert result.returncode == 0, result.stdout + result.stderr

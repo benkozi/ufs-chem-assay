@@ -40,12 +40,12 @@ class StubApplication(Application):
     container_workdir = PurePosixPath("/opt/stub")
     default_suite = "stub-suite.yaml"
     checkout_dirname = "STUB"
+    data_dirname = "data"
     standard_dimensions = ("time",)
     settings_model = StubSettings
     config_model = DriverConfig
     suite_model = StubSuiteConfig
     run_section_model = StubSection
-    examples = None
 
     def dimensions(
         self, sweep: SweepBase, base_config: DriverConfig

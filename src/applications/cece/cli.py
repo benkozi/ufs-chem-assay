@@ -1,7 +1,8 @@
 """CECE's side of `ufs-chem-assay run`: its run-config section and the
-source, build, and data stage bodies (clone with submodules, cmake against
-its modulefiles or its container build script, example data through its
-download entrypoint)."""
+source and build stage bodies (clone with submodules, cmake against its
+modulefiles or its container build script). Input data is the shared data
+stage's business (the suites declare it; `ufs-chem-assay fetch` stages it),
+so CECE adds no data lines."""
 
 from __future__ import annotations
 
@@ -25,10 +26,6 @@ class CeceRunSection(ApplicationRunSection):
             "CMake targets to build; `all` also builds CECE's test stack "
             "(running it is issue #9)"
         ),
-    )
-    examples: list[str] = Field(
-        default_factory=lambda: ["ex3"],
-        description="Example ids whose input data download-example-data.py stages",
     )
 
 
@@ -113,15 +110,9 @@ def _build(config: RunConfig, section: CeceRunSection) -> list[str]:
 
 
 def _data(config: RunConfig, section: CeceRunSection) -> list[str]:
-    # CECE's examples tooling needs Python >= 3.11 (StrEnum): the harness
-    # venv's interpreter, from the harness checkout (the stage cd's there).
-    if not section.examples:
-        return []
-    clone = config.checkout_dir("cece")
-    return [
-        f"uv run --no-sync python {q(clone / 'examples/download-example-data.py')} "
-        f"--example {q(','.join(section.examples))} --dst-dir {q(clone / 'data')}"
-    ]
+    # Nothing beyond the shared stage's fetch: CECE's inputs are declared by
+    # its suites.
+    return []
 
 
 def stage_lines(

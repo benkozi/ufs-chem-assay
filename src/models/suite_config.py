@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 from pydantic import ConfigDict, Field, SerializeAsAny, field_validator, model_validator
@@ -19,6 +19,73 @@ from platforms import Platform, Runtime
 # General string-assertion sentinel: "don't check". A plain null cannot serve
 # because null already means "assert the value is absent".
 IGNORE_VALUE = "__ignore__"
+
+# An S3 *object* URI: bucket naming rules (lowercase, digits, dots, hyphens,
+# 3-63 chars, no edge dot/hyphen) plus a non-empty key that does not end in a
+# slash — a prefix is not an input.
+S3_OBJECT_URI_PATTERN = r"^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/(?:[^/\s]+/)*[^/\s]+$"
+SHA256_PATTERN = r"^[0-9a-f]{64}$"
+
+
+class InputFile(StrictModel):
+    """One input the suite's base configuration reads, staged into the
+    application checkout's data directory by `ufs-chem-assay fetch`: an S3
+    object, fetched with one filtered `aws s3 sync` of its parent prefix."""
+
+    url: str = Field(
+        pattern=S3_OBJECT_URI_PATTERN,
+        description=(
+            "S3 object URI of the file (s3://bucket/key); fetched with one "
+            "filtered `aws s3 sync` of the key's parent prefix"
+        ),
+    )
+    public: bool = Field(
+        False,
+        description=(
+            "True: the bucket allows anonymous reads and the fetch passes "
+            "--no-sign-request (no credentials needed); False: the AWS CLI's own "
+            "credential chain applies"
+        ),
+    )
+    dst: PurePosixPath = Field(
+        description=(
+            "Destination relative to the checkout's data directory (the "
+            "adapter's data_dirname); no absolute paths, no '..' or '.' parts"
+        ),
+    )
+    sha256: str | None = Field(
+        None,
+        pattern=SHA256_PATTERN,
+        description=(
+            "Expected SHA-256 (lowercase hex); a present file with this digest is "
+            "skipped, a mismatch is re-fetched, a download is verified before it "
+            "replaces anything; null skips present non-empty files unverified"
+        ),
+    )
+
+    @field_validator("dst", mode="after")
+    @classmethod
+    def _relative_and_clean(cls, value: PurePosixPath) -> PurePosixPath:
+        parts = value.parts
+        if not parts or value.is_absolute():
+            raise ValueError(
+                f"dst must be a non-empty relative path, got {str(value)!r}"
+            )
+        if any(part in ("..", ".") for part in parts):
+            raise ValueError(
+                f"dst must not contain '.' or '..' parts, got {str(value)!r}"
+            )
+        return value
+
+    @property
+    def parent_prefix(self) -> str:
+        """`s3://bucket/a/b/file.nc` -> `s3://bucket/a/b/` (the sync source)."""
+        return self.url.rsplit("/", 1)[0] + "/"
+
+    @property
+    def filename(self) -> str:
+        """The key's last component (the sync's include filter)."""
+        return self.url.rsplit("/", 1)[1]
 
 
 class AttributesAssertion(StrictModel):
@@ -148,7 +215,11 @@ class SuiteConfig(StrictModel):
         ),
     )
     config_path: Path = Field(
-        description="Base driver config this suite's combinations are diffs of"
+        description=(
+            "Base driver configuration this suite's combinations are diffs of: a "
+            "file, or a directory for an application whose configuration spans "
+            "several files"
+        )
     )
     analysis: Analysis = Field(
         default_factory=Analysis,
@@ -163,6 +234,23 @@ class SuiteConfig(StrictModel):
         default_factory=list,
         description="Per-combination baseline comparisons; empty/absent disables",
     )
+    inputs: list[InputFile] = Field(
+        default_factory=list,
+        description=(
+            "Input files the base configuration reads, staged by `ufs-chem-assay "
+            "fetch` and required present at session start (dry runs excepted)"
+        ),
+    )
+
+    @field_validator("inputs", mode="after")
+    @classmethod
+    def _unique_dst(cls, value: list[InputFile]) -> list[InputFile]:
+        seen: set[PurePosixPath] = set()
+        for entry in value:
+            if entry.dst in seen:
+                raise ValueError(f"inputs: dst {str(entry.dst)!r} is declared twice")
+            seen.add(entry.dst)
+        return value
 
     @model_validator(mode="after")
     def _plotting_requires_stats(self) -> SuiteConfig:
@@ -205,12 +293,14 @@ class SuiteConfig(StrictModel):
 
         A config_path starting with the literal root-dir token (the
         application's `${<PREFIX>ROOT_DIR}`) anchors on root_dir, the
-        application checkout — how checked-in suites reference configs
-        living in the external checkout portably. Otherwise, relative values
-        resolve against the suite file's own directory, or against
+        application checkout — how a suite references a config living in the
+        external checkout portably. Otherwise, relative values resolve
+        against the suite file's own directory, or against
         config_search_path when set (prepended verbatim, so nested and ../
-        paths work), and absolute values are used as-is. A missing target
-        fails here, before any driver runs.
+        paths work), and absolute values are used as-is. The target may be a
+        file or, for an application whose configuration spans several
+        files, a directory — the adapter's loader decides the shape; a
+        missing target fails here, before any driver runs.
         """
         parts = self.config_path.parts
         if parts and parts[0] == root_dir_token:
@@ -229,11 +319,26 @@ class SuiteConfig(StrictModel):
         else:
             resolved = suite_path.parent / self.config_path
         resolved = resolved.resolve()
-        if not resolved.is_file():
+        if not resolved.exists():
             raise FileNotFoundError(
                 f"suite config_path {str(self.config_path)!r} resolved to {resolved}, which does not exist"
             )
         self.config_path = resolved
+
+
+class RecordedInput(StrictModel):
+    """One declared input as found at session start (run.yaml): the session
+    records presence and size, never a digest — hashing is `fetch`'s job."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    suite: str = Field(description="Suite that declares the input")
+    url: str = Field(description="The input's S3 object URI")
+    path: Path = Field(description="Host path the input is staged at")
+    sha256: str | None = Field(description="The declared digest; null when none")
+    bytes: int | None = Field(
+        description="Size of the file present at session start; null when absent"
+    )
 
 
 class RunManifest(StrictModel):
@@ -279,6 +384,10 @@ class RunManifest(StrictModel):
     )
     # SerializeAsAny: each suite dumps with its adapter's schema (the sweep).
     suites: list[SerializeAsAny[SuiteConfig]]
+    inputs: list[RecordedInput] = Field(
+        default_factory=list,
+        description="Every selected suite's declared inputs as found at session start",
+    )
 
     @field_validator("suites", mode="before")
     @classmethod

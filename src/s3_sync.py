@@ -13,6 +13,8 @@ inherits the environment unchanged and the CLI resolves its own chain
 (`~/.aws/credentials` and `~/.aws/config` profiles, environment variables,
 SSO, instance roles). The one hook is `profile`, a pass-through of
 `--profile`. Missing credentials surface as the CLI's own nonzero exit.
+Publicly readable buckets are read anonymously with `no_sign_request`
+(`--no-sign-request`), which needs no credentials at all.
 
 The AWS CLI (v2) is an external tool, like docker or git: located on PATH,
 never installed by this module. See the README for the install per machine.
@@ -110,6 +112,13 @@ class S3SyncConfig(BaseModel):
         default_factory=list,
         description="--include patterns, applied after exclude (last match wins)",
     )
+    no_sign_request: bool = Field(
+        False,
+        description=(
+            "--no-sign-request: anonymous access for publicly readable buckets; "
+            "no credentials are looked up. Refused together with profile"
+        ),
+    )
     profile: str | None = Field(
         None,
         min_length=1,
@@ -159,13 +168,18 @@ class S3SyncConfig(BaseModel):
                 "only_show_errors suppresses exactly the lines a dry_run exists "
                 "to show; choose one"
             )
+        if self.no_sign_request and self.profile is not None:
+            raise ValueError(
+                "no_sign_request (anonymous access) and profile (a named "
+                "credential profile) contradict each other; choose one"
+            )
         return self
 
     @property
     def argv(self) -> list[str]:
         """[aws, s3, sync, <source>, <destination>, --no-progress, --dryrun?,
-        --delete?, --only-show-errors?, --profile NAME?, --exclude P...,
-        --include P...]: flags after the positionals, exclude before include
+        --delete?, --only-show-errors?, --no-sign-request?, --profile NAME?,
+        --exclude P..., --include P...]: flags after the positionals, exclude before include
         (aws evaluates filters in order). argv[0] is aws_executable as given;
         sync() swaps in the path shutil.which resolved."""
         argv = [
@@ -182,6 +196,8 @@ class S3SyncConfig(BaseModel):
             argv.append("--delete")
         if self.only_show_errors:
             argv.append("--only-show-errors")
+        if self.no_sign_request:
+            argv.append("--no-sign-request")
         if self.profile is not None:
             argv += ["--profile", self.profile]
         for pattern in self.exclude:

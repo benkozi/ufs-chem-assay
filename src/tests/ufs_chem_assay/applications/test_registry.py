@@ -38,7 +38,21 @@ def test_adapter_constants() -> None:
     assert app.default_suite == "simple-maccity-suite.yaml"
     assert app.checkout_dirname == "CECE"
     assert app.standard_dimensions == ("time", "lev", "lat", "lon")
-    assert app.examples is not None
+    assert app.data_dirname == "data"
+    assert app.data_dir(Path("/checkout")) == Path("/checkout/data")
+
+
+def test_every_adapter_names_its_data_directory() -> None:
+    for app in REGISTRY.values():
+        assert app.data_dirname and "/" not in app.data_dirname, app.name
+
+
+def test_examples_support_is_gone() -> None:
+    import importlib
+
+    base = importlib.import_module("applications.base")
+    assert not hasattr(base, "ExamplesSupport")
+    assert not hasattr(get_application("cece"), "examples")
 
 
 def test_load_suite_defaults_to_cece(suite_path: Path) -> None:

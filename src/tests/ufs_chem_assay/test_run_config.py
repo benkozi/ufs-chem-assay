@@ -26,7 +26,6 @@ def test_ursa_template_loads() -> None:
     cece = config.applications["cece"]
     assert isinstance(cece, CeceRunSection)
     assert cece.modulefile == "cece_ursa.intelllvm"
-    assert cece.examples == ["ex3"]
     assert config.checkout_dir("cece") == config.root_dir / "CECE"
     assert config.slurm is not None and config.slurm.account == "epic"
     assert config.slurm.sbatch_args == "-A epic -q debug -p u1-compute -N 1 -n 1 -c 8"
@@ -318,3 +317,21 @@ def test_effective_config_round_trips(tmp_path: Path) -> None:
     assert reloaded == config
     section = reloaded.applications["cece"]
     assert isinstance(section, CeceRunSection) and section.ref == "develop"
+
+
+# ── The example keys are gone ─────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "dotted", ["applications.cece.examples", "harness.run_examples"]
+)
+def test_example_keys_are_rejected(tmp_path: Path, dotted: str) -> None:
+    # Retired with the example machinery: the selected suites say what to
+    # fetch, and there is no --run-examples to pass. extra="forbid" catches a
+    # stale run config loudly.
+    path = run_config_file(
+        tmp_path,
+        overrides={dotted: ["ex3"] if "examples" in dotted.split(".")[-1] else True},
+    )
+    with pytest.raises(ValidationError, match=dotted.split(".")[-1]):
+        RunConfig.from_yaml(path)

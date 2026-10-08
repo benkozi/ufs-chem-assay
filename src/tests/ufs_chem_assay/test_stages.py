@@ -63,7 +63,7 @@ def test_source_stage_clones_when_missing_and_guards_submodules(
     script = render_stage(Stage.SOURCE, ursa, _CECE)
     clone = str(ursa.checkout_dir("cece"))
     assert (
-        "git clone --recurse-submodules --branch fix/all-examples-pass "
+        "git clone --recurse-submodules --branch feature/buid-test-tweaks "
         f"git@github.com:benkozi/CECE.git {clone}"
     ) in script.text
     assert f"{clone}/extern/helm/libs" in script.text
@@ -81,8 +81,8 @@ def test_source_stage_update_source_fast_forwards(tmp_path: Path) -> None:
     )
     script = render_stage(Stage.SOURCE, config, _CECE)
     assert "git -C" in script.text and "fetch origin" in script.text
-    assert "checkout fix/all-examples-pass" in script.text
-    assert "pull --ff-only origin fix/all-examples-pass" in script.text
+    assert "checkout feature/buid-test-tweaks" in script.text
+    assert "pull --ff-only origin feature/buid-test-tweaks" in script.text
     assert "submodule update --init --recursive" in script.text
 
 
@@ -117,20 +117,44 @@ def test_local_build_stage_delegates_to_cece_container_script(local: RunConfig) 
     ) in script.text
 
 
-def test_data_stage_downloads_examples_and_warms_cartopy(ursa: RunConfig) -> None:
-    # CECE's examples tooling needs Python >= 3.11; after `module purge` the
-    # only python3 on Ursa is the OS one, so the harness venv's runs it.
+def test_data_stage_exports_settings_and_fetches_the_selected_suites_inputs(
+    ursa: RunConfig,
+) -> None:
+    # The data stage is the harness's own `fetch` under the same exports the
+    # harness stage renders (the root, the search paths), from the harness
+    # checkout; nothing application-specific, no CECE tooling.
     script = render_stage(Stage.DATA, ursa, _CECE)
     lines = script.text.splitlines()
-    clone = ursa.checkout_dir("cece")
-    download = (
-        f"uv run --no-sync python {clone}/examples/download-example-data.py "
-        f"--example ex3 --dst-dir {clone}/data"
+    fetch = (
+        "uv run --no-sync ufs-chem-assay fetch --application=cece "
+        "--suite-config=simple-maccity-suite.yaml"
     )
-    assert download in lines
-    assert lines.index(f"cd {HARNESS_ROOT}") < lines.index(download)
+    assert fetch in lines
+    assert f"export CECE_ROOT_DIR={ursa.checkout_dir('cece')}" in lines
+    assert "export ASSAY_PLATFORM=ursa" in lines
+    assert f"export UV_CACHE_DIR={ursa.root_dir}/uv-cache" in lines
+    assert lines.index(f"cd {HARNESS_ROOT}") < lines.index(fetch)
+    assert lines.index(fetch) < lines.index(
+        next(line for line in lines if "natural_earth" in line)
+    )
+    assert "download-example-data" not in script.text
     assert "python3" not in script.text
-    assert "natural_earth" in script.text
+
+
+def test_data_stage_exports_match_the_harness_stage(ursa: RunConfig) -> None:
+    # One export block, rendered by both stages: whatever the harness stage
+    # exports, the data stage exports too (so fetch resolves the same suites).
+    harness_exports = {
+        line
+        for line in render_stage(Stage.HARNESS, ursa, _CECE).text.splitlines()
+        if line.startswith("export ")
+    }
+    data_exports = {
+        line
+        for line in render_stage(Stage.DATA, ursa, _CECE).text.splitlines()
+        if line.startswith("export ")
+    }
+    assert harness_exports == data_exports
 
 
 def test_data_stage_without_cartopy(local: RunConfig) -> None:
@@ -199,7 +223,6 @@ def test_harness_stage_exports_are_field_driven(tmp_path: Path) -> None:
                 "harness.config_search_path": "/configs",
                 "harness.suite_config_search_path": ["/suites/a", "/suites/b"],
                 "harness.pytest_dry_run": True,
-                "harness.run_examples": True,
                 "applications.cece.docker_image": "img:tag",
                 "applications.cece.driver_path": "./build/other",
             },
@@ -215,7 +238,8 @@ def test_harness_stage_exports_are_field_driven(tmp_path: Path) -> None:
         "export CECE_DRIVER_PATH=./build/other",
     ):
         assert line in text, line
-    assert "--combo-clean-root --dry-run --run-examples" in text
+    assert "--combo-clean-root --dry-run" in text
+    assert "--run-examples" not in text
 
 
 def test_native_harness_stage_keeps_the_launcher(tmp_path: Path) -> None:

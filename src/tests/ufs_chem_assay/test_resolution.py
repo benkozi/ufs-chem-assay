@@ -48,6 +48,7 @@ def suite_roots(tmp_path: Path) -> tuple[Path, Path]:
     (root_a / "nightly").mkdir(parents=True)
     root_b.mkdir()
     (root_a / "nightly" / "smoke-suite.yaml").touch()
+    (root_a / "nightly" / "base.yaml").touch()  # a configuration file: not a suite
     (root_b / "smoke-suite.yaml").touch()
     (root_b / "regional-suite.yaml").touch()
     return root_a, root_b
@@ -120,3 +121,16 @@ def test_select_suites_invalid_regex_raises(suite_roots: tuple[Path, Path]) -> N
     root_a, _ = suite_roots
     with pytest.raises(ValueError, match=r"\*invalid\["):
         select_suites("*invalid[", [root_a])
+
+
+def test_select_suites_only_considers_suite_files(
+    suite_roots: tuple[Path, Path],
+) -> None:
+    # The -suite.yaml rule: a configuration's own YAML beside a suite is never
+    # a candidate, so a catch-all regex cannot select it and the no-match
+    # listing never names it.
+    root_a, root_b = suite_roots
+    assert root_a / "nightly" / "base.yaml" not in select_suites(".*", [root_a, root_b])
+    with pytest.raises(ValueError) as excinfo:
+        select_suites("absent-suite.yaml", [root_a, root_b])
+    assert "base.yaml" not in str(excinfo.value)

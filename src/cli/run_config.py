@@ -70,10 +70,6 @@ class HarnessSection(StrictModel):
             "(distinct from the CLI's --dry-run, which renders scripts and runs nothing)"
         ),
     )
-    run_examples: bool = Field(
-        default=False,
-        description="Pass --run-examples (the application's shipped examples)",
-    )
     pytest_args: list[str] = Field(
         default_factory=list,
         description="Extra pytest arguments, e.g. [-x, -k, map-consd]",

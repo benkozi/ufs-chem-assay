@@ -2,15 +2,21 @@
 
 The UFS-Chem testing, verification, and benchmarking harness.
 
-Combinations of enum-valued driver options (declared in a suite file, e.g.
-`src/tests/config/suite/simple-maccity-suite.yaml`) are rendered to YAML
-configs and each runs in its own Docker container, followed by per-combo
-assertions on the output (exit code, file counts/names, attributes) and a
-statistics/plotting analysis step. Everything that knows the application
-under test — its driver config, sweep schema, image, checkout, examples —
-lives in an application adapter; CECE is the shipped one (`application:
-cece`, the default in every suite and run config), and a session runs one
-application. Design rationale lives in [design/design.md](design/design.md).
+The harness tests **specific configurations of an application**: a suite
+file names a base driver configuration, the inputs it reads, and how it is
+swept, asserted, and analysed. Combinations of enum-valued driver options
+(declared in a suite file, e.g.
+`src/tests/config/cece/maccity/simple-maccity-suite.yaml`) are rendered to
+YAML configs and each runs in its own Docker container, followed by
+per-combo assertions on the output (exit code, file counts/names,
+attributes) and a statistics/plotting analysis step. Everything that knows
+the application under test — its driver config, sweep schema, image,
+checkout, data directory — lives in an application adapter; CECE is the
+shipped one (`application: cece`, the default in every suite and run
+config), and a session runs one application. Configurations the harness
+carries live under `src/tests/config/<application>/<configuration>/`, each
+beside the suites that sweep it. Design rationale lives in
+[design/design.md](design/design.md).
 
 ## Prerequisites
 
@@ -22,13 +28,18 @@ application. Design rationale lives in [design/design.md](design/design.md).
     as Ursa, the target driver built natively against the checkout's
     modulefiles (see [Running on RDHPC](#running-on-rdhpc-ursa));
   - the target driver built at `./build/cece_standalone_driver` (relative
-    to the checkout root).
+    to the checkout root);
+  - the inputs of the suites you run, staged into the checkout's `data/`
+    with `uv run ufs-chem-assay fetch` (below) — a session with a declared
+    input missing fails at collection and names that command.
 - [uv](https://docs.astral.sh/uv/) installed.
-- For anything that syncs with S3 (today: the `data_integration` test, see
-  [S3 data sync](#s3-data-sync)): the [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
-  on `PATH` — a laptop installs it with its package manager, the Ursa
-  runbook installs it user-locally, and the toolchain image
-  (`Dockerfile`) carries it.
+- The [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+  on `PATH` for anything that touches S3: `ufs-chem-assay fetch` (public
+  buckets are read anonymously with `--no-sign-request` — no AWS account
+  needed; credentials only for an input declared `public: false`) and the
+  `data_integration` tests (see [S3 data sync](#s3-data-sync)). A laptop
+  installs it with its package manager, the Ursa runbook installs it
+  user-locally, and the toolchain image (`Dockerfile`) carries it.
 
 ## Setup
 
@@ -75,17 +86,11 @@ uv run pre-commit run --all-files  # everything the commit hook runs: ruff check
 # everything except driver execution (no docker needed); all combo tests skip
 uv run pytest src/tests/test_driver_combos.py --dry-run
 
-# the application checkout's shipped examples (CECE's), verbatim (off by default; downloads
-# data via the checkout's scripts/data_download first — all seven pass;
-# CAMS-TEMPO inputs need local copies until a public source exists)
-uv run pytest src/tests/test_examples.py --run-examples
-
-# a shipped CECE example as an ordinary suite (ex1..ex7): full pipeline —
-# derived file-count/filename assertions, stats, plots, report rows.
-# Needs CECE_ROOT_DIR (the suite's config_path anchors on the checkout)
-# and the example's data downloaded first, e.g.
-#   python3 $CECE_ROOT_DIR/examples/download-example-data.py --example ex3
-uv run pytest src/tests/test_driver_combos.py --suite-config=ex3-suite.yaml
+# stage the inputs the selected suites declare (inputs:) into <CECE_ROOT_DIR>/data —
+# a present file with the declared sha256 is skipped without touching the network;
+# --dry-run lists what is present and what would be fetched, and moves nothing
+uv run ufs-chem-assay fetch --suite-config=simple-maccity-suite.yaml --dry-run
+uv run ufs-chem-assay fetch --suite-config=simple-maccity-suite.yaml
 
 # the exhaustive run-only suite: every enum value on every driver-meaningful
 # dimension, the inert category label pinned to "undefined" (240 combinations,
@@ -154,16 +159,21 @@ Options:
   adapter's default suite (`simple-maccity-suite.yaml`).
 - `--suite-config=SELECTOR` — selects the suites to run. The selector
   is a regex fullmatched against each discovered suite's file name or its
-  search-root-relative path; candidates are every `*.yaml` found
+  search-root-relative path; candidates are every `*-suite.yaml` found
   recursively under the `ASSAY_SUITE_CONFIG_SEARCH_PATH` directories plus
-  the built-in `src/tests/config/suite/` (always searched last). A literal
+  the built-in `src/tests/config/` tree (always searched last). Only files
+  ending in `-suite.yaml` are suites — a configuration's own YAML files sit
+  beside the suites that sweep them (`src/tests/config/cece/maccity/` holds
+  `maccity.yaml` and its three suites) and are never candidates. A literal
   filename is its own selector (`--suite-config=exhaustive-maccity-run-only-suite.yaml`);
   an existing file path is used verbatim. **Every match runs**: one match
   is the classic single-suite session; several matches run as one
-  multi-suite session (e.g. `--suite-config='ex[0-9]-suite.yaml'` runs all
-  seven example suites) over a single flat output root, each combo under
-  its own suite's timeout, assertions, and plotting switches, with test
-  ids suite-qualified (`ex3/base`) so `-k` selects per suite. There is no
+  multi-suite session (e.g. `--suite-config='exhaustive-maccity-.*-suite.yaml'`
+  runs both exhaustive suites, `--suite-config='cece/maccity/.*'` every
+  suite of the maccity configuration) over a single flat output root, each
+  combo under its own suite's timeout, assertions, and plotting switches,
+  with test ids suite-qualified (`exhaustive-maccity-run-only/…`) so `-k`
+  selects per suite. There is no
   guard on broad selectors — a regex matching everything runs everything.
   Zero matches fail immediately with a listing; duplicate suite *names*
   among the matches fail at session start. Default: the application's
@@ -171,11 +181,19 @@ Options:
   pytest` always runs exactly that one suite, however many suites exist.
   Use the `--suite-config=...` form (with `=`), not a space.
 
-  The suite YAML defines the suite's unique `name` (lowercase slug; by
-  convention suite `X` lives in `X-suite.yaml`), its `application`
-  (optional, default `cece`; selects the sweep schema and the driver
-  config model), the base driver config (`config_path`), the
-  per-combination timeout (`timeout_s`), and the sweep — which, for CECE,
+  The suite YAML defines the suite's unique `name` (lowercase slug; suite
+  `X` lives in `X-suite.yaml` — the rule discovery relies on), its
+  `application` (optional, default `cece`; selects the sweep schema and
+  the driver config model), the base driver configuration (`config_path`:
+  a file, or a directory for an application whose configuration spans
+  several files; relative to the suite file, so a suite beside its
+  configuration names it with a bare file name), the inputs it reads
+  (`inputs:` — a list of `{url, public, dst, sha256}` entries: an
+  `s3://bucket/key` object, whether the bucket allows anonymous reads,
+  the destination relative to the checkout's `data/`, and the expected
+  digest; `ufs-chem-assay fetch` stages them, verifying the digest before
+  a download replaces anything), the per-combination timeout
+  (`timeout_s`), and the sweep — which, for CECE,
   mirrors the driver-config structure, attaching swept
   values to named streams (or positional species entries). A sweep value
   may be a regex string instead of a list — `mapalgo: ".*"` expands
@@ -187,12 +205,10 @@ Options:
   `sweep:` is optional: absent (or attaching no dimensions) the suite runs
   its base config as the single combination named `base`. A `config_path`
   starting with the literal `${CECE_ROOT_DIR}` token — the application's
-  own root variable — anchors on the CECE checkout — how the checked-in
-  `ex1-suite.yaml` … `ex7-suite.yaml` reference the shipped example
-  configs (`examples/config/cece_config_ex*.yaml`) portably; using such a
-  suite without a configured root fails immediately with the standard
-  root-dir message. ex7 is an expected failure until its CAMS-TEMPO
-  inputs have a public source.
+  own root variable — anchors on the CECE checkout, the portable way for a
+  suite to reference a configuration that lives in the checkout rather
+  than here; using such a suite without a configured root fails
+  immediately with the standard root-dir message.
 - `--dry-run` — everything except driver execution: the suite loads, combos
   enumerate, `run.yaml`/`combos.csv`/every generated driver config/
   `test-report.csv` are all written, and every combo test skips. No docker
@@ -213,31 +229,29 @@ Options:
   harness root (one with `run.yaml` at its top) is ever removed; any other
   existing directory is refused, since an absolute root under the native
   or slurm runtime can point anywhere.
-- `--run-examples` — run the application checkout's shipped (for CECE:
-  `examples/config/cece_config_ex*.yaml` via the checkout's
-  `examples/run-example.py` entrypoint, docker-wrapped by this runner
-  (exit 0 = pass), after one session pass of
-  `examples/download-example-data.py` per example (cached fetches;
-  download failures are recorded, never fatal). Off by default;
-  `--dry-run` wins.
-  The examples are external artifacts under test and this flag is their
-  regression gate — all seven pass. Caveat: ex1/ex7's CAMS-TEMPO inputs
-  have no public download source yet, so on a fresh machine their
-  downloads 404 until local copies are placed in the checkout's `data/`. Outcomes land under the output root in `examples/`
-  (`<stem>.out` per example plus a session `examples-report.md`); they
-  are not part of `test-report.csv`.
+- Inputs are never downloaded by the session. When driver execution is
+  coming (no `--dry-run`) and a selected suite's declared input is absent
+  from the checkout's `data/`, collection fails with a usage error naming
+  the missing files and the `ufs-chem-assay fetch --suite-config=…`
+  command that stages them. `run.yaml` records every declared input as
+  found at session start (path, source, declared `sha256`, size or null).
 
 ## S3 data sync
 
 `src/s3_sync.py` is a stand-alone wrapper around `aws s3 sync`: one
 `S3SyncConfig` in (source, destination, `dry_run`, `delete`, filters,
-`profile`, `timeout_s`), exactly one `aws s3 sync`
+`no_sign_request`, `profile`, `timeout_s`), exactly one `aws s3 sync`
 subprocess call, one `S3SyncResult` out. Sync is the primitive because it
 is reentrant — an interrupted transfer resumes by re-running the same
 config, unchanged files are skipped. `dry_run=True` passes `--dryrun`
 straight through: the CLI's `(dryrun) upload:`/`download:`/`delete:` lines
-*are* the plan, returned in the result and logged at INFO. Nothing in the
-harness calls it yet (application data staging and baseline retrieval will).
+*are* the plan, returned in the result and logged at INFO.
+`no_sign_request=True` passes `--no-sign-request`: anonymous reads of a
+publicly readable bucket, no credentials involved (refused together with
+`profile`). `ufs-chem-assay fetch` is its first caller: one object is
+fetched by syncing its parent prefix with `exclude=['*']` and
+`include=[<file>]` into a staging directory, verified, then moved into
+place.
 
 Credentials are the **AWS CLI's business, not the harness's**: the
 wrapper passes nothing and knows nothing, and the CLI resolves its own
@@ -250,8 +264,10 @@ credentials surface as the CLI's own `Unable to locate credentials`, raised
 as a `CalledProcessError` with the output attached.
 
 The mock tests (`src/tests/ufs_chem_assay/test_s3_sync.py`) run with the
-harness suite and need no network and no `aws`. One live test,
-`test_private_bucket_round_trip`, marked `data_integration`, authenticates
+harness suite and need no network and no `aws`. Two live tests are marked
+`data_integration`: `test_public_bucket_single_object` fetches the maccity
+file anonymously from the public `geos-chem` bucket and checks its digest
+(network, no credentials); `test_private_bucket_round_trip` authenticates
 to the private test bucket **`arn:aws:s3:::ufs-chem`** (fixed in the test),
 uploads a small tree under `ufs-chem-assay-tests/<ULID>/`, downloads it
 back, checks the bytes, proves the second upload is a no-op, and empties
@@ -295,7 +311,7 @@ platform: ursa
 applications:            # one section per application in the run
   cece:
     git_url: git@github.com:benkozi/CECE.git
-    ref: fix/all-examples-pass
+    ref: feature/buid-test-tweaks   # ufs-community/CECE#154's head; develop once it merges
     clone_dir:           # null: <root_dir>/CECE (CECE_ROOT_DIR)
     modulefile: cece_ursa.intelllvm
     ...
@@ -321,7 +337,7 @@ uv run ufs-chem-assay run --config-file=config/ursa.yaml --dry-run   # render on
 uv run ufs-chem-assay run --config-file=config/ursa.yaml             # clone, build,
                                                                      #   data, harness
 uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage harness \
-  --override harness:suite_config=ex3-suite.yaml harness:pytest_args='[-x]' \
+  --override harness:suite_config=exhaustive-maccity-run-only-suite.yaml harness:pytest_args='[-x]' \
              applications:cece:ref=develop slurm:qos=batch
 ```
 
@@ -333,8 +349,9 @@ to check that an override landed.
 
 Stages (`--stage`, repeatable): `source` (clone or fast-forward the
 checkout), `build` (modules + cmake, or the application's container build
-script locally), `data` (the application's input data, the cartopy
-cache), `harness` (the pytest session). Running CECE's own tests is a
+script locally), `data` (`ufs-chem-assay fetch` for the inputs the
+configured `suite_config` selects, under the same exports as the harness
+stage, plus the cartopy cache), `harness` (the pytest session). Running CECE's own tests is a
 separate task (issue #9). Each renders to
 `<root_dir>/scripts/<NN>-<stage>-<application>.sh` and runs with bash
 where the CLI runs; logs land in `<root_dir>/logs/`. A run config naming
@@ -403,9 +420,11 @@ to warm the shared caches) additionally run
 `.github/workflows/integration.yaml`: the CECE repository and ref named
 in the workflow's `env` block are cloned (nested submodules), the
 container image built through the buildx cache and loaded as
-`cece/cece-dev`, the driver compiled in the container (`build/` cached
-by CECE commit), the maccity dataset downloaded via CECE's own `ex3`
-data set (cached), and `simple-maccity-suite.yaml` runs for real.
+`cece/cece-dev`, the driver compiled in the container only when no
+`build/` tree is cached for that CECE commit (an exact cache hit skips the
+build step outright — the driver is in the restored tree), the suite's
+inputs staged with `ufs-chem-assay fetch`, and `simple-maccity-suite.yaml`
+runs for real.
 Baseline-comparison tests skip in CI
 (`ASSAY_ENABLE_BASELINE_COMPARISONS=false`: the baseline store has no
 public download source yet — re-enabling is a standing TODO). The full
@@ -486,8 +505,10 @@ directory per combination:
                                  #   at start); the harness's own harness_version and
                                  #   harness_commit (HEAD, `-dirty` when edited; null
                                  #   when not run from a git checkout); platform,
-                                 #   runtime, modulefile; and every resolved suite in
-                                 #   selection order (one-element list when single)
+                                 #   runtime, modulefile; every resolved suite in
+                                 #   selection order (one-element list when single);
+                                 #   and every declared input as found at session
+                                 #   start (suite, url, path, sha256, bytes or null)
   combos.csv                     # effective-parameter table: one row per sweepable
                                  #   dimension per combo (columns: run_id, combo_id,
                                  #   application, suite, name, target, field, value, swept)
