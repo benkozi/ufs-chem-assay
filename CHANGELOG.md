@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.1.0-rc.4 (2026-10-08)
+
+### Features
+
+- Remove concept of "examples" ([#21](https://github.com/benkozi/ufs-chem-assay/pull/21),
+  [`e55018b`](https://github.com/benkozi/ufs-chem-assay/commit/e55018b9198af63110fb69b910178390a2784bf6))
+
+
 ## v0.1.0-rc.3 (2026-10-07)
 
 ### Features
