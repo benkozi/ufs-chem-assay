@@ -32,6 +32,7 @@ from cli.shell import run_bash, write_script
 from cli.stages import Stage, render_stage
 from logs import configure_logging, get_logger
 from models.suite_config import RunManifest
+from s3_sync import check_reachable
 from platforms import Platform
 from selection import resolve_suites
 from settings import ENV_PREFIX, LEGACY_ENV_PREFIX, Settings
@@ -397,6 +398,12 @@ def _publish_baselines(args: argparse.Namespace) -> int:
             sorted(loaded),
         )
         return 1
+    if settings.baseline_store.startswith("s3://"):
+        try:
+            check_reachable(settings.baseline_store)
+        except ConnectionError as exc:
+            logger.error("%s; publish from a node with network", exc)
+            return 1
     try:
         manifest, inputs, rows = load_run(
             output_root, resolved.application, resolved.suites

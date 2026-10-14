@@ -31,6 +31,7 @@ from resolution import resolve_output_roots
 from selection import resolve_suites
 from staging import missing_inputs
 from runner import DriverRunResult, run_driver, write_job_script
+from s3_sync import check_reachable
 from settings import Settings
 
 if TYPE_CHECKING:
@@ -192,6 +193,19 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         raise pytest.UsageError(
             "--no-suite-update has no effect without --publish-baselines"
         )
+    if config.getoption("--publish-baselines") and settings.baseline_store.startswith(
+        "s3://"
+    ):
+        # Fail fast: a node without network (an HPC compute node) must not
+        # run the whole suite only to fail the publish at the end.
+        try:
+            check_reachable(settings.baseline_store)
+        except ConnectionError as exc:
+            raise pytest.UsageError(
+                f"--publish-baselines: {exc}; run without the flag and publish "
+                "afterwards from a node with network: ufs-chem-assay "
+                "publish-baselines --output-root=<this run's output root>"
+            ) from exc
 
     # Selection, application, suite loading: the same sequence the CLI's
     # fetch runs (selection.resolve_suites); every failure is a usage error.
@@ -415,7 +429,13 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
                 suite_update=not config.getoption("--no-suite-update"),
             )
         except Exception as exc:  # the hook must not fail the session
-            logger.error("publishing baselines failed: %s", exc)
+            logger.error(
+                "publishing baselines failed: %s; the run is intact — publish it "
+                "from a node with network: ufs-chem-assay publish-baselines "
+                "--output-root=%s",
+                exc,
+                roots.host,
+            )
 
     # Only combos whose suite enabled stats produced a CSV, so the glob is
     # already gated; per-suite plot gates apply to each suite's slice.

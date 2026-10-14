@@ -23,7 +23,7 @@ from ulid import ULID
 from logs import get_logger
 from models.base import StrictModel
 from models.suite_config import InputFile, SuiteConfig
-from s3_sync import S3SyncConfig, sync
+from s3_sync import S3SyncConfig, check_reachable, sync
 
 logger = get_logger("staging")
 
@@ -185,6 +185,9 @@ def stage_inputs(
         logger.info("removing stale staging directory %s", staging_root)
         shutil.rmtree(staging_root)
     results: list[StagedInput] = []
+    # Fail fast without network: one probe per bucket, only once a fetch is
+    # actually needed (present, verified files never touch the network).
+    unreachable: dict[str, str] = {}
     for entry in inputs:
         target = data_dir / entry.dst
         usable, detail, digest = _present(entry, target)
@@ -201,6 +204,25 @@ def stage_inputs(
             )
             continue
         logger.info("%s: %s; fetching %s", target, detail, entry.url)
+        bucket = entry.url.split("/", 3)[2]
+        if bucket not in unreachable:
+            try:
+                check_reachable(entry.url)
+                unreachable[bucket] = ""
+            except ConnectionError as exc:
+                unreachable[bucket] = str(exc)
+        if unreachable[bucket]:
+            logger.error("%s: %s", target, unreachable[bucket])
+            results.append(
+                StagedInput(
+                    url=entry.url,
+                    path=target,
+                    action="failed",
+                    detail=unreachable[bucket],
+                    sha256=None,
+                )
+            )
+            continue
         if dry_run:
             try:
                 sync(_sync_config(entry, staging_root / "dry-run", dry_run=True))

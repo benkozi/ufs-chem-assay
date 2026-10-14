@@ -364,6 +364,13 @@ is repointed. `pytest --publish-baselines` (the run config's
 the output root with the subcommand afterwards if you want to see the plan.
 Credentials are the AWS CLI's (publishing needs `s3:ListBucket` on the
 bucket and `s3:PutObject` under `baselines/`); nothing is read from `.env`.
+**Network is checked up front** whenever S3 is involved: one short TCP
+connect to the bucket's endpoint (`AWS_ENDPOINT_URL` when set) before any
+work — `pytest --publish-baselines` refuses to start on a node without
+network (an HPC compute node) rather than run the whole suite and fail at
+the end, `publish-baselines` and `fetch` fail in seconds instead of
+waiting out the AWS CLI's retries. The run itself is never lost: publish
+its output root afterwards from a login or data-transfer node.
 
 ## Configuring a run: `ufs-chem-assay run`
 

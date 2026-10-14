@@ -459,3 +459,28 @@ def test_no_suite_update_requires_publish_baselines(tmp_path: Path) -> None:
     assert "--no-suite-update has no effect without --publish-baselines" in (
         result.stdout + result.stderr
     )
+
+
+def test_publish_baselines_fails_fast_at_session_start_without_network(
+    tmp_path: Path,
+) -> None:
+    """A node without network must not run the whole suite and fail at the
+    end: the store is probed at session start. A closed local port stands
+    in for no network (the probe honours AWS_ENDPOINT_URL)."""
+    env = _fabricated_checkout(tmp_path)
+    env["AWS_ENDPOINT_URL"] = "http://127.0.0.1:9"  # discard port: refused at once
+    result = _pytest(tmp_path, env, "--publish-baselines")
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "no network" in output and "publish-baselines --output-root" in output
+    assert not (tmp_path / "combo_runs" / "run.yaml").exists()  # nothing ran
+
+
+def test_directory_store_needs_no_network_at_session_start(tmp_path: Path) -> None:
+    env = _fabricated_checkout(tmp_path)
+    env["AWS_ENDPOINT_URL"] = "http://127.0.0.1:9"
+    store = tmp_path / "store"
+    store.mkdir()
+    env["ASSAY_BASELINE_STORE"] = str(store)
+    result = _pytest(tmp_path, env, "--publish-baselines")
+    assert result.returncode == 0, result.stdout + result.stderr

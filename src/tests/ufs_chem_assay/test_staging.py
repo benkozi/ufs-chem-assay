@@ -264,3 +264,49 @@ def test_missing_inputs_checks_existence_only(tmp_path: Path) -> None:
         _input(url="s3://bkt/gone.nc", dst="sub/gone.nc"),
     ]
     assert missing_inputs(inputs, tmp_path) == [tmp_path / "sub" / "gone.nc"]
+
+
+# ── fail fast without network ─────────────────────────────────────────────────
+
+
+def test_unreachable_bucket_fails_every_fetch_without_a_sync(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    probe = mocker.patch(
+        "staging.check_reachable", side_effect=ConnectionError("no network to x")
+    )
+    sync = mocker.patch("staging.sync")
+    results = stage_inputs(
+        [_input(), _input(url="s3://geos-chem/other/b.nc", dst="b.nc", sha256=None)],
+        tmp_path,
+    )
+    assert [r.action for r in results] == ["failed", "failed"]
+    assert all("no network" in r.detail for r in results)
+    probe.assert_called_once()  # one bucket, probed once
+    sync.assert_not_called()
+
+
+def test_present_inputs_never_probe_the_network(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    (tmp_path / "MACCity_4x5.nc").write_bytes(_PAYLOAD)
+    probe = mocker.patch("staging.check_reachable")
+    (result,) = stage_inputs([_input()], tmp_path)
+    assert result.action == "skipped"
+    probe.assert_not_called()
+
+
+def test_reachable_bucket_is_probed_once_then_fetched(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    probe = mocker.patch("staging.check_reachable")
+    mocker.patch("staging.sync", side_effect=_fake_sync())
+    results = stage_inputs(
+        [
+            _input(),
+            _input(url=_URL.replace("MACCity_4x5", "other"), dst="o.nc", sha256=None),
+        ],
+        tmp_path,
+    )
+    assert [r.action for r in results] == ["downloaded", "downloaded"]
+    probe.assert_called_once_with(_URL)

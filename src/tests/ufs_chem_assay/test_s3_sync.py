@@ -21,7 +21,7 @@ from pydantic import ValidationError
 from pytest_mock import MockerFixture
 from ulid import ULID
 
-from s3_sync import S3SyncConfig, S3SyncResult, s3_uri_from_arn, sync
+from s3_sync import S3SyncConfig, S3SyncResult, check_reachable, s3_uri_from_arn, sync
 from s3_sync import logger as s3_logger
 
 # The private test bucket: always this one (user direction, 2026-10-06), as a
@@ -478,3 +478,42 @@ def test_private_bucket_round_trip(tmp_path: Path) -> None:
             s3_logger.exception(
                 "cleanup of %s failed after the test body failed", prefix
             )
+
+
+# ── check_reachable: fail fast without network ───────────────────────────────
+
+
+def test_check_reachable_connects_to_the_buckets_endpoint(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+    connect = mocker.patch("s3_sync.socket.create_connection")
+    check_reachable("s3://ufs-chem/baselines", timeout_s=1.5)
+    connect.assert_called_once_with(("ufs-chem.s3.amazonaws.com", 443), timeout=1.5)
+    connect.return_value.close.assert_called_once()
+
+
+def test_check_reachable_honours_a_custom_endpoint(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://localhost:9000")
+    connect = mocker.patch("s3_sync.socket.create_connection")
+    check_reachable("s3://ufs-chem/baselines")
+    connect.assert_called_once_with(("localhost", 9000), timeout=3.0)
+
+
+def test_check_reachable_raises_a_clear_error_without_network(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+    mocker.patch(
+        "s3_sync.socket.create_connection",
+        side_effect=OSError("[Errno 8] nodename nor servname provided"),
+    )
+    with pytest.raises(ConnectionError, match="ufs-chem.s3.amazonaws.com.*no network"):
+        check_reachable("s3://ufs-chem/baselines")
+
+
+def test_check_reachable_refuses_a_non_s3_uri() -> None:
+    with pytest.raises(ValueError, match="s3://"):
+        check_reachable("/local/store")

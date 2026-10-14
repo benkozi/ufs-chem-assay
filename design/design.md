@@ -649,7 +649,14 @@ credentials are the CLI's nonzero exit, raised as `CalledProcessError`;
 `no_sign_request` passes `--no-sign-request` for publicly readable buckets
 (anonymous, no credentials looked up; refused together with `profile`) —
 how `fetch` reads CECE's public source buckets (2026-10-08). Transfer tuning (`max_concurrent_requests`) lives in the user's own
-`~/.aws/config`, which the CLI honours, never in the harness. The module
+`~/.aws/config`, which the CLI honours, never in the harness. `check_reachable(uri)` (2026-10-14) is the fail-fast probe: one TCP
+connect to the bucket's endpoint (`AWS_ENDPOINT_URL`'s host when set),
+no credentials, a `ConnectionError` in seconds where the CLI's own retries
+would take minutes — called before any S3 work by `fetch` (once per
+bucket, only when a fetch is needed), by `publish-baselines`, and at
+session start under `--publish-baselines` (a `UsageError` naming the
+post-hoc command, so a compute node never runs a suite it cannot
+publish). The module
 is deliberately stand-alone — its one harness import is `logs.get_logger`
 — so it can be lifted into another repository. The AWS CLI v2 is an
 external tool like docker, git, and sbatch (in the toolchain image;
@@ -729,6 +736,12 @@ Publishing (2026-10-08, `baselines.py`; full design in
   the store is also `ASSAY_BASELINE_ROOT_DIR`, one copy serves both. A ULID
   published locally resolves only where that directory is, so the
   checked-in suites keep pointing at the bucket.
+- **Compute nodes without network** (2026-10-14): publication never
+  needs the session — the post-hoc command reads the output root from
+  any node — and the session refuses `--publish-baselines` at start when
+  the S3 store is unreachable (`check_reachable`, S3 data sync); a
+  publish that fails at session end logs the exact recovery command with
+  the output root.
 - **CI** keeps comparisons off (no credentials for the private store);
   the CECE pin is `ufs-community/CECE` at `develop` since 2026-10-08.
 

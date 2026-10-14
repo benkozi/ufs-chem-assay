@@ -616,3 +616,37 @@ def test_publish_baselines_to_a_directory_store(
     assert sorted(p.name for p in store.iterdir()) == sorted(
         c.combo_id for c in publish_env.combos
     )
+
+
+def test_publish_baselines_fails_fast_without_network(
+    publish_env: Run, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch(
+        "cli.main.check_reachable", side_effect=ConnectionError("no network to s3")
+    )
+    sync = mocker.patch("baselines.sync")
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["publish-baselines", f"--output-root={publish_env.root}"])
+    assert code == 1
+    sync.assert_not_called()
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1 and "no network" in errors[0]
+
+
+def test_publish_baselines_to_a_directory_never_probes_the_network(
+    publish_env: Run, mocker: MockerFixture, tmp_path: Path
+) -> None:
+    probe = mocker.patch("cli.main.check_reachable")
+    store = tmp_path / "dropbox"
+    store.mkdir()
+    assert (
+        main(
+            [
+                "publish-baselines",
+                f"--output-root={publish_env.root}",
+                f"--store={store}",
+            ]
+        )
+        == 0
+    )
+    probe.assert_not_called()

@@ -216,7 +216,11 @@ the suite file's `ulid:` lines are repointed in your harness checkout —
 commit that change. Set `baselines.root_dir` in the run config (or
 `ASSAY_BASELINE_ROOT_DIR`) to also keep a local copy the next run reads;
 `harness.publish_baselines: true` does all of this at the end of the
-harness stage instead. `--store=/path/to/dir` (or `baselines.store`)
+harness stage instead — the harness stage runs on the login node under
+the slurm runtime, which has network. A session run *inside* an
+allocation (a compute node, no network) refuses `--publish-baselines` at
+start: run without the flag, then publish the output root from a login
+or data-transfer node as above. `--store=/path/to/dir` (or `baselines.store`)
 publishes into a local directory instead of the bucket — no credentials,
 but only reachable on this machine.
 
