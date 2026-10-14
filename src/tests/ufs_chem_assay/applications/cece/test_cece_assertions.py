@@ -15,7 +15,7 @@ from applications.cece.config import CeceConfig
 from applications.registry import get_application
 
 
-@pytest.fixture()
+@pytest.fixture
 def maccity_config(cece_config_path: Path) -> CeceConfig:
     return CeceConfig.from_yaml(cece_config_path)
 
@@ -133,7 +133,8 @@ def test_cece_config_fingerprint_ignores_only_the_run_paths(tmp_path: Path) -> N
 
     def write(name: str, mapalgo: str, directory: str) -> Path:
         config = CeceConfig.from_yaml(base)
-        assert config.cece_data is not None and config.output is not None
+        assert config.cece_data is not None
+        assert config.output is not None
         config.cece_data.streams[0].mapalgo = Mapalgo(mapalgo)
         config.output.directory = directory
         config.driver.log_file = str(PurePosixPath(directory) / "cece.log")

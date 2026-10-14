@@ -5,8 +5,9 @@ selector matching against enumerated combinations."""
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from enum import StrEnum
-from typing import Callable, Literal, TypeVar
+from typing import Literal, TypeVar
 
 from pydantic import Field, field_validator
 
@@ -285,11 +286,10 @@ def _species_entry_matches(
 def selector_matches(selector: CeceSweepSelector, combo: Combo) -> bool:
     """Structural walk mirroring the sweep: every constrained element must be
     satisfied; unspecified structure is unconstrained."""
-    if selector.cece_data is not None:
-        if not all(
-            _stream_block_matches(block, combo) for block in selector.cece_data.streams
-        ):
-            return False
+    if selector.cece_data is not None and not all(
+        _stream_block_matches(block, combo) for block in selector.cece_data.streams
+    ):
+        return False
     if selector.species is not None:
         for key_pattern, entries in selector.species.items():
             for index, entry_selector in enumerate(entries):

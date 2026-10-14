@@ -12,12 +12,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-import dask
 import dask.array as dsa
 import netCDF4
 import numpy as np
 import pandas as pd
 import xarray as xr
+from dask.base import compute
 from pydantic import ConfigDict, Field
 
 from applications.base import Application
@@ -291,7 +291,7 @@ def _compare_variable(
         diff_min,
         diff_max,
         diff_median,
-    ) = dask.compute(equal_graph, mismatch_graph, diff_graph, *stats_graphs)
+    ) = compute(equal_graph, mismatch_graph, diff_graph, *stats_graphs)
     data_match = bool(equal) and dtype_match
     max_abs_diff = float(max_diff) if np.isfinite(max_diff) else None
     if not bool(equal):

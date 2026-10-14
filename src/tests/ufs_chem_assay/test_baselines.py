@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -48,7 +48,7 @@ from tests.ufs_chem_assay.baseline_runs import (
 _STORE = "s3://ufs-chem/baselines"
 
 
-@pytest.fixture()
+@pytest.fixture
 def run(tmp_path: Path, suite_dir: Path) -> Run:
     return fabricate_run(tmp_path, suite_dir)
 
@@ -87,23 +87,28 @@ def test_gate_passes_when_only_the_old_comparison_failed(run: Run) -> None:
     ok, reason = publishable(
         report_rows("s", combo, failed=("test_baseline_comparison",))
     )
-    assert ok and reason == "driver passed; no other test failed"
+    assert ok
+    assert reason == "driver passed; no other test failed"
 
 
 def test_gate_fails_without_the_driver_test(run: Run) -> None:
     combo = run.combos[0]
     rows = [r for r in report_rows("s", combo) if "driver" not in r.pytest_name]
     ok, reason = publishable(rows)
-    assert not ok and "test_driver_execution" in reason and "did not run" in reason
+    assert not ok
+    assert "test_driver_execution" in reason
+    assert "did not run" in reason
     assert publishable([]) == (False, "test_driver_execution did not run")
 
 
 def test_gate_fails_on_a_failed_driver_or_output_test(run: Run) -> None:
     combo = run.combos[0]
     ok, reason = publishable(report_rows("s", combo, failed=("test_driver_execution",)))
-    assert not ok and "test_driver_execution failed" in reason
+    assert not ok
+    assert "test_driver_execution failed" in reason
     ok, reason = publishable(report_rows("s", combo, failed=("test_nc_file_count",)))
-    assert not ok and "test_nc_file_count" in reason
+    assert not ok
+    assert "test_nc_file_count" in reason
 
 
 def test_gate_allows_skips(run: Run) -> None:
@@ -125,7 +130,8 @@ def test_plan_one_would_publish_record_per_entry(run: Run) -> None:
         "MACCITY.map-passthrough",
     ]
     bilinear = records[0]
-    assert bilinear.suite == "simple-maccity" and bilinear.suite_path == run.suite_path
+    assert bilinear.suite == "simple-maccity"
+    assert bilinear.suite_path == run.suite_path
     assert bilinear.ulid == run.combo("MACCITY.map-bilinear").combo_id
     assert bilinear.previous_ulid == PREVIOUS_ULIDS[0]
     assert bilinear.source_dir == run.combo_dir("MACCITY.map-bilinear")
@@ -252,7 +258,7 @@ def test_publish_probes_writes_the_manifest_syncs_and_repoints(
     run: Run, mocker: MockerFixture
 ) -> None:
     sync = mocker.patch("baselines.publish.sync", side_effect=fake_sync())
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     records = _publish(run, _plan(run))
     assert [r.action for r in records] == ["published"] * 3
     assert all(r.suite_updated for r in records)
@@ -261,24 +267,32 @@ def test_publish_probes_writes_the_manifest_syncs_and_repoints(
 
     bilinear = records[0]
     probe, upload = _probe_and_upload(calls, bilinear.ulid)
-    assert probe.dry_run and isinstance(probe.destination, Path)
+    assert probe.dry_run
+    assert isinstance(probe.destination, Path)
     assert upload.source == bilinear.source_dir
     assert upload.destination == bilinear.destination
-    assert upload.only_show_errors and not upload.dry_run
-    assert upload.exclude == [] and upload.include == [] and not upload.delete
+    assert upload.only_show_errors
+    assert not upload.dry_run
+    assert upload.exclude == []
+    assert upload.include == []
+    assert not upload.delete
 
     manifest = BaselineManifest.model_validate(
         yaml.safe_load((bilinear.source_dir / CONVENTIONS.manifest).read_text())
     )
-    assert manifest.ulid == bilinear.ulid and manifest.store == _STORE
-    assert manifest.application == "cece" and manifest.application_commit == COMMIT
-    assert (
-        manifest.suite == "simple-maccity" and manifest.combo == "MACCITY.map-bilinear"
-    )
-    assert manifest.run_id == RUN_ID and manifest.harness_version == HARNESS_VERSION
+    assert manifest.ulid == bilinear.ulid
+    assert manifest.store == _STORE
+    assert manifest.application == "cece"
+    assert manifest.application_commit == COMMIT
+    assert manifest.suite == "simple-maccity"
+    assert manifest.combo == "MACCITY.map-bilinear"
+    assert manifest.run_id == RUN_ID
+    assert manifest.harness_version == HARNESS_VERSION
     assert manifest.harness_commit == HARNESS_COMMIT
-    assert manifest.platform is Platform.LOCAL and manifest.runtime is Runtime.DOCKER
-    assert manifest.published_at.tzinfo is not None and manifest.published_at >= before
+    assert manifest.platform is Platform.LOCAL
+    assert manifest.runtime is Runtime.DOCKER
+    assert manifest.published_at.tzinfo is not None
+    assert manifest.published_at >= before
     assert "@" in manifest.published_by
     assert manifest.superseded_ulid == PREVIOUS_ULIDS[0]
     swept = [p for p in manifest.parameters if p.swept]
@@ -288,8 +302,10 @@ def test_publish_probes_writes_the_manifest_syncs_and_repoints(
     assert len(manifest.parameters) == 6
     paths = [f.path for f in manifest.files]
     assert paths == sorted(paths)
-    assert f"{bilinear.ulid}.yaml" in paths and "cece.log" in paths
-    assert "plots-overview/co.gif" in paths and CONVENTIONS.manifest not in paths
+    assert f"{bilinear.ulid}.yaml" in paths
+    assert "cece.log" in paths
+    assert "plots-overview/co.gif" in paths
+    assert CONVENTIONS.manifest not in paths
     first = next(f for f in manifest.files if f.path == "cece_20100101_010000.nc")
     payload = (bilinear.source_dir / "cece_20100101_010000.nc").read_bytes()
     assert first.bytes == len(payload)
@@ -357,7 +373,8 @@ def test_publish_resumes_when_the_directory_was_published_before(
     assert [r.action for r in results] == ["published"] * 3
     assert all("already in the store" in r.detail for r in results)
     calls = [call.args[0] for call in sync.call_args_list]
-    assert len(calls) == 3 and all(c.dry_run for c in calls)  # probes only
+    assert len(calls) == 3
+    assert all(c.dry_run for c in calls)
     assert (first[0].source_dir / CONVENTIONS.manifest).read_text() == manifest_before
     assert all(f"ulid: {r.ulid}\n" in run.suite_path.read_text() for r in results)
 
@@ -370,7 +387,8 @@ def test_publish_fails_a_directory_carrying_another_manifest(
     foreign = records[0].source_dir / CONVENTIONS.manifest
     foreign.write_text("ulid: 01KXNXCJ858EE6R4FPF39BC8V2\nstore: s3://elsewhere/b\n")
     results = _publish(run, records[:1])
-    assert results[0].action == "failed" and "manifest for" in results[0].detail
+    assert results[0].action == "failed"
+    assert "manifest for" in results[0].detail
     sync.assert_not_called()
 
 
@@ -386,7 +404,8 @@ def test_publish_dry_run_writes_nothing(
     assert all(r.detail == "store free; would upload" for r in results)
     assert not any(r.suite_updated for r in results)
     calls = [call.args[0] for call in sync.call_args_list]
-    assert len(calls) == 6 and all(c.dry_run for c in calls)
+    assert len(calls) == 6
+    assert all(c.dry_run for c in calls)
     uploads = [c for c in calls if isinstance(c.source, Path)]
     assert all(not c.only_show_errors for c in uploads)
     assert not any((r.source_dir / CONVENTIONS.manifest).exists() for r in results)
@@ -480,7 +499,8 @@ def test_publish_to_a_directory_store_copies_and_repoints(
         manifest = BaselineManifest.model_validate(
             yaml.safe_load((published / CONVENTIONS.manifest).read_text())
         )
-        assert manifest.store == str(store) and manifest.ulid == record.ulid
+        assert manifest.store == str(store)
+        assert manifest.ulid == record.ulid
         assert (published / "plots-overview" / "co.gif").is_file()
         assert sorted(p.name for p in published.glob("*.nc")) == sorted(
             p.name for p in record.source_dir.glob("*.nc")
@@ -725,3 +745,114 @@ def test_directory_store_that_is_the_root_is_local(run: Run, tmp_path: Path) -> 
     store = _store_dir_with(tmp_path, _ulids(run))
     results = ensure_baselines([run.suite], str(store), store)
     assert [r.state for r in results] == ["local"] * 3
+
+
+# ── publish: the remaining failure branches ──────────────────────────────────
+
+
+def test_directory_store_copy_failure_is_recorded(
+    run: Run, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    store = tmp_path / "store"
+    store.mkdir()
+    mocker.patch("baselines.publish.shutil.copytree", side_effect=OSError("disk full"))
+    results = _publish(run, _plan(run, store=str(store)))
+    assert {r.action for r in results} == {"failed"}
+    assert all("disk full" in r.detail for r in results)
+
+
+def test_cache_already_present_and_cache_copy_failure(
+    run: Run, tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch("baselines.publish.sync", side_effect=fake_sync())
+    cache = tmp_path / "cache"
+    records = _plan(run)
+    (cache / records[0].ulid).mkdir(
+        parents=True
+    )  # a fresh publish into an occupied cache
+    with caplog.at_level("WARNING"):
+        results = _publish(run, records[:1], baseline_root=cache)
+    assert results[0].action == "published"
+    assert any("already exists" in r.getMessage() for r in caplog.records)
+    mocker.patch("baselines.publish.shutil.copytree", side_effect=OSError("ro"))
+    with caplog.at_level("ERROR"):
+        results = _publish(run, records[1:2], baseline_root=cache)
+    assert (
+        results[0].action == "published"
+    )  # the store has it; the cache is best effort
+    assert any("cache copy" in r.getMessage() for r in caplog.records)
+
+
+def test_repoint_failure_keeps_the_baseline_published(
+    run: Run, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch("baselines.publish.sync", side_effect=fake_sync())
+    records = _plan(run)
+    # The entry's ulid line vanishes before the repoint: nothing to rewrite.
+    run.suite_path.write_text(
+        run.suite_path.read_text().replace(
+            records[0].previous_ulid, "01JGONEGONEGONEGONEGONEGON"
+        )
+    )
+    with caplog.at_level("ERROR"):
+        results = _publish(run, records[:1])
+    assert results[0].action == "published"
+    assert not results[0].suite_updated
+    assert any("was not repointed" in r.getMessage() for r in caplog.records)
+
+
+def test_dry_run_reports_a_resume(run: Run, mocker: MockerFixture) -> None:
+    mocker.patch("baselines.publish.sync", side_effect=fake_sync())
+    first = _publish(run, _plan(run))
+    run.suite_path.write_text(
+        run.suite_path.read_text().replace(first[0].ulid, first[0].previous_ulid)
+    )
+    mocker.patch(
+        "baselines.publish.sync",
+        side_effect=fake_sync(frozenset({first[0].destination})),
+    )
+    results = _publish(run, _plan(run)[:1], dry_run=True)
+    assert results[0].action == "would-publish"
+    assert "would resume" in results[0].detail
+
+
+def test_staged_baseline_records_itself(run: Run) -> None:
+    from models.suite_config import RecordedBaseline
+
+    staged = ensure_baselines([run.suite], _STORE, None, dry_run=True)[0]
+    recorded = staged.recorded()
+    assert isinstance(recorded, RecordedBaseline)
+    assert recorded.ulid == staged.ulid
+    assert recorded.state == staged.state
+
+
+def test_load_run_refuses_a_combination_missing_from_combos_csv(run: Run) -> None:
+    csv = run.root / "combos.csv"
+    lines = csv.read_text().splitlines()
+    first_id = run.combos[0].combo_id
+    csv.write_text("\n".join(line for line in lines if first_id not in line) + "\n")
+    with pytest.raises(ValueError, match="not in combos.csv"):
+        load_run(run.root, run.app, [(run.suite_path, run.suite)])
+
+
+def test_sync_clears_a_leftover_staging_directory(run: Run, tmp_path: Path) -> None:
+    store = _store_dir_with(tmp_path, _ulids(run)[:1])
+    root = tmp_path / "root"
+    leftover = root / ".staging" / _ulids(run)[0]
+    leftover.mkdir(parents=True)
+    (leftover / "stale.nc").write_bytes(b"old")
+    results = ensure_baselines([run.suite], str(store), root)
+    assert results[0].state == "synced"
+    assert not (root / _ulids(run)[0] / "stale.nc").exists()
+
+
+def test_rewrite_restores_when_the_reload_differs_beyond_the_ulid(run: Run) -> None:
+    before = run.suite_path.read_text()
+    # A value that reloads fine but changes a second field: refused, restored.
+    with pytest.raises(ValueError, match="differs beyond"):
+        rewrite_suite_ulid(
+            run.suite_path,
+            PREVIOUS_ULIDS[1],
+            "01JNEWNEWNEWNEWNEWNEWNEWNE\n    atol: 0.5",
+        )
+    assert run.suite_path.read_text() == before

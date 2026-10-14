@@ -4,8 +4,24 @@
 target-version = "py311"
 
 [lint]
-# ARG: unused function/method/lambda arguments (flake8-unused-arguments).
-extend-select = ["ARG"]
+# Beyond the defaults (E4/E7/E9/F):
+#   I    import sorting
+#   B    bugbear: likely bugs and design traps
+#   UP   pyupgrade: syntax the target version makes obsolete
+#   SIM  needless complexity
+#   RUF  ruff's own, incl. RUF100 (a noqa that suppresses nothing -- there are none)
+#   T20  print(): the harness logs, it does not print (the CI helper scripts excepted)
+#   DTZ  naive datetimes
+#   PT   pytest style: raises with match, fixtures and parametrize used right
+#   ARG  unused function/method/lambda arguments
+extend-select = ["I", "B", "UP", "SIM", "RUF", "T20", "DTZ", "PT", "ARG"]
+
+[lint.per-file-ignores]
+# Stdlib-only scripts that run on the bare CI runner: print is their output.
+".github/workflows/scripts/*.py" = ["T20"]
+# The captured driver output is re-emitted through pytest's capture model
+# (live with -s, in failure reports otherwise) on purpose: not a log line.
+"src/runner.py" = ["T20"]
 
 [lint.flake8-unused-arguments]
 # `**kwargs` in a mock's side_effect lambda is the signature, not a value.

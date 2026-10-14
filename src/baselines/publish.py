@@ -13,7 +13,7 @@ import socket
 import subprocess
 import tempfile
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -72,7 +72,7 @@ def _manifest(
         harness_commit=run.harness_commit,
         platform=run.platform,
         runtime=run.runtime,
-        published_at=datetime.now(timezone.utc),
+        published_at=datetime.now(UTC),
         published_by=f"{getpass.getuser()}@{socket.gethostname()}",
         superseded_ulid=record.previous_ulid,
         parameters=read_parameters(output_root, record.ulid),

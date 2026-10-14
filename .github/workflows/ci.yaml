@@ -124,13 +124,45 @@ jobs:
           cache-from: type=gha
       # No ASSAY_*/CECE_* environment and no .env: the harness suite is
       # hermetic and mocks CECE_ROOT_DIR itself where needed.
+      # Coverage: production code only ([tool.coverage]), gated at 100%
+      # there (fail_under), reported in the job summary, the HTML report an
+      # artifact. Not a pre-commit hook: the suite takes ~45 s.
       - name: harness tests
         run: |-
           docker run --rm -v "$GITHUB_WORKSPACE":/repo -w /repo \
             localhost:5000/ufs-chem-assay:ci \
             sh -c 'git config --global --add safe.directory /repo \
                    && uv sync --frozen \
-                   && uv run pytest src/tests/ufs_chem_assay'
+                   && uv run pytest src/tests/ufs_chem_assay \
+                        --cov --cov-report=term --cov-report=html:coverage-html \
+                        | tee pytest-output.txt'
+      - name: Coverage in the job summary
+        if: always()
+        run: |-
+          { echo '## Coverage (harness suite)'; echo '```'; \
+            sed -n '/ tests coverage /,/^TOTAL/p' pytest-output.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-html-${{ github.run_id }}-${{ github.run_attempt }}
+          path: coverage-html
+  # Workflow linting beyond CodeQL's actions queries: bad `needs`, unknown
+  # action inputs, expression typos, shellcheck of every `run` step.
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The two ignores: actionlint's bundled schema for
+      # actions/create-github-app-token predates v3, where `client-id` is the
+      # input and `app-id` is deprecated (checked against the action's own
+      # action.yml at v3, 2026-10-14).
+      - name: actionlint
+        run: |-
+          docker run --rm -v "$GITHUB_WORKSPACE":/repo -w /repo rhysd/actionlint:latest -color \
+            -ignore 'input "client-id" is not defined in action "actions/create-github-app-token' \
+            -ignore 'missing input "app-id" which is required by action "actions/create-github-app-token'
   # Informational, early: what PSR would do if this PR merged (merge
   # commit and squash projections in the job summary). Fork PRs run it
   # with the read-only token and no secrets.

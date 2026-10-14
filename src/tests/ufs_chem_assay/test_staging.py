@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
 from models.suite_config import InputFile, SuiteConfig
@@ -96,8 +97,10 @@ def test_present_and_verified_is_skipped_without_network(
     (tmp_path / "MACCity_4x5.nc").write_bytes(_PAYLOAD)
     sync = mocker.patch("staging.sync")
     (result,) = stage_inputs([_input()], tmp_path)
-    assert result.action == "skipped" and "verified" in result.detail
-    assert result.sha256 == _DIGEST and result.path == tmp_path / "MACCity_4x5.nc"
+    assert result.action == "skipped"
+    assert "verified" in result.detail
+    assert result.sha256 == _DIGEST
+    assert result.path == tmp_path / "MACCity_4x5.nc"
     sync.assert_not_called()
 
 
@@ -107,7 +110,8 @@ def test_present_without_digest_is_skipped_unverified(
     (tmp_path / "MACCity_4x5.nc").write_bytes(b"whatever")
     sync = mocker.patch("staging.sync")
     (result,) = stage_inputs([_input(sha256=None)], tmp_path)
-    assert result.action == "skipped" and "no digest" in result.detail
+    assert result.action == "skipped"
+    assert "no digest" in result.detail
     assert result.sha256 is None
     sync.assert_not_called()
 
@@ -130,12 +134,15 @@ def test_fetch_is_one_filtered_sync_of_the_parent_prefix(
     config = sync.call_args.args[0]
     assert isinstance(config, S3SyncConfig)
     assert config.source == "s3://geos-chem/HEMCO/MACCITY/v2014-07/"
-    assert config.exclude == ["*"] and config.include == ["MACCity_4x5.nc"]
+    assert config.exclude == ["*"]
+    assert config.include == ["MACCity_4x5.nc"]
     assert config.no_sign_request is True
-    assert config.only_show_errors is True and config.dry_run is False
+    assert config.only_show_errors is True
+    assert config.dry_run is False
     assert isinstance(config.destination, Path)
     assert config.destination.parent == tmp_path / STAGING_DIRNAME
-    assert result.action == "downloaded" and result.sha256 == _DIGEST
+    assert result.action == "downloaded"
+    assert result.sha256 == _DIGEST
     assert (tmp_path / "sub" / "MACCity_4x5.nc").read_bytes() == _PAYLOAD
     assert not (tmp_path / STAGING_DIRNAME).exists()  # staging gone afterwards
 
@@ -152,7 +159,8 @@ def test_digest_mismatch_is_refetched_then_fails_if_still_wrong(
     (tmp_path / "MACCity_4x5.nc").write_bytes(b"stale")
     mocker.patch("staging.sync", side_effect=_fake_sync(b"still wrong"))
     (result,) = stage_inputs([_input()], tmp_path)
-    assert result.action == "failed" and "sha256" in result.detail
+    assert result.action == "failed"
+    assert "sha256" in result.detail
     assert _DIGEST in result.detail  # expected digest named
     # Nothing replaced the stale file; nothing staged is left behind.
     assert (tmp_path / "MACCity_4x5.nc").read_bytes() == b"stale"
@@ -165,7 +173,8 @@ def test_digest_mismatch_refetch_succeeds_when_the_store_is_right(
     (tmp_path / "MACCity_4x5.nc").write_bytes(b"stale")
     mocker.patch("staging.sync", side_effect=_fake_sync())
     (result,) = stage_inputs([_input()], tmp_path)
-    assert result.action == "downloaded" and result.sha256 == _DIGEST
+    assert result.action == "downloaded"
+    assert result.sha256 == _DIGEST
     assert (tmp_path / "MACCity_4x5.nc").read_bytes() == _PAYLOAD
 
 
@@ -174,7 +183,8 @@ def test_nothing_matched_is_a_failure(tmp_path: Path, mocker: MockerFixture) -> 
     # that the file actually arrived.
     mocker.patch("staging.sync", side_effect=_fake_sync(write=False))
     (result,) = stage_inputs([_input()], tmp_path)
-    assert result.action == "failed" and "no such object" in result.detail
+    assert result.action == "failed"
+    assert "no such object" in result.detail
     assert not (tmp_path / "MACCity_4x5.nc").exists()
 
 
@@ -229,7 +239,8 @@ def test_dry_run_classifies_and_writes_nothing(
     # The plan passes straight through to the wrapper's dry run.
     assert sync.call_count == 1
     config = sync.call_args.args[0]
-    assert config.dry_run is True and config.only_show_errors is False
+    assert config.dry_run is True
+    assert config.only_show_errors is False
     assert not (tmp_path / "absent.nc").exists()
     assert not (tmp_path / STAGING_DIRNAME).exists()
 
@@ -250,7 +261,7 @@ def test_results_are_frozen_models() -> None:
     result = StagedInput(
         url=_URL, path=Path("/x"), action="skipped", detail="", sha256=None
     )
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError, match="frozen"):
         result.action = "failed"  # type: ignore[misc]
 
 
@@ -310,3 +321,18 @@ def test_reachable_bucket_is_probed_once_then_fetched(
     )
     assert [r.action for r in results] == ["downloaded", "downloaded"]
     probe.assert_called_once_with(_URL)
+
+
+def test_dry_run_sync_failure_is_recorded(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    mocker.patch("staging.check_reachable")
+    mocker.patch(
+        "staging.sync",
+        side_effect=subprocess.CalledProcessError(
+            1, ["aws"], output="x\nAccessDenied\n"
+        ),
+    )
+    (result,) = stage_inputs([_input()], tmp_path, dry_run=True)
+    assert result.action == "failed"
+    assert "AccessDenied" in result.detail

@@ -34,6 +34,23 @@ class StubSuiteConfig(SuiteConfig):
     pass
 
 
+class StubConfig(DriverConfig):
+    """A one-field driver config: enough to load, dump, and fingerprint."""
+
+    x: int = 0
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> StubConfig:
+        import yaml
+
+        return cls.model_validate(yaml.safe_load(path.read_text()))
+
+    def to_yaml(self, path: Path) -> None:
+        import yaml
+
+        path.write_text(yaml.safe_dump(self.model_dump()))
+
+
 class StubApplication(Application):
     name = "stub"
     env_prefix = "STUB_"
@@ -43,7 +60,7 @@ class StubApplication(Application):
     data_dirname = "data"
     standard_dimensions = ("time",)
     settings_model = StubSettings
-    config_model = DriverConfig
+    config_model = StubConfig
     suite_model = StubSuiteConfig
     run_section_model = StubSection
 

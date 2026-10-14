@@ -32,8 +32,8 @@ from cli.shell import run_bash, write_script
 from cli.stages import Stage, render_stage
 from logs import configure_logging, get_logger
 from models.suite_config import RunManifest
-from s3_sync import check_reachable
 from platforms import Platform
+from s3_sync import check_reachable
 from selection import resolve_suites
 from settings import ENV_PREFIX, LEGACY_ENV_PREFIX, Settings
 from staging import merge_inputs, stage_inputs

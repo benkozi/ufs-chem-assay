@@ -13,10 +13,10 @@ did not pass pydantic validation.
 from __future__ import annotations
 
 import itertools
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Callable
 
 import pandas as pd
 from ulid import ULID
@@ -92,7 +92,7 @@ def enumerate_combos(
         return [Combo(values=(), combo_id=str(ULID()))]
     ordered = tuple(dimension for dimension, _ in dimensions)
     return [
-        Combo(values=tuple(zip(ordered, chosen)), combo_id=str(ULID()))
+        Combo(values=tuple(zip(ordered, chosen, strict=False)), combo_id=str(ULID()))
         for chosen in itertools.product(*(values for _, values in dimensions))
     ]
 

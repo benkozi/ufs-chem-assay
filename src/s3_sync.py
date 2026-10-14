@@ -28,8 +28,8 @@ import shutil
 import socket
 import subprocess
 from pathlib import Path
-from urllib.parse import urlparse
 from typing import Annotated
+from urllib.parse import urlparse
 
 from pydantic import (
     BaseModel,

@@ -44,7 +44,7 @@ def _stream_selector(
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def maccity_combos(cece_config_path: Path) -> list[Combo]:
     base = CeceConfig.from_yaml(cece_config_path)
     sweep = CeceSweep(
@@ -104,7 +104,7 @@ def test_ambiguous_selector_rejected_naming_matches(
 ) -> None:
     # The added-dimension insulation scenario: a selector unique under one
     # dimension becomes ambiguous when the sweep grows — surfaced, not guessed.
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match="ambiguous") as excinfo:
         resolve_baseline_comparisons(_APP, [_stream_selector("01AAA")], maccity_combos)
     message = str(excinfo.value)
     assert "MACCITY.map-bilinear" in message
@@ -219,3 +219,27 @@ def test_suite_parses_baseline_comparisons_list(
     assert entry.atol == 0.001
     assert entry.sweep_selector.cece_data is not None
     assert entry.sweep_selector.cece_data.streams[0].mapalgo == "consd"
+
+
+def _species_combos(cece_config_path: Path) -> list[Combo]:
+    base = CeceConfig.from_yaml(cece_config_path)
+    sweep = CeceSweep(
+        species={
+            "co": [SpeciesEntrySweep(operation=[Operation.add, Operation.replace])]
+        }
+    )
+    return _combos(sweep, base)
+
+
+def test_empty_species_entry_selector_matches_any_entry(cece_config_path: Path) -> None:
+    combos = _species_combos(cece_config_path)
+    selector = CeceSweepSelector(species={"co": [SpeciesEntrySweepSelector()]})
+    assert all(_APP.selector_matches(selector, combo) for combo in combos)
+
+
+def test_species_selector_key_must_match_the_species(cece_config_path: Path) -> None:
+    combos = _species_combos(cece_config_path)
+    selector = CeceSweepSelector(
+        species={"nox": [SpeciesEntrySweepSelector(operation="add")]}
+    )
+    assert not any(_APP.selector_matches(selector, combo) for combo in combos)

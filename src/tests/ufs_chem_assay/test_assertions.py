@@ -3,9 +3,8 @@ The CECE-derived expectations are tested in applications/cece/test_assertions.py
 
 from pathlib import Path
 
-import pytest
-
 import numpy as np
+import pytest
 import xarray as xr
 
 from assertions import (
@@ -210,4 +209,6 @@ def test_failure_names_every_offending_file(tmp_path: Path) -> None:
     with pytest.raises(AssertionError) as excinfo:
         assert_output_variable_dimensions(tmp_path, ["co"], _DIMS)
     message = str(excinfo.value)
-    assert "a.nc" in message and "c.nc" in message and "b.nc" not in message
+    assert "a.nc" in message
+    assert "c.nc" in message
+    assert "b.nc" not in message

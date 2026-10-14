@@ -41,7 +41,7 @@ def _values() -> np.ndarray:
     return rng.random((2, 3, 4))
 
 
-@pytest.fixture()
+@pytest.fixture
 def pair_dirs(tmp_path: Path) -> tuple[Path, Path]:
     realization = tmp_path / "realization"
     baseline = tmp_path / "baseline"
@@ -165,7 +165,8 @@ def test_a_missing_volatile_attribute_still_fails(pair_dirs: tuple[Path, Path]) 
         baseline_ulid="b",
         ignore_global_attributes=("history",),
     )
-    assert not result.passed and not result.files[0].global_attributes_match
+    assert not result.passed
+    assert not result.files[0].global_attributes_match
 
 
 def test_volatile_global_attributes_are_ignored(pair_dirs: tuple[Path, Path]) -> None:
@@ -205,7 +206,8 @@ def test_volatile_global_attributes_are_ignored(pair_dirs: tuple[Path, Path]) ->
         baseline_ulid="b",
         ignore_global_attributes=("date_created", "history"),
     )
-    assert result.passed and result.files[0].global_attributes_match
+    assert result.passed
+    assert result.files[0].global_attributes_match
     # Only a stamp may differ: a changed title still fails (fresh file
     # names: the first comparison's handles are cached by xarray).
     _write_nc(
@@ -386,7 +388,8 @@ def _cece_config(path: Path, mapalgo: str, directory: str) -> None:
         / "maccity.yaml"
     )
     config = CeceConfig.from_yaml(base)
-    assert config.cece_data is not None and config.output is not None
+    assert config.cece_data is not None
+    assert config.output is not None
     config.cece_data.streams[0].mapalgo = Mapalgo(mapalgo)
     config.output.directory = directory
     config.driver.log_file = str(PurePosixPath(directory) / "cece.log")
@@ -424,7 +427,9 @@ def test_identical_configuration_up_to_run_paths_passes(
         baseline / "01JBASEBASEBASEBASEBASEBAS.yaml", "consd", "/work/out/01JBASE"
     )
     result = _compare_with_app(realization, baseline)
-    assert result.passed and result.config_match and result.config_detail is None
+    assert result.passed
+    assert result.config_match
+    assert result.config_detail is None
 
 
 def test_changed_configuration_fails_even_with_identical_output(
@@ -439,8 +444,10 @@ def test_changed_configuration_fails_even_with_identical_output(
     _cece_config(realization / "01JREALREALREALREALREALREA.yaml", "bilinear", "/x")
     _cece_config(baseline / "01JBASEBASEBASEBASEBASEBAS.yaml", "consd", "/x")
     result = _compare_with_app(realization, baseline)
-    assert not result.passed and not result.config_match
-    assert result.config_detail is not None and "differs" in result.config_detail
+    assert not result.passed
+    assert not result.config_match
+    assert result.config_detail is not None
+    assert "differs" in result.config_detail
     assert "configuration" in result.failure_summary()
     assert all(file.passed for file in result.files)  # the data was identical
 
@@ -452,10 +459,10 @@ def test_baseline_without_a_configuration_fails(pair_dirs: tuple[Path, Path]) ->
     _write_nc(baseline / "cece_a.nc", values)
     _cece_config(realization / "01JREALREALREALREALREALREA.yaml", "consd", "/x")
     result = _compare_with_app(realization, baseline)
-    assert not result.passed and not result.config_match
-    assert (
-        result.config_detail is not None and "no configuration" in result.config_detail
-    )
+    assert not result.passed
+    assert not result.config_match
+    assert result.config_detail is not None
+    assert "no configuration" in result.config_detail
 
 
 def test_comparison_csv_carries_config_match(
@@ -469,5 +476,32 @@ def test_comparison_csv_carries_config_match(
     frame = write_comparison_csv(
         _compare_with_app(realization, baseline), tmp_path / "c.csv"
     )
-    assert "config_match" in frame.columns and not frame["config_match"].iloc[0]
+    assert "config_match" in frame.columns
+    assert not frame["config_match"].iloc[0]
     assert not frame["passed"].iloc[0]
+
+
+# ── dtype and integer data ────────────────────────────────────────────────────
+
+
+def test_dtype_mismatch_is_reported(pair_dirs: tuple[Path, Path]) -> None:
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(realization / "cece_a.nc", values.astype(np.float32))
+    _write_nc(baseline / "cece_a.nc", values)
+    result = _compare(realization, baseline)
+    variable = result.files[0].variables[0]
+    assert not variable.dtype_match
+    assert variable.detail is not None
+    assert "dtype" in variable.detail
+
+
+def test_integer_data_compares_exactly_and_within_tolerance(
+    pair_dirs: tuple[Path, Path],
+) -> None:
+    realization, baseline = pair_dirs
+    base = np.arange(24, dtype=np.int32).reshape(2, 3, 4)
+    _write_nc(realization / "cece_a.nc", base + 1)
+    _write_nc(baseline / "cece_a.nc", base)
+    assert not _compare(realization, baseline).passed
+    assert _compare(realization, baseline, atol=1.0).passed

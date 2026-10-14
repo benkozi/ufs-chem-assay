@@ -7,10 +7,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 from pydantic import BaseModel, ConfigDict, InstanceOf
+from ulid import ULID
 
 from analysis import RunContext, concatenate_stats_csvs
-from baselines import StagedBaseline, SuiteInput, ensure_baselines, publish_session
 from applications.base import Application, ApplicationSettings, DriverConfig
+from baselines import StagedBaseline, SuiteInput, ensure_baselines, publish_session
 from combos import Combo, ParameterRow, enumerate_combos, write_combos_csv
 from comparison import concatenate_comparison_csvs, resolve_baseline_comparisons
 from identity import harness_commit, harness_version
@@ -23,16 +24,15 @@ from models.suite_config import (
     RunManifest,
     SuiteConfig,
 )
+from platforms import Runtime
 from plotting import render_all_bias_plots, render_all_plots
 from report import TestReportRow, worst_result, write_test_report_csv
-from ulid import ULID
-from platforms import Runtime
 from resolution import resolve_output_roots
-from selection import resolve_suites
-from staging import missing_inputs
 from runner import DriverRunResult, run_driver, write_job_script
 from s3_sync import check_reachable
+from selection import resolve_suites
 from settings import Settings
+from staging import missing_inputs
 
 if TYPE_CHECKING:
     from dask.distributed import Client
@@ -565,25 +565,25 @@ def _owning_context(request: pytest.FixtureRequest) -> SuiteContext:
     return context
 
 
-@pytest.fixture()
+@pytest.fixture
 def suite_assertions(request: pytest.FixtureRequest) -> Assertions:
     """The owning suite's assertions for this item's combination."""
     return _owning_context(request).suite.assertions
 
 
-@pytest.fixture()
+@pytest.fixture
 def suite_analysis(request: pytest.FixtureRequest) -> Analysis:
     """The owning suite's analysis switches for this item's combination."""
     return _owning_context(request).suite.analysis
 
 
-@pytest.fixture()
+@pytest.fixture
 def baseline_states(request: pytest.FixtureRequest) -> dict[str, StagedBaseline]:
     """Every pinned baseline as found or staged at session start, by ULID."""
     return request.config.stash[_BASELINE_STATES]
 
 
-@pytest.fixture()
+@pytest.fixture
 def baseline_comparisons(
     request: pytest.FixtureRequest,
 ) -> dict[str, BaselineComparison]:
@@ -591,7 +591,7 @@ def baseline_comparisons(
     return _owning_context(request).baselines
 
 
-@pytest.fixture()
+@pytest.fixture
 def run_context(request: pytest.FixtureRequest) -> RunContext:
     return RunContext(
         run_id=request.config.stash[_RUN_ID],
@@ -752,7 +752,8 @@ def driver_run(
     """Run the driver once per combination (session-scoped, parameterized on
     (suite context, combo) pairs) and capture the outcome without raising."""
     context, combo = request.param
-    assert isinstance(context, SuiteContext) and isinstance(combo, Combo)
+    assert isinstance(context, SuiteContext)
+    assert isinstance(combo, Combo)
     # Effective timeout: the owning suite's value, capped by the settings
     # value when that is smaller.
     run_timeout_s = min(context.suite.timeout_s, settings.run_timeout_s)

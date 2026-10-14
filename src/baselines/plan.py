@@ -189,7 +189,7 @@ def load_run(
             app, suite.baseline_comparisons, combos
         )
         mine = combos_csv[combos_csv["suite"] == suite.name]
-        ids = dict(zip(mine["name"], mine["combo_id"]))
+        ids = dict(zip(mine["name"], mine["combo_id"], strict=False))
         missing = sorted(set(baselines) - set(ids))
         if missing:
             raise ValueError(

@@ -138,4 +138,5 @@ def test_output_banner_names_no_application(
         timeout_s=7,
     )
     out = capsys.readouterr().out
-    assert "----- driver output [x] -----" in out and "cece driver" not in out
+    assert "----- driver output [x] -----" in out
+    assert "cece driver" not in out

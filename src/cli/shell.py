@@ -26,7 +26,7 @@ def write_script(script: ShellScript, scripts_dir: Path, index: int) -> Path:
 
 def _log_path(logs_dir: Path, name: str) -> Path:
     logs_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")  # local, aware
     return logs_dir / f"{name}-{stamp}.log"
 
 

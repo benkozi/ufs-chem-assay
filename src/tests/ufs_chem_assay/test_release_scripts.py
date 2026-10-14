@@ -7,17 +7,16 @@ import os
 import subprocess
 from pathlib import Path
 
-import pytest
-from pytest_mock import MockerFixture
-
 import prepare_release_preview
+import pytest
 import report_release
 import verify_semantic_release_credentials as verify
+from pytest_mock import MockerFixture
 
 VALID_KEY = "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----"
 
 
-@pytest.fixture()
+@pytest.fixture
 def github_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "github_output"
     path.touch()
@@ -25,7 +24,7 @@ def github_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
-@pytest.fixture()
+@pytest.fixture
 def step_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "step_summary.md"
     path.touch()
@@ -174,9 +173,11 @@ class TestReportHelpers:
         text = "\n".join(lines)
         assert "Squash Merge" in lines[0]
         assert "`v0.2.0-rc.1`" in text
-        assert "CHANGELOG.md" in text and "uv.lock" in text and "pyproject.toml" in text
+        assert "CHANGELOG.md" in text
+        assert "uv.lock" in text
+        assert "pyproject.toml" in text
         assert "prerelease" in text
-        assert "ontainer" not in text
+        assert "container" not in text
 
     def test_describe_actions_no_release(self) -> None:
         lines = report_release.describe_actions("", False, "", "", False)
@@ -201,7 +202,8 @@ class TestGenerateReport:
         assert "| Parameter | Merge Commit | Squash Merge |" in report
         assert "| Next Version | `0.2.0-rc.1` | `0.2.0-rc.1` |" in report
         assert "Preview" in report
-        assert "(Merge Commit)" in report and "(Squash Merge)" in report
+        assert "(Merge Commit)" in report
+        assert "(Squash Merge)" in report
         assert "+++ d" in report
 
     def test_single_production_table(self) -> None:
@@ -232,7 +234,7 @@ def _git(cwd: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-@pytest.fixture()
+@pytest.fixture
 def pr_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A bare origin with `develop` tagged v0.1.0-rc.1, a feature branch with
     one commit, and a clone sitting on a PR-style merge commit (HEAD^2 = the
@@ -283,7 +285,7 @@ class TestPrepareReleasePreview:
 
     @pytest.mark.usefixtures("pr_repo")
     def test_missing_target_raises(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Target branch"):
             prepare_release_preview.prepare_preview("", "", "merge")
 
 

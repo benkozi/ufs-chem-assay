@@ -11,11 +11,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import TypedDict
 
-import dask
 import dask.array as dsa
 import numpy as np
 import pandas as pd
 import xarray as xr
+from dask.base import compute
 from pydantic import BaseModel, ConfigDict
 
 from logs import get_logger
@@ -152,7 +152,7 @@ def compute_file_stats(
                 ]
             )
             names.append(str(name))
-        computed = dask.compute(*deferred)
+        computed = compute(*deferred)
 
     stats = []
     for index, name in enumerate(names):

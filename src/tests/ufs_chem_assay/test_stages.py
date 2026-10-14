@@ -11,8 +11,8 @@ from applications.registry import REGISTRY, get_application
 from cli.run_config import HARNESS_ROOT, RunConfig
 from cli.stages import Stage, application_output_root, render_stage
 from platforms import Platform
-from tests.ufs_chem_assay.stubs import stub_application
 from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR, run_config_file
+from tests.ufs_chem_assay.stubs import stub_application
 
 _CECE = get_application("cece")
 
@@ -22,19 +22,19 @@ _CECE = get_application("cece")
 _URSA_ROOT = Path("/scratch/ursa-run")
 
 
-@pytest.fixture()
+@pytest.fixture
 def ursa(tmp_path: Path) -> RunConfig:
     return RunConfig.from_yaml(run_config_file(tmp_path, root_dir=_URSA_ROOT))
 
 
-@pytest.fixture()
+@pytest.fixture
 def local(tmp_path: Path) -> RunConfig:
     return RunConfig.from_yaml(
         run_config_file(tmp_path, "local.yaml", root_dir=tmp_path / "runs")
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def stub(monkeypatch: pytest.MonkeyPatch) -> Application:
     app = stub_application()
     monkeypatch.setitem(REGISTRY, "stub", app)
@@ -80,7 +80,8 @@ def test_source_stage_update_source_fast_forwards(tmp_path: Path) -> None:
         )
     )
     script = render_stage(Stage.SOURCE, config, _CECE)
-    assert "git -C" in script.text and "fetch origin" in script.text
+    assert "git -C" in script.text
+    assert "fetch origin" in script.text
     assert "checkout develop" in script.text
     assert "pull --ff-only origin develop" in script.text
     assert "submodule update --init --recursive" in script.text
@@ -358,3 +359,11 @@ def test_harness_stage_renders_the_publish_flags(tmp_path: Path) -> None:
     assert "export ASSAY_BASELINE_STORE=s3://other/prefix" in text
     assert "export ASSAY_BASELINE_ROOT_DIR=/scratch/baselines" in text
     assert "--combo-clean-root --publish-baselines --no-suite-update" in text
+
+
+def test_env_value_renders_an_enum_by_its_value() -> None:
+    from cli.stages import _env_value
+    from platforms import Runtime
+
+    assert _env_value(Runtime.SLURM) == "slurm"
+    assert _env_value(None) is None

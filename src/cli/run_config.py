@@ -213,7 +213,7 @@ class RunConfig(StrictModel):
     @field_validator("root_dir", mode="before")
     @classmethod
     def _expand_root(cls, value: object) -> object:
-        if isinstance(value, (str, Path)):
+        if isinstance(value, str | Path):
             return Path(value).expanduser()
         return value
 

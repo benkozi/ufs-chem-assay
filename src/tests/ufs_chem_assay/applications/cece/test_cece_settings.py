@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from applications.cece.settings import CONTAINER_WORKDIR, ENV_PREFIX, CeceSettings
 
 
-@pytest.fixture()
+@pytest.fixture
 def clean_cece_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> pytest.MonkeyPatch:
@@ -33,7 +33,8 @@ def test_defaults() -> None:
     assert settings.docker_image == "cece/cece-dev"
     assert settings.driver_path == "./build/cece_standalone_driver"
     assert settings.modulefile is None
-    assert ENV_PREFIX == "CECE_" and str(CONTAINER_WORKDIR) == "/work"
+    assert ENV_PREFIX == "CECE_"
+    assert str(CONTAINER_WORKDIR) == "/work"
 
 
 def test_root_dir_reads_cece_root_dir_env(clean_cece_env: pytest.MonkeyPatch) -> None:

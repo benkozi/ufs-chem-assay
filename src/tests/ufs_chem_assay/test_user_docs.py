@@ -53,15 +53,17 @@ def test_runbook_never_mentions_the_design() -> None:
 def test_runbook_uses_placeholders_and_ref_variables() -> None:
     text = _RUNBOOK.read_text()
     assert "ROOT=<" in text  # a placeholder, set once
-    assert "HARNESS_REF" in text and "CECE_REF" in text
+    assert "HARNESS_REF" in text
+    assert "CECE_REF" in text
     assert "feat/run-on-rdhpc" not in text
     assert "fix/all-examples-pass" not in text
-    assert (
-        "buid-test-tweaks" not in text and "benkozi/CECE" not in text
-    )  # upstream develop
-    assert "tmux" in text and "squeue" in text
+    assert "buid-test-tweaks" not in text
+    assert "benkozi/CECE" not in text
+    assert "tmux" in text
+    assert "squeue" in text
     assert "config/ursa.yaml --stage harness" in text  # the template runs as shipped
-    assert "05-harness-cece.sh" in text and "05-harness.sh" not in text
+    assert "05-harness-cece.sh" in text
+    assert "05-harness.sh" not in text
     assert "root_dir" in text  # explains the derived root
     assert (
         ".sbatch" in text
@@ -98,7 +100,8 @@ def test_readme_documents_the_new_surfaces() -> None:
         "vulture",
     ):
         assert needle in text, needle
-    assert "buid-test-tweaks" not in text and "benkozi/CECE" not in text
+    assert "buid-test-tweaks" not in text
+    assert "benkozi/CECE" not in text
 
 
 def test_user_docs_never_say_example() -> None:

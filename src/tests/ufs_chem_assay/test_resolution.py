@@ -39,7 +39,7 @@ def test_absolute_output_root_outside_work_raises() -> None:
         )
 
 
-@pytest.fixture()
+@pytest.fixture
 def suite_roots(tmp_path: Path) -> tuple[Path, Path]:
     """Two search roots: root_a with a nested suite, root_b with a same-named
     suite at its top level plus a distinct one."""
@@ -131,6 +131,6 @@ def test_select_suites_only_considers_suite_files(
     # listing never names it.
     root_a, root_b = suite_roots
     assert root_a / "nightly" / "base.yaml" not in select_suites(".*", [root_a, root_b])
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match="matches no suite") as excinfo:
         select_suites("absent-suite.yaml", [root_a, root_b])
     assert "base.yaml" not in str(excinfo.value)

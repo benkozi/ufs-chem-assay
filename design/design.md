@@ -783,14 +783,23 @@ level in the root conftest), written once at sessionstart and read through
 attributes with `type: ignore` is retired; don't reintroduce it.
 
 Pre-commit (`.pre-commit-config.yaml`, install with
-`uv run pre-commit install`) runs ruff check (the default rules plus `ARG`,
-unused arguments — side-effect fixtures are declared with
-`pytest.mark.usefixtures`, unused interface parameters are `_`-prefixed,
-never `noqa`), ruff format, a whole-`src/` mypy pass, **vulture** (dead
+`uv run pre-commit install`) runs ruff check (the default rules plus, since
+2026-10-14, `I` import sorting, `B` bugbear, `UP` pyupgrade, `SIM`, `RUF`
+incl. `RUF100` so a `noqa` that suppresses nothing is itself a finding,
+`T20` no `print` — the CI helper scripts and the driver-output re-emit in
+`runner.py` are the two documented exceptions — `DTZ` aware datetimes,
+`PT` pytest style, and `ARG` unused arguments — side-effect fixtures are
+declared with `pytest.mark.usefixtures`, unused interface parameters are
+`_`-prefixed, never `noqa`), ruff format, a whole-`src/` **`mypy --strict`**
+pass (`disallow_untyped_calls` off: dask, xarray's dask arrays, and
+netCDF4 are untyped at the call sites the harness needs), **vulture** (dead
 code, 2026-10-08; `[tool.vulture]` ignores framework-bound names and
 decorators and excludes `applications/cece/config.py`, a schema mirror
-whose fields are read by serialization, not by name), and YAML
-formatting/linting (`yamlfix` in `[tool.yamlfix]`,
+whose fields are read by serialization, not by name), **codespell** (code,
+docs, templates; `design/` and the lock skipped), **`uv lock --check`**
+(the lock in step with `pyproject.toml`, at commit time), the
+`pre-commit-hooks` merge-marker, private-key, and large-file checks, and
+YAML formatting/linting (`yamlfix` in `[tool.yamlfix]`,
 `yamllint` in `.yamllint.yaml` — the pair kept coherent: no `---` document
 start, 120-column lines, block-style sequences) as **local hooks through
 `uv run`** — the project venv is the single source of tool versions, so
@@ -991,6 +1000,22 @@ mechanics:
   download half and OIDC credentials are the follow-up). The CECE pin is
   `ufs-community/CECE` at `develop` (ufs-community/CECE#154 merged
   2026-10-08).
+- **Quality jobs** (2026-10-14): the `tests` job measures the harness
+  suite's coverage of `src/` (`pytest-cov`; tests and the `python -m cli`
+  shim omitted; `if TYPE_CHECKING`, `@abstractmethod`,
+  `raise NotImplementedError`, and `...` bodies excluded) and **fails under
+  100%** (`[tool.coverage.report] fail_under`; the job summary carries the
+  table, the HTML report is an artifact). The gate is CI's, not a commit
+  hook: the suite takes about 45 s. Reaching 100% on 2026-10-14 added ~45
+  tests for the error branches and fallbacks (offline cartopy, failed
+  renders, `fetch`/`publish-baselines` error exits, the publish retry paths,
+  selection errors, a real `run_bash`), no `pragma: no cover` anywhere; an `actionlint` job
+  lints the workflows in the official container (two ignores for its
+  stale schema of `actions/create-github-app-token`, whose v3 input is
+  `client-id`); `dependency-review.yaml` fails a PR whose dependency diff
+  brings a known vulnerability of moderate severity or above;
+  `dependabot.yml` opens weekly grouped PRs for the action majors and the
+  uv lock, `chore`-prefixed so semantic-release ignores them.
 - **`codeql.yaml`** (2026-10-14): CodeQL code scanning of the Python and
   of the workflows themselves (the `actions` language), `security-and-quality`
   queries, on every PR, every push to `develop`/`main`, and weekly;

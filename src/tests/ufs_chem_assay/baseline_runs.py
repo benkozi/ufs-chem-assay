@@ -182,9 +182,12 @@ def fake_sync(
 
     def fake(config: S3SyncConfig) -> S3SyncResult:
         output = ""
-        if config.dry_run and isinstance(config.source, str):
-            if config.source in occupied:
-                output = f"(dryrun) download: {config.source}x.nc to ./x.nc\n"
+        if (
+            config.dry_run
+            and isinstance(config.source, str)
+            and config.source in occupied
+        ):
+            output = f"(dryrun) download: {config.source}x.nc to ./x.nc\n"
         return S3SyncResult(
             argv=config.argv, returncode=0, output=output, dry_run=config.dry_run
         )

@@ -31,7 +31,7 @@ TEST_BUCKET_ARN = "arn:aws:s3:::ufs-chem"
 TEST_PREFIX = "ufs-chem-assay-tests"
 
 
-@pytest.fixture()
+@pytest.fixture
 def local_dir(tmp_path: Path) -> Path:
     path = tmp_path / "local"
     path.mkdir()
@@ -45,7 +45,7 @@ def _completed(
     return subprocess.CompletedProcess(argv, returncode, stdout=output)
 
 
-@pytest.fixture()
+@pytest.fixture
 def aws_on_path(mocker: MockerFixture) -> str:
     """shutil.which resolves `aws` to a fixed path; nothing is executed."""
     mocker.patch("s3_sync.shutil.which", return_value="/usr/local/bin/aws")
@@ -57,9 +57,11 @@ def aws_on_path(mocker: MockerFixture) -> str:
 
 def test_local_to_s3_and_s3_to_local_accepted(local_dir: Path, tmp_path: Path) -> None:
     up = S3SyncConfig(source=local_dir, destination="s3://ufs-chem/prefix")
-    assert up.source == local_dir.resolve() and up.destination == "s3://ufs-chem/prefix"
+    assert up.source == local_dir.resolve()
+    assert up.destination == "s3://ufs-chem/prefix"
     down = S3SyncConfig(source="s3://ufs-chem/prefix", destination=tmp_path / "new")
-    assert isinstance(down.destination, Path) and not (tmp_path / "new").exists()
+    assert isinstance(down.destination, Path)
+    assert not (tmp_path / "new").exists()
 
 
 def test_string_local_path_becomes_absolute_path(
@@ -278,19 +280,25 @@ def test_sync_runs_exactly_once_with_resolved_executable(
 
     assert run.call_count == 1
     args, kwargs = run.call_args
-    assert args[0][0] == aws_on_path and args[0][1:] == config.argv[1:]
+    assert args[0][0] == aws_on_path
+    assert args[0][1:] == config.argv[1:]
     # The child inherits the environment: the CLI resolves credentials itself.
     assert "env" not in kwargs
-    assert kwargs["stdout"] is subprocess.PIPE and kwargs["stderr"] is subprocess.STDOUT
-    assert kwargs["timeout"] == 30 and kwargs["check"] is False
+    assert kwargs["stdout"] is subprocess.PIPE
+    assert kwargs["stderr"] is subprocess.STDOUT
+    assert kwargs["timeout"] == 30
+    assert kwargs["check"] is False
 
     assert isinstance(result, S3SyncResult)
-    assert result.argv == args[0] and result.returncode == 0 and result.dry_run is False
+    assert result.argv == args[0]
+    assert result.returncode == 0
+    assert result.dry_run is False
     assert result.output.startswith("upload: probe.txt")
     assert any(aws_on_path in record.message for record in caplog.records)
     # A real run's output is DEBUG only.
     output_records = [r for r in caplog.records if "upload: probe.txt" in r.message]
-    assert output_records and all(r.levelno == logging.DEBUG for r in output_records)
+    assert output_records
+    assert all(r.levelno == logging.DEBUG for r in output_records)
 
 
 @pytest.mark.usefixtures("aws_on_path")
@@ -308,7 +316,8 @@ def test_sync_dry_run_passes_the_flag_and_logs_the_plan_at_info(
         result = sync(
             S3SyncConfig(source=local_dir, destination="s3://ufs-chem/x", dry_run=True)
         )
-    assert result.argv[-1] == "--dryrun" and result.dry_run is True
+    assert result.argv[-1] == "--dryrun"
+    assert result.dry_run is True
     assert result.output == plan.decode()
     info = [r for r in caplog.records if r.levelno == logging.INFO]
     assert any("(dryrun) upload:" in r.message for r in info)
@@ -449,7 +458,8 @@ def test_private_bucket_round_trip(tmp_path: Path) -> None:
     try:
         plan = sync(S3SyncConfig(source=up, destination=prefix, dry_run=True))
         assert plan.output.count("(dryrun) upload:") == 2, plan.output
-        assert "probe.txt" in plan.output and "second.bin" in plan.output
+        assert "probe.txt" in plan.output
+        assert "second.bin" in plan.output
 
         sync(S3SyncConfig(source=up, destination=prefix))
         sync(S3SyncConfig(source=prefix, destination=tmp_path / "down"))

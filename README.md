@@ -46,7 +46,8 @@ beside the suites that sweep it. Design rationale lives in
 ```sh
 uv sync                       # includes dev tools (mypy, pre-commit, stubs) and
                               #   installs the `ufs-chem-assay` command (editable)
-uv run pre-commit install     # ruff check/format + mypy + vulture on every commit, plus
+uv run pre-commit install     # ruff check/format, mypy, vulture, codespell, the lock check
+                              #   on every commit, plus
                               #   the conventional-commit message gate (the
                               #   commit-msg hook type installs automatically)
 
@@ -76,12 +77,15 @@ uv run pytest -k map-consd         # run a subset by combo name
 uv run pytest --combo-clean-root   # delete an existing output root first
 
 uv run pytest src/tests/ufs_chem_assay                  # harness only: fast, no docker
+uv run pytest src/tests/ufs_chem_assay --cov            # ... with coverage: CI fails under 100%
 uv run pytest src/tests/ufs_chem_assay/applications/cece  # the CECE adapter's tests only
 uv run pytest src/tests/test_driver_combos.py  # integration only (real docker)
 
 uv run mypy                        # type checking (all of src/; zero errors expected)
 uv run pre-commit run --all-files  # everything the commit hook runs: ruff check/format,
-                                   #   mypy, vulture (dead code), yamlfix/yamllint, whitespace
+                                   #   mypy (strict), vulture (dead code), codespell,
+                                   #   uv lock --check, yamlfix/yamllint, whitespace,
+                                   #   merge markers, private keys, large files
 
 # everything except driver execution (no docker needed); all combo tests skip
 uv run pytest src/tests/test_driver_combos.py --dry-run
@@ -490,6 +494,17 @@ Commit messages (and PR titles) must follow
 non-conforming message at commit time; in CI the PR title is checked with
 the same hook (squash-merge subjects come from PR titles, and
 semantic-release parses them to compute versions).
+
+Every pull request also runs `.github/workflows/dependency-review.yaml`,
+which fails the PR when a dependency change (the lock, an action) brings
+in a known vulnerability of moderate severity or above; Dependabot
+(`.github/dependabot.yml`) opens weekly grouped PRs for the pinned action
+majors and the uv lock. The `tests` job measures the harness
+suite's coverage of `src/` (tests excluded) and **fails under 100%**
+(`[tool.coverage]` in `pyproject.toml`; every line is exercised or is one
+of the listed unreachable patterns), reports it in the job summary, and
+uploads the HTML report as an artifact; an `actionlint` job lints the
+workflows.
 
 Every pull request (and every push to `develop`/`main`) also runs
 `.github/workflows/codeql.yaml`: CodeQL code scanning of the Python and

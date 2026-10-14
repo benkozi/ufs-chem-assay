@@ -4,13 +4,13 @@ import pytest
 
 from analysis import RunContext, compute_file_stats, write_combo_stats_csv
 from applications.base import Application
-from baselines import StagedBaseline
 from assertions import (
     assert_nc_file_count,
     assert_nc_filenames,
     assert_output_variable_dimensions,
     assert_species_attributes,
 )
+from baselines import StagedBaseline
 from comparison import compare_with_baseline, write_comparison_csv
 from models.suite_config import Analysis, Assertions, BaselineComparison
 from runner import DriverRunResult

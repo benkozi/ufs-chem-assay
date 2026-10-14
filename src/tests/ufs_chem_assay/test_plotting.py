@@ -7,13 +7,19 @@ import pytest
 import xarray as xr
 from PIL import GifImagePlugin, Image
 from pydantic import ValidationError
+from pytest_mock import MockerFixture
 
 from applications.registry import load_suite
 from models.suite_config import Plotting
 from plotting import (
+    BIAS_PLOTS_DIRNAME,
+    PLOTS_DIRNAME,
     VariableScale,
     derive_scales,
+    render_all_bias_plots,
     render_all_plots,
+    render_bias_plot,
+    render_combo_bias_plots,
     render_combo_plots,
     render_spatial_plot,
 )
@@ -32,7 +38,7 @@ def _write_nc(path: Path, values: np.ndarray, hour: int) -> None:
     dataset.to_netcdf(path, engine="netcdf4")
 
 
-@pytest.fixture()
+@pytest.fixture
 def combo_dirs(tmp_path: Path) -> tuple[Path, np.ndarray, np.ndarray]:
     """Two combo directories with driver-like NetCDFs of known ranges."""
     rng = np.random.default_rng(7)
@@ -217,7 +223,8 @@ def test_render_combo_bias_plots_pngs_and_gif(tmp_path: Path) -> None:
 
     plots = realization / "plots-baselines"
     pngs = sorted(plots.glob("co__*.png"))
-    assert len(pngs) == 2 and all(p.stat().st_size > 0 for p in pngs)
+    assert len(pngs) == 2
+    assert all(p.stat().st_size > 0 for p in pngs)
     gif = plots / "co.gif"
     assert gif.is_file()
     with Image.open(gif) as image:
@@ -228,7 +235,7 @@ def test_render_combo_bias_plots_pngs_and_gif(tmp_path: Path) -> None:
 def test_render_combo_plots_skips_bounds_variables(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """CF cell bounds written as data variables (lon_bnds/lat_bnds, no lat×lon
+    """CF cell bounds written as data variables (lon_bnds/lat_bnds, no latxlon
     dims) are not fields: no plot attempt, no error logged."""
     combo_dir = tmp_path / "3f9a1c2b7d4e8a01"
     combo_dir.mkdir()
@@ -259,3 +266,153 @@ def test_render_combo_plots_skips_bounds_variables(
     plots = combo_dir / "plots-overview"
     assert sorted(p.name for p in plots.iterdir()) == ["co__cece_20100101_010000.png"]
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+# ── the fallbacks: offline boundaries, missing scales, render failures ────────
+
+
+def _raise(*_: object, **__: object) -> None:
+    raise RuntimeError("boom")
+
+
+def test_spatial_plot_survives_missing_natural_earth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Offline: cartopy cannot fetch coastlines/borders; the map still renders.
+    from cartopy.mpl.geoaxes import GeoAxes
+
+    monkeypatch.setattr(GeoAxes, "coastlines", _raise)
+    monkeypatch.setattr(GeoAxes, "add_feature", _raise)
+    values = np.random.default_rng(1).random((1, 4, 5))
+    _write_nc(tmp_path / "a.nc", values, hour=1)
+    with caplog.at_level(logging.WARNING):
+        render_spatial_plot(
+            tmp_path / "a.nc",
+            "co",
+            VariableScale(variable="co", vmin=0.0, vmax=1.0),
+            tmp_path / "a.png",
+        )
+    assert (tmp_path / "a.png").is_file()
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("coastlines" in m for m in messages)
+    assert any("BORDERS" in m for m in messages)
+
+
+def test_spatial_plot_takes_the_first_level(tmp_path: Path) -> None:
+    dataset = xr.Dataset(
+        {"co": (("time", "lev", "lat", "lon"), np.ones((1, 2, 4, 5)))},
+        coords={
+            "time": pd.date_range("2010-01-01T01:00:00", periods=1, freq="h"),
+            "lev": [1.0, 2.0],
+            "lat": np.linspace(-90.0, 90.0, 4),
+            "lon": np.linspace(-180.0, 180.0, 5),
+        },
+    )
+    dataset.to_netcdf(tmp_path / "lev.nc", engine="netcdf4")
+    render_spatial_plot(
+        tmp_path / "lev.nc",
+        "co",
+        VariableScale(variable="co", vmin=0.0, vmax=1.0),
+        tmp_path / "lev.png",
+    )
+    assert (tmp_path / "lev.png").is_file()
+
+
+def test_bias_plot_survives_missing_natural_earth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from cartopy.mpl.geoaxes import GeoAxes
+
+    monkeypatch.setattr(GeoAxes, "coastlines", _raise)
+    monkeypatch.setattr(GeoAxes, "add_feature", _raise)
+    realization, baseline = tmp_path / "r", tmp_path / "b"
+    realization.mkdir()
+    baseline.mkdir()
+    _write_pair(realization, baseline, 0.5, hour=1)
+    with caplog.at_level(logging.WARNING):
+        render_bias_plot(
+            realization / "cece_20100101_010000.nc",
+            baseline / "cece_20100101_010000.nc",
+            "co",
+            VariableScale(variable="co", vmin=-1.0, vmax=1.0),
+            tmp_path / "bias.png",
+        )
+    assert (tmp_path / "bias.png").is_file()
+    assert sum("could not draw" in r.getMessage() for r in caplog.records) == 2
+
+
+def test_combo_plots_skip_without_files_or_scale(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    render_combo_plots(empty, {}, gif_enabled=True)
+    assert not (empty / PLOTS_DIRNAME).exists()
+    combo = tmp_path / "combo"
+    combo.mkdir()
+    _write_nc(combo / "cece_20100101_010000.nc", np.ones((1, 4, 5)), hour=1)
+    with caplog.at_level(logging.WARNING):
+        render_combo_plots(combo, {}, gif_enabled=True)  # no scale for co
+    assert any("no scale for variable co" in r.getMessage() for r in caplog.records)
+    assert not list((combo / PLOTS_DIRNAME).glob("*.png"))
+
+
+def test_combo_plots_log_render_and_gif_failures(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    combo = tmp_path / "combo"
+    combo.mkdir()
+    _write_nc(combo / "cece_20100101_010000.nc", np.ones((1, 4, 5)), hour=1)
+    scales = {"co": VariableScale(variable="co", vmin=0.0, vmax=1.0)}
+    mocker.patch("plotting.render_spatial_plot", side_effect=RuntimeError("png"))
+    with caplog.at_level(logging.ERROR):
+        render_combo_plots(combo, scales, gif_enabled=True)
+    assert any("failed to render" in r.getMessage() for r in caplog.records)
+    caplog.clear()
+    mocker.patch("plotting.render_spatial_plot")  # succeeds, writes nothing
+    mocker.patch("plotting.render_gif", side_effect=RuntimeError("gif"))
+    with caplog.at_level(logging.ERROR):
+        render_combo_plots(combo, scales, gif_enabled=True)
+    assert any("failed to render gif" in r.getMessage() for r in caplog.records)
+
+
+def test_render_all_plots_isolates_a_failing_combo(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    (tmp_path / "01JA").mkdir()
+    mocker.patch("plotting.render_combo_plots", side_effect=RuntimeError("combo"))
+    stats = _stats_frame([("co", 0.0, 1.0)]).assign(combo_id="01JA")
+    with caplog.at_level(logging.ERROR):
+        render_all_plots(tmp_path, stats, gif_enabled=False)
+    assert any("failed to render plots for" in r.getMessage() for r in caplog.records)
+
+
+def test_bias_plots_skip_fallbacks_and_log_failures(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    realization, baseline = tmp_path / "r", tmp_path / "b"
+    realization.mkdir()
+    baseline.mkdir()
+    render_combo_bias_plots(realization, baseline, {})  # no common files
+    assert not (realization / BIAS_PLOTS_DIRNAME).exists()
+    _write_pair(realization, baseline, 0.5, hour=1)
+    with caplog.at_level(logging.WARNING):
+        render_combo_bias_plots(realization, baseline, {})  # no bias scale
+    assert any("no bias scale" in r.getMessage() for r in caplog.records)
+    scales = {"co": VariableScale(variable="co", vmin=-1.0, vmax=1.0)}
+    mocker.patch("plotting.render_bias_plot", side_effect=RuntimeError("png"))
+    with caplog.at_level(logging.ERROR):
+        render_combo_bias_plots(realization, baseline, scales)
+    assert any("failed to render" in r.getMessage() for r in caplog.records)
+    caplog.clear()
+    mocker.patch("plotting.render_bias_plot")
+    mocker.patch("plotting.render_gif", side_effect=RuntimeError("gif"))
+    with caplog.at_level(logging.ERROR):
+        render_combo_bias_plots(realization, baseline, scales)
+    assert any("failed to render bias gif" in r.getMessage() for r in caplog.records)
+    caplog.clear()
+    mocker.patch("plotting.render_combo_bias_plots", side_effect=RuntimeError("x"))
+    frame = pd.DataFrame([{"variable": "co", "max_abs_diff": 0.5, "combo_id": "01JA"}])
+    with caplog.at_level(logging.ERROR):
+        render_all_bias_plots([(realization, baseline)], frame)
+    assert any("failed to render bias plots" in r.getMessage() for r in caplog.records)

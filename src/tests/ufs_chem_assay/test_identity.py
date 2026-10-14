@@ -6,6 +6,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 import pytest
+from pytest_mock import MockerFixture
 
 from identity import HARNESS_NAME, HARNESS_ROOT, harness_commit, harness_version
 
@@ -53,3 +54,19 @@ def test_harness_commit_is_null_with_a_warning_outside_git(
     with caplog.at_level(logging.WARNING, logger=f"{HARNESS_NAME}.identity"):
         assert harness_commit(tmp_path) is None
     assert any("not a git checkout" in record.message for record in caplog.records)
+
+
+def test_harness_version_unknown_when_not_installed(mocker: MockerFixture) -> None:
+    from importlib.metadata import PackageNotFoundError
+
+    mocker.patch("identity.version", side_effect=PackageNotFoundError("x"))
+    assert harness_version() == "unknown"
+
+
+def test_harness_commit_is_null_when_git_fails(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch("identity.subprocess.run", side_effect=OSError("no git"))
+    with caplog.at_level(logging.WARNING, logger=f"{HARNESS_NAME}.identity"):
+        assert harness_commit(tmp_path) is None
+    assert any("git failed" in record.message for record in caplog.records)

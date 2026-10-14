@@ -11,7 +11,7 @@ from platforms import Platform, Runtime, detect_platform
 from settings import Settings
 
 
-@pytest.fixture()
+@pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> pytest.MonkeyPatch:
     for prefix in ("ASSAY_", "CECE_"):
         for key in ("PLATFORM", "RUNTIME", "LAUNCHER"):

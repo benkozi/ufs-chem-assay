@@ -97,7 +97,9 @@ def test_dry_run_generates_everything_but_never_executes(tmp_path: Path) -> None
     assert len(combos) == 6 * 3
     assert set(combos["suite"]) == {"simple-maccity"}
     swept = combos[combos["swept"]]
-    assert set(zip(swept["target"], swept["field"])) == {("MACCITY", "mapalgo")}
+    assert set(zip(swept["target"], swept["field"], strict=False)) == {
+        ("MACCITY", "mapalgo")
+    }
     for combo_id in combo_ids:
         assert len(combo_id) == 26  # runtime ULID directory names
         assert (root / combo_id / f"{combo_id}.yaml").is_file()
@@ -230,15 +232,14 @@ def test_slurm_dry_run_writes_a_job_script_per_combo(tmp_path: Path) -> None:
         assert script.is_file()
         text = script.read_text()
         assert f"#SBATCH --output={combo_dir}/{combo_dir.name}.out" in text
-        assert "#SBATCH -A epic" in text and "module load cece_ursa.intelllvm" in text
+        assert "#SBATCH -A epic" in text
+        assert "module load cece_ursa.intelllvm" in text
         assert text.rstrip().endswith(
             f"srun --ntasks=1 ./build/cece_standalone_driver {combo_dir}/{combo_dir.name}.yaml"
         )
     manifest = yaml.safe_load((root / "run.yaml").read_text())
-    assert (
-        manifest["runtime"] == "slurm"
-        and manifest["modulefile"] == "cece_ursa.intelllvm"
-    )
+    assert manifest["runtime"] == "slurm"
+    assert manifest["modulefile"] == "cece_ursa.intelllvm"
     assert not list(root.rglob("*.out"))  # nothing submitted
 
 
@@ -273,7 +274,8 @@ def test_slurm_dry_run_without_a_checkout_writes_no_job_scripts(tmp_path: Path) 
     assert "21 skipped" in result.stdout
     assert not list((tmp_path / "bt").rglob("*.sbatch"))
     manifest = yaml.safe_load(next((tmp_path / "bt").rglob("run.yaml")).read_text())
-    assert manifest["runtime"] == "slurm" and manifest["application_commit"] is None
+    assert manifest["runtime"] == "slurm"
+    assert manifest["application_commit"] is None
 
 
 @pytest.mark.parametrize("how", ["flag", "env"])
@@ -472,7 +474,8 @@ def test_publish_baselines_fails_fast_at_session_start_without_network(
     result = _pytest(tmp_path, env, "--publish-baselines")
     assert result.returncode != 0
     output = result.stdout + result.stderr
-    assert "no network" in output and "publish-baselines --output-root" in output
+    assert "no network" in output
+    assert "publish-baselines --output-root" in output
     assert not (tmp_path / "combo_runs" / "run.yaml").exists()  # nothing ran
 
 

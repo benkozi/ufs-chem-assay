@@ -25,7 +25,7 @@ _SCRUBBED = (
 )
 
 
-@pytest.fixture()
+@pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> pytest.MonkeyPatch:
     for prefix in (ENV_PREFIX, LEGACY_ENV_PREFIX):
         for key in _SCRUBBED:
@@ -36,7 +36,8 @@ def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> pytest.MonkeyP
 
 
 def test_prefixes() -> None:
-    assert ENV_PREFIX == "ASSAY_" and LEGACY_ENV_PREFIX == "CECE_"
+    assert ENV_PREFIX == "ASSAY_"
+    assert LEGACY_ENV_PREFIX == "CECE_"
 
 
 def test_no_application_settings_on_the_harness_model(
