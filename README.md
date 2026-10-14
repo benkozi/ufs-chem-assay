@@ -87,7 +87,8 @@ uv run pre-commit run --all-files  # everything the commit hook runs: ruff check
 uv run pytest src/tests/test_driver_combos.py --dry-run
 
 # stage the inputs the selected suites declare (inputs:) into <CECE_ROOT_DIR>/data —
-# a present file with the declared sha256 is skipped without touching the network;
+# a present file with the declared sha256 is skipped without touching the network —
+# and the baselines they pin into ASSAY_BASELINE_ROOT_DIR (unless comparisons are off);
 # --dry-run lists what is present and what would be fetched, and moves nothing
 uv run ufs-chem-assay fetch --suite-config=simple-maccity-suite.yaml --dry-run
 uv run ufs-chem-assay fetch --suite-config=simple-maccity-suite.yaml
@@ -248,6 +249,18 @@ Options:
   the missing files and the `ufs-chem-assay fetch --suite-config=…`
   command that stages them. `run.yaml` records every declared input as
   found at session start (path, source, declared `sha256`, size or null).
+- Baselines, unlike inputs, **are** synced by the session: at session
+  start every ULID the selected suites pin that is absent from
+  `ASSAY_BASELINE_ROOT_DIR` is fetched from `ASSAY_BASELINE_STORE` into
+  `<root>/<ulid>/` (one reentrant `aws s3 sync` per baseline, or a copy
+  from a directory store); present ones are used as is with no network.
+  A missing baseline that cannot be synced (no network, not in the
+  store, no baseline root configured) fails that comparison test with
+  the reason — the session itself runs. `ufs-chem-assay fetch` stages the
+  same baselines too, the pre-warm for a session that will run without
+  network. `--dry-run` classifies without syncing. `run.yaml` records
+  every pinned baseline's state (`local`, `synced`, `would-sync`,
+  `failed`).
 
 ## S3 data sync
 
@@ -587,8 +600,10 @@ directory per combination:
                                  #   when not run from a git checkout); platform,
                                  #   runtime, modulefile; every resolved suite in
                                  #   selection order (one-element list when single);
-                                 #   and every declared input as found at session
-                                 #   start (suite, url, path, sha256, bytes or null)
+                                 #   every declared input as found at session start
+                                 #   (suite, url, path, sha256, bytes or null); and
+                                 #   every pinned baseline as found or synced (suite,
+                                 #   ulid, source, path, state, detail)
   combos.csv                     # effective-parameter table: one row per sweepable
                                  #   dimension per combo (columns: run_id, combo_id,
                                  #   application, suite, name, target, field, value, swept)
@@ -673,7 +688,7 @@ Harness-wide:
 | `ASSAY_RUN_TIMEOUT_S`           | caps the suite `timeout_s` when smaller        | `300`                            |
 | `ASSAY_LOG_LEVEL`               | runner log level (`DEBUG`, `INFO`, ...)        | `INFO`                           |
 | `ASSAY_DASK_NWORKERS`           | dask workers for the stats cluster (int > 0)   | unset → all available cores      |
-| `ASSAY_BASELINE_ROOT_DIR`       | baselines live at `<root>/<ulid>/`             | unset → current working directory |
+| `ASSAY_BASELINE_ROOT_DIR`       | baselines live at `<root>/<ulid>/`; absent ones are synced there from the store at session start (and by `fetch`); unset means read-only from the cwd, nothing is synced | unset → current working directory |
 | `ASSAY_ENABLE_BASELINE_COMPARISONS` | global switch; `false` skips comparison tests | `true`                          |
 | `ASSAY_BASELINE_STORE`          | where `publish-baselines` writes `<store>/<ulid>/` (append-only): an `s3://bucket/prefix` (never a bucket root) or a local directory | `s3://ufs-chem/baselines` |
 | `ASSAY_CONFIG_SEARCH_PATH`      | prepended to relative `config_path` values     | unset                            |

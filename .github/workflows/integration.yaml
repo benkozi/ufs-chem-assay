@@ -124,6 +124,9 @@ jobs:
       - name: Stage the suite's inputs
         env:
           CECE_ROOT_DIR: ${{ github.workspace }}/cece
+          # fetch would otherwise also stage the pinned baselines from the
+          # private store (no credentials here).
+          ASSAY_ENABLE_BASELINE_COMPARISONS: 'false'
         run: |
           uv sync --frozen
           uv run ufs-chem-assay fetch --suite-config=simple-maccity-suite.yaml

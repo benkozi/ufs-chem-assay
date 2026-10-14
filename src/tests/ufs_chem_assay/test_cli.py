@@ -17,6 +17,7 @@ from applications.registry import REGISTRY
 from cli.main import main
 from logs import LOGGER_NAME
 from s3_sync import S3SyncConfig
+from baselines import BaselineState, StagedBaseline
 from staging import Action, StagedInput
 from tests.ufs_chem_assay.baseline_runs import Run, fabricate_run, fake_sync
 from tests.ufs_chem_assay.stubs import stub_application
@@ -322,13 +323,25 @@ _MACCITY_SHA = "ef70975af53499ab45f620a778043ff6fd29ec4e7e2777f3fd1f2db59a12aab9
 
 @pytest.fixture()
 def fetch_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cece_config_path: Path
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mocker: MockerFixture,
+    cece_config_path: Path,
 ) -> Path:
     """A neutral cwd (the repo .env out of scope), a fabricated checkout as
-    CECE_ROOT_DIR, and a suite root with two suites declaring inputs."""
+    CECE_ROOT_DIR, a suite root with two suites declaring inputs, and the
+    baseline staging mocked out (a test that wants it patches it again)."""
     monkeypatch.chdir(tmp_path)
-    for key in ("CECE_ROOT_DIR", "ASSAY_SUITE_CONFIG_SEARCH_PATH", "ASSAY_APPLICATION"):
+    for key in (
+        "CECE_ROOT_DIR",
+        "ASSAY_SUITE_CONFIG_SEARCH_PATH",
+        "ASSAY_APPLICATION",
+        "ASSAY_BASELINE_ROOT_DIR",
+        "ASSAY_BASELINE_STORE",
+        "ASSAY_ENABLE_BASELINE_COMPARISONS",
+    ):
         monkeypatch.delenv(key, raising=False)
+    mocker.patch("cli.main.ensure_baselines", return_value=[])
     checkout = tmp_path / "checkout"
     (checkout / "data").mkdir(parents=True)
     suites = tmp_path / "suites"
@@ -650,3 +663,65 @@ def test_publish_baselines_to_a_directory_never_probes_the_network(
         == 0
     )
     probe.assert_not_called()
+
+
+# ── fetch stages baselines too ──────────────────────────────────────────────
+
+
+def _staged_baseline(ulid: str, state: BaselineState) -> StagedBaseline:
+    return StagedBaseline(
+        suite="one",
+        ulid=ulid,
+        source="s",
+        path=Path("/b") / ulid,
+        state=state,
+        detail="d",
+    )
+
+
+@pytest.mark.usefixtures("fetch_env")
+def test_fetch_stages_the_pinned_baselines_after_the_inputs(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ASSAY_BASELINE_ROOT_DIR", "/baselines")
+    monkeypatch.setenv("ASSAY_BASELINE_STORE", "s3://bkt/p")
+    mocker.patch("cli.main.stage_inputs", return_value=[])
+    ensure = mocker.patch(
+        "cli.main.ensure_baselines", return_value=[_staged_baseline("01JX", "synced")]
+    )
+    assert main(["fetch", "--suite-config=one-suite.yaml", "--dry-run"]) == 0
+    ensure.assert_called_once()
+    suites, store, root = ensure.call_args.args
+    assert [s.name for s in suites] == ["one"]
+    assert store == "s3://bkt/p" and root == Path("/baselines")
+    assert ensure.call_args.kwargs == {"dry_run": True}
+
+
+@pytest.mark.usefixtures("fetch_env")
+def test_fetch_skips_baselines_when_comparisons_are_disabled(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ASSAY_ENABLE_BASELINE_COMPARISONS", "false")
+    mocker.patch("cli.main.stage_inputs", return_value=[])
+    ensure = mocker.patch("cli.main.ensure_baselines")
+    assert main(["fetch", "--suite-config=one-suite.yaml"]) == 0
+    ensure.assert_not_called()
+
+
+@pytest.mark.usefixtures("fetch_env")
+def test_fetch_exit_code_covers_failed_baselines(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch("cli.main.stage_inputs", return_value=[])
+    mocker.patch(
+        "cli.main.ensure_baselines",
+        return_value=[
+            _staged_baseline("01JX", "failed"),
+            _staged_baseline("01JY", "local"),
+        ],
+    )
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["fetch", "--suite-config=one-suite.yaml"])
+    assert code == 1
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("baseline summary: 1 local, 1 failed" in m for m in messages)

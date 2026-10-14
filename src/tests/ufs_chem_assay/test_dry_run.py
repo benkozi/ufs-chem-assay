@@ -484,3 +484,61 @@ def test_directory_store_needs_no_network_at_session_start(tmp_path: Path) -> No
     env["ASSAY_BASELINE_STORE"] = str(store)
     result = _pytest(tmp_path, env, "--publish-baselines")
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _pinned_ulids() -> list[str]:
+    suite = _RUNNER_ROOT / "src/tests/config/cece/maccity/simple-maccity-suite.yaml"
+    return [
+        line.split("ulid:")[1].strip()
+        for line in suite.read_text().splitlines()
+        if line.strip().startswith("ulid:")
+    ]
+
+
+def test_session_start_syncs_missing_baselines_from_the_store(tmp_path: Path) -> None:
+    """A real session (no --dry-run): at session start the pinned ULIDs
+    absent from the baseline root are synced from the store — here a
+    directory store, so no network — before anything else. Collection
+    then fails on the fabricated checkout's missing inputs, which is fine:
+    the sync happened, and run.yaml is not the thing under test."""
+    env = _fabricated_checkout(tmp_path)
+    store = tmp_path / "store"
+    for ulid in _pinned_ulids():
+        (store / ulid).mkdir(parents=True)
+        (store / ulid / "cece_20100101_010000.nc").write_bytes(b"nc")
+        (store / ulid / "baseline.yaml").write_text(f"ulid: {ulid}\n")
+    root = tmp_path / "baseline-root"
+    env["ASSAY_BASELINE_STORE"] = str(store)
+    env["ASSAY_BASELINE_ROOT_DIR"] = str(root)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(_RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"),
+            "--combo-output-root=combo_runs",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode != 0  # the missing inputs, at collection
+    assert "declared inputs are missing" in result.stdout + result.stderr
+    assert sorted(p.name for p in root.iterdir()) == sorted(_pinned_ulids())
+    assert all((root / u / "baseline.yaml").is_file() for u in _pinned_ulids())
+
+
+def test_dry_run_records_baseline_states_without_syncing(tmp_path: Path) -> None:
+    env = _fabricated_checkout(tmp_path)
+    env["ASSAY_BASELINE_ROOT_DIR"] = str(tmp_path / "baseline-root")
+    result = _pytest(tmp_path, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    manifest = yaml.safe_load((tmp_path / "combo_runs" / "run.yaml").read_text())
+    assert [b["state"] for b in manifest["baselines"]] == ["would-sync"] * 3
+    assert sorted(b["ulid"] for b in manifest["baselines"]) == sorted(_pinned_ulids())
+    assert not (tmp_path / "baseline-root").exists()

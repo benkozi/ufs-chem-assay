@@ -341,6 +341,21 @@ class RecordedInput(StrictModel):
     )
 
 
+class RecordedBaseline(StrictModel):
+    """One pinned baseline as the session found or staged it at start
+    (run.yaml): local, synced from the store, would-sync (dry run), or
+    failed with the reason."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    suite: str = Field(description="Suite that pins the baseline")
+    ulid: str = Field(description="The baseline's ULID")
+    source: str = Field(description="Where it is synced from: <store>/<ulid>")
+    path: Path = Field(description="Where the session reads it: <baseline root>/<ulid>")
+    state: str = Field(description="local, synced, would-sync, or failed")
+    detail: str = Field(description="Why: present, synced, or the error")
+
+
 class RunManifest(StrictModel):
     """Output-only record of one test run, written to the output root as
     run.yaml. The run_id is generated at runtime (never read from
@@ -387,6 +402,13 @@ class RunManifest(StrictModel):
     inputs: list[RecordedInput] = Field(
         default_factory=list,
         description="Every selected suite's declared inputs as found at session start",
+    )
+    baselines: list[RecordedBaseline] = Field(
+        default_factory=list,
+        description=(
+            "Every pinned baseline as found or staged at session start (empty "
+            "when comparisons are disabled)"
+        ),
     )
 
     @field_validator("suites", mode="before")

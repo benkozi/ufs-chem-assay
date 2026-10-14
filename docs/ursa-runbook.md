@@ -128,8 +128,11 @@ stages them into `$ROOT/CECE/data` through the AWS CLI, anonymously for
 public buckets (the MACCity file, the only input `simple-maccity` reads,
 comes from the public `geos-chem` bucket — no AWS account needed). A file
 already present with the declared `sha256` is skipped without touching the
-network, so re-running is free. The data stage of the run config does the
-same.
+network, so re-running is free. With `baselines.enabled: true` (or
+`ASSAY_ENABLE_BASELINE_COMPARISONS=true`) and a `baselines.root_dir`,
+`fetch` also pulls the baselines the suite pins from the store into that
+root — the login node pre-warming what the session will compare against.
+The data stage of the run config does the same.
 
 ## 6. Render and read the scripts
 

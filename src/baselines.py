@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import getpass
 import hashlib
+import os
 import re
 import shutil
 import socket
@@ -45,10 +46,15 @@ from combos import enumerate_combos
 from comparison import resolve_baseline_comparisons
 from logs import get_logger
 from models.base import StrictModel
-from models.suite_config import BaselineComparison, RunManifest, SuiteConfig
+from models.suite_config import (
+    BaselineComparison,
+    RecordedBaseline,
+    RunManifest,
+    SuiteConfig,
+)
 from platforms import Platform, Runtime
 from report import TestReportRow
-from s3_sync import S3SyncConfig, sync
+from s3_sync import S3SyncConfig, check_reachable, sync
 
 logger = get_logger("baselines")
 
@@ -671,6 +677,158 @@ def publish_session(
         dry_run=False,
         suite_update=suite_update,
     )
+
+
+# ── the download half: ensure_baselines ──────────────────────────────────────
+
+BaselineState = Literal["local", "synced", "would-sync", "failed"]
+_STAGING_DIRNAME = ".staging"
+
+
+class StagedBaseline(StrictModel):
+    """What ensure_baselines found or did for one pinned ULID."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    suite: str = Field(description="Suite that pins the baseline")
+    ulid: str = Field(description="The baseline's ULID")
+    source: str = Field(description="Where it is synced from: <store>/<ulid>")
+    path: Path = Field(description="Where the session reads it: <baseline root>/<ulid>")
+    state: BaselineState = Field(
+        description=(
+            "local: present, nothing done; synced: fetched from the store into "
+            "place; would-sync: a dry run's plan; failed: see detail"
+        )
+    )
+    detail: str = Field(description="Why: present, synced, or the error")
+
+    def recorded(self) -> RecordedBaseline:
+        return RecordedBaseline(**self.model_dump())
+
+
+def _source(store: str, ulid: str) -> str:
+    return f"{store}/{ulid}/" if store.startswith("s3://") else str(Path(store) / ulid)
+
+
+def _sync_baseline(store: str, ulid: str, staging_dir: Path) -> str | None:
+    """Bring <store>/<ulid> into staging_dir; the error to report, or None."""
+    if not store.startswith("s3://"):
+        source = Path(store) / ulid
+        if not source.is_dir():
+            return f"{ulid} is not in the store {store}"
+        shutil.copytree(source, staging_dir)
+        return None
+    try:
+        sync(
+            S3SyncConfig(
+                source=_source(store, ulid),
+                destination=staging_dir,
+                only_show_errors=True,
+            )
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        return _error_detail(exc)
+    if not any(staging_dir.glob("*.nc")):
+        # aws exits 0 and downloads nothing for a prefix that does not exist.
+        return f"{ulid} is not in the store {store} (nothing downloaded)"
+    return None
+
+
+def ensure_baselines(
+    suites: Sequence[SuiteConfig],
+    store: str,
+    baseline_root: Path | None,
+    *,
+    dry_run: bool = False,
+) -> list[StagedBaseline]:
+    """Every ULID the suites pin, present under baseline_root: a present
+    directory is used as is (no network); an absent one is synced from the
+    store — S3 through the wrapper (one reentrant sync into a staging
+    directory, moved into place only when it holds NetCDF), a directory
+    store by copy. The store is probed once, only when a sync is needed; no
+    network means every absent baseline fails naming `fetch`. A dry run
+    classifies without touching the network or the disk. With no baseline
+    root nothing is written (the harness never writes into the cwd) and an
+    absent baseline fails naming the setting. Never raises for one
+    baseline's failure."""
+    seen: set[str] = set()
+    pinned: list[tuple[str, str]] = []
+    for suite in suites:
+        for entry in suite.baseline_comparisons:
+            if entry.ulid not in seen:
+                seen.add(entry.ulid)
+                pinned.append((suite.name, entry.ulid))
+    root = baseline_root if baseline_root is not None else Path.cwd()
+    results: list[StagedBaseline] = []
+    reachable: bool | None = None  # probed lazily, once
+    unreachable_detail = ""
+    staging_root = root / _STAGING_DIRNAME
+    for suite_name, ulid in pinned:
+        path = root / ulid
+        source = _source(store, ulid)
+
+        def staged(state: BaselineState, detail: str) -> StagedBaseline:
+            return StagedBaseline(
+                suite=suite_name,
+                ulid=ulid,
+                source=source,
+                path=path,
+                state=state,
+                detail=detail,
+            )
+
+        if path.is_dir():
+            results.append(staged("local", "present"))
+            continue
+        if baseline_root is None:
+            results.append(
+                staged(
+                    "failed",
+                    (
+                        f"baseline {ulid} is absent and ASSAY_BASELINE_ROOT_DIR is unset: "
+                        "set it to let the harness sync baselines there"
+                    ),
+                )
+            )
+            continue
+        if dry_run:
+            results.append(staged("would-sync", "absent; would sync"))
+            continue
+        if reachable is None and store.startswith("s3://"):
+            try:
+                check_reachable(store)
+                reachable = True
+            except ConnectionError as exc:
+                reachable = False
+                unreachable_detail = str(exc)
+        if reachable is False:
+            results.append(
+                staged(
+                    "failed",
+                    (
+                        f"{unreachable_detail}; stage baselines from a node with "
+                        "network: ufs-chem-assay fetch"
+                    ),
+                )
+            )
+            continue
+        staging_dir = staging_root / ulid
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+        staging_dir.parent.mkdir(parents=True, exist_ok=True)
+        error = _sync_baseline(store, ulid, staging_dir)
+        if error is not None:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            logger.error("baseline %s: %s", ulid, error)
+            results.append(staged("failed", error))
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(staging_dir, path)
+        logger.info("baseline %s synced from %s to %s", ulid, source, path)
+        results.append(staged("synced", f"synced from {store}"))
+    if staging_root.exists():
+        shutil.rmtree(staging_root, ignore_errors=True)
+    return results
 
 
 # ── the suite edit ────────────────────────────────────────────────────────────

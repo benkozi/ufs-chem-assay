@@ -26,7 +26,7 @@ import yaml
 
 from applications.base import Application
 from applications.registry import get_application
-from baselines import default_selector, load_run, plan, publish
+from baselines import default_selector, ensure_baselines, load_run, plan, publish
 from cli.run_config import RunConfig
 from cli.shell import run_bash, write_script
 from cli.stages import Stage, render_stage
@@ -350,7 +350,32 @@ def _fetch(args: argparse.Namespace) -> int:
         "fetch summary: %s",
         ", ".join(f"{count} {action}" for action, count in counts.items() if count),
     )
-    return 1 if failed else 0
+    # The pinned baselines too, into the baseline root (the pre-warm a
+    # login node does for a session that may run without network); skipped
+    # when comparisons are off (CI: no credentials for the private store).
+    failed_baselines = 0
+    if settings.enable_baseline_comparisons:
+        staged = ensure_baselines(
+            [suite for _, suite in resolved.suites],
+            settings.baseline_store,
+            settings.baseline_root_dir,
+            dry_run=args.dry_run,
+        )
+        for baseline in staged:
+            (logger.error if baseline.state == "failed" else logger.info)(
+                "baseline %s: %s (%s)", baseline.ulid, baseline.state, baseline.detail
+            )
+        states = {
+            state: sum(1 for r in staged if r.state == state)
+            for state in ("local", "synced", "would-sync", "failed")
+        }
+        logger.info(
+            "baseline summary: %s",
+            ", ".join(f"{count} {state}" for state, count in states.items() if count)
+            or "none pinned",
+        )
+        failed_baselines = states["failed"]
+    return 1 if failed or failed_baselines else 0
 
 
 def _publish_baselines(args: argparse.Namespace) -> int:

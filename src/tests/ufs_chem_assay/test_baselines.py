@@ -22,6 +22,7 @@ from baselines import (
     BaselineManifest,
     PublishRecord,
     default_selector,
+    ensure_baselines,
     load_run,
     plan,
     publish,
@@ -560,3 +561,163 @@ def test_rewrite_restores_the_file_when_the_reload_differs(run: Run) -> None:
     with pytest.raises(ValueError, match="reload"):
         rewrite_suite_ulid(run.suite_path, PREVIOUS_ULIDS[1], "not a ulid: [")
     assert run.suite_path.read_text() == before
+
+
+# ── the download half: ensure_baselines ──────────────────────────────────────
+
+
+def _ulids(run: Run) -> list[str]:
+    return [e.ulid for e in run.suite.baseline_comparisons]
+
+
+def _store_dir_with(tmp_path: Path, ulids: list[str]) -> Path:
+    store = tmp_path / "store"
+    for ulid in ulids:
+        (store / ulid / "plots-overview").mkdir(parents=True)
+        (store / ulid / "cece_20100101_010000.nc").write_bytes(b"nc " + ulid.encode())
+        (store / ulid / BASELINE_MANIFEST).write_text(f"ulid: {ulid}\nstore: x\n")
+    return store
+
+
+def test_present_baselines_are_local_and_never_touch_the_network(
+    run: Run, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    root = tmp_path / "root"
+    for ulid in _ulids(run):
+        (root / ulid).mkdir(parents=True)
+    probe = mocker.patch("baselines.check_reachable")
+    sync = mocker.patch("baselines.sync")
+    results = ensure_baselines([run.suite], _STORE, root)
+    assert [r.state for r in results] == ["local"] * 3
+    assert [r.ulid for r in results] == _ulids(run)
+    assert all(r.path == root / r.ulid and r.suite == "simple-maccity" for r in results)
+    probe.assert_not_called()
+    sync.assert_not_called()
+
+
+def test_absent_baselines_are_synced_from_s3_into_place(
+    run: Run, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    root = tmp_path / "root"
+    probe = mocker.patch("baselines.check_reachable")
+
+    def fake(config: S3SyncConfig) -> S3SyncResult:
+        assert isinstance(config.destination, Path)
+        assert config.destination.parent == root / ".staging"
+        config.destination.mkdir(parents=True, exist_ok=True)
+        (config.destination / "cece_a.nc").write_bytes(b"nc")
+        (config.destination / BASELINE_MANIFEST).write_text("ulid: x\n")
+        return S3SyncResult(argv=config.argv, returncode=0, output="", dry_run=False)
+
+    sync = mocker.patch("baselines.sync", side_effect=fake)
+    results = ensure_baselines([run.suite], _STORE, root)
+    assert [r.state for r in results] == ["synced"] * 3
+    probe.assert_called_once_with(_STORE)
+    calls = [call.args[0] for call in sync.call_args_list]
+    assert [c.source for c in calls] == [f"{_STORE}/{u}/" for u in _ulids(run)]
+    assert all(c.only_show_errors and not c.dry_run and not c.delete for c in calls)
+    for result in results:
+        assert (root / result.ulid / "cece_a.nc").read_bytes() == b"nc"
+        assert result.source == f"{_STORE}/{result.ulid}/"
+    assert not (root / ".staging").exists()
+
+
+def test_a_ulid_pinned_by_two_suites_is_synced_once(
+    run: Run, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    root = tmp_path / "root"
+    mocker.patch("baselines.check_reachable")
+    mocker.patch("baselines.sync", side_effect=fake_sync())
+    results = ensure_baselines([run.suite, run.suite], _STORE, root, dry_run=True)
+    assert len(results) == 3
+
+
+def test_missing_in_the_store_and_sync_failures_are_recorded(
+    run: Run, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    import subprocess
+
+    root = tmp_path / "root"
+    mocker.patch("baselines.check_reachable")
+    ulids = _ulids(run)
+
+    def fake(config: S3SyncConfig) -> S3SyncResult:
+        if ulids[1] in str(config.source):
+            raise subprocess.CalledProcessError(1, ["aws"], output="x\nAccessDenied\n")
+        # ulids[0] and [2]: nothing downloaded (no such prefix) -> empty dir
+        return S3SyncResult(argv=config.argv, returncode=0, output="", dry_run=False)
+
+    mocker.patch("baselines.sync", side_effect=fake)
+    results = ensure_baselines([run.suite], _STORE, root)
+    assert [r.state for r in results] == ["failed"] * 3
+    assert "not in the store" in results[0].detail
+    assert "AccessDenied" in results[1].detail
+    assert not any((root / u).exists() for u in ulids)
+    assert not (root / ".staging").exists()
+
+
+def test_no_baseline_root_means_nothing_is_written(
+    run: Run, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    probe = mocker.patch("baselines.check_reachable")
+    sync = mocker.patch("baselines.sync")
+    results = ensure_baselines([run.suite], _STORE, None)
+    assert [r.state for r in results] == ["failed"] * 3
+    assert all("ASSAY_BASELINE_ROOT_DIR" in r.detail for r in results)
+    assert all(r.path == tmp_path / r.ulid for r in results)
+    probe.assert_not_called()
+    sync.assert_not_called()
+    assert not any((tmp_path / r.ulid).exists() for r in results)
+    assert not (tmp_path / ".staging").exists()
+
+
+def test_unreachable_store_fails_every_absent_baseline_naming_fetch(
+    run: Run, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    root = tmp_path / "root"
+    (root / _ulids(run)[0]).mkdir(parents=True)
+    mocker.patch("baselines.check_reachable", side_effect=ConnectionError("no network"))
+    sync = mocker.patch("baselines.sync")
+    results = ensure_baselines([run.suite], _STORE, root)
+    assert [r.state for r in results] == ["local", "failed", "failed"]
+    assert all("no network" in r.detail and "fetch" in r.detail for r in results[1:])
+    sync.assert_not_called()
+
+
+def test_dry_run_classifies_without_the_network(
+    run: Run, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    root = tmp_path / "root"
+    (root / _ulids(run)[2]).mkdir(parents=True)
+    probe = mocker.patch("baselines.check_reachable")
+    sync = mocker.patch("baselines.sync")
+    results = ensure_baselines([run.suite], _STORE, root, dry_run=True)
+    assert [r.state for r in results] == ["would-sync", "would-sync", "local"]
+    probe.assert_not_called()
+    sync.assert_not_called()
+    assert sorted(p.name for p in root.iterdir()) == [_ulids(run)[2]]
+
+
+def test_directory_store_baselines_are_copied(
+    run: Run, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    ulids = _ulids(run)
+    store = _store_dir_with(tmp_path, ulids[:2])  # the third is not in the store
+    root = tmp_path / "root"
+    probe = mocker.patch("baselines.check_reachable")
+    sync = mocker.patch("baselines.sync")
+    results = ensure_baselines([run.suite], str(store), root)
+    assert [r.state for r in results] == ["synced", "synced", "failed"]
+    assert "not in the store" in results[2].detail
+    for ulid in ulids[:2]:
+        assert (root / ulid / "plots-overview").is_dir()
+        assert (root / ulid / BASELINE_MANIFEST).is_file()
+    probe.assert_not_called()
+    sync.assert_not_called()
+
+
+def test_directory_store_that_is_the_root_is_local(run: Run, tmp_path: Path) -> None:
+    store = _store_dir_with(tmp_path, _ulids(run))
+    results = ensure_baselines([run.suite], str(store), store)
+    assert [r.state for r in results] == ["local"] * 3

@@ -9,7 +9,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, InstanceOf
 
 from analysis import RunContext, concatenate_stats_csvs
-from baselines import SuiteInput, publish_session
+from baselines import StagedBaseline, SuiteInput, ensure_baselines, publish_session
 from applications.base import Application, ApplicationSettings, DriverConfig
 from combos import Combo, ParameterRow, enumerate_combos, write_combos_csv
 from comparison import concatenate_comparison_csvs, resolve_baseline_comparisons
@@ -102,6 +102,7 @@ _SUITE_CONTEXTS = pytest.StashKey[list[SuiteContext]]()
 _EXPLICIT_ROOTS = pytest.StashKey[ComboRoots | None]()
 _REALIZED_ROOTS = pytest.StashKey[ComboRoots]()
 _REPORT_ROWS = pytest.StashKey[dict[str, TestReportRow]]()
+_BASELINE_STATES = pytest.StashKey[dict[str, StagedBaseline]]()  # by ULID
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -298,6 +299,24 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     config.stash[_APPLICATION] = app
     config.stash[_APP_SETTINGS] = app_settings
     config.stash[_SUITE_CONTEXTS] = contexts
+    # The pinned baselines: present ones are used as is; absent ones are
+    # synced from the store now — the one deliberate case of the session
+    # touching the network (baselines are the harness's own small,
+    # immutable artifacts; inputs are the driver's and never fetched here).
+    # A dry run classifies only; comparisons off means nothing is looked at.
+    states: dict[str, StagedBaseline] = {}
+    if settings.enable_baseline_comparisons:
+        for staged in ensure_baselines(
+            [context.suite for context in contexts],
+            settings.baseline_store,
+            settings.baseline_root_dir,
+            dry_run=bool(config.getoption("--dry-run")),
+        ):
+            states[staged.ulid] = staged
+            (logger.error if staged.state == "failed" else logger.info)(
+                "baseline %s: %s (%s)", staged.ulid, staged.state, staged.detail
+            )
+    config.stash[_BASELINE_STATES] = states
     config.stash[_EXPLICIT_ROOTS] = roots
     # test-report.csv rows, keyed by nodeid in execution order; filled by the
     # pytest_runtest_makereport wrapper below.
@@ -559,6 +578,12 @@ def suite_analysis(request: pytest.FixtureRequest) -> Analysis:
 
 
 @pytest.fixture()
+def baseline_states(request: pytest.FixtureRequest) -> dict[str, StagedBaseline]:
+    """Every pinned baseline as found or staged at session start, by ULID."""
+    return request.config.stash[_BASELINE_STATES]
+
+
+@pytest.fixture()
 def baseline_comparisons(
     request: pytest.FixtureRequest,
 ) -> dict[str, BaselineComparison]:
@@ -648,6 +673,10 @@ def combo_roots(
         modulefile=request.config.stash[_APP_SETTINGS].modulefile,
         suites=[context.suite for context in request.config.stash[_SUITE_CONTEXTS]],
         inputs=inputs,
+        baselines=[
+            staged.recorded()
+            for staged in request.config.stash[_BASELINE_STATES].values()
+        ],
     )
     manifest.to_yaml(roots.host / "run.yaml")
     return roots

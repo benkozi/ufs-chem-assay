@@ -60,24 +60,26 @@ the harness test package `src/tests/ufs_chem_assay/`. See
   the run config — there is no command-line flag) and mounted at the
   adapter's container workdir (`/work` for CECE) in the driver container (see
   `design/fix/20260717-1029-portability-external-cece/20260717-1029-portability-external-cece.md`).
-- **No online baseline retrieval yet** — the session reads baselines as
-  local directories keyed by ULID under `ASSAY_BASELINE_ROOT_DIR` (see
-  `design/feat/20260716-1113-compare-with-baseline/20260716-1113-compare-with-baseline.md`); no stats-CSV
-  diffing (the comparison targets the NetCDF files themselves). The
-  *upload* half exists since 2026-10-08 (see Baselines below): a published
-  baseline carries a `baseline.yaml` manifest, which is the marker the
-  download half will use; downloading a pinned ULID the session lacks
-  locally remains the deferred follow-up (the baseline-sync design doc's
-  Future work). The transport is `s3_sync.py`, a stand-alone `aws s3 sync`
-  wrapper (S3 data sync below;
+- No stats-CSV diffing — the comparison targets the NetCDF files
+  themselves (see
+  `design/feat/20260716-1113-compare-with-baseline/20260716-1113-compare-with-baseline.md`).
+  Baselines are read as local directories keyed by ULID under
+  `ASSAY_BASELINE_ROOT_DIR`; both halves of the store round trip exist
+  since 2026-10-08/14 (Baselines below): publishing, and syncing a pinned
+  ULID the session lacks locally. The transport is `s3_sync.py`, a
+  stand-alone `aws s3 sync` wrapper (S3 data sync below;
   `design/feat/20261006-1710-basic-s3-auth/20261006-1710-basic-s3-auth.md`),
-  whose callers are `ufs-chem-assay fetch` (inputs) and
-  `ufs-chem-assay publish-baselines`.
-- **The session never downloads.** Inputs are declared by the suite and
-  staged by the CLI's `fetch` (the run config's `data` stage calls it);
-  a session whose declared inputs are absent fails at collection, naming
-  the command. Ursa's compute nodes have no network, and a test that
-  silently fetches would hide a provisioning step.
+  whose callers are `ufs-chem-assay fetch` (inputs and baselines),
+  `ufs-chem-assay publish-baselines`, and the session (baselines only).
+- **The session never downloads inputs.** Inputs are declared by the
+  suite and staged by the CLI's `fetch` (the run config's `data` stage
+  calls it); a session whose declared inputs are absent fails at
+  collection, naming the command. Ursa's compute nodes have no network,
+  and a test that silently fetches would hide a provisioning step. The
+  one deliberate exception (2026-10-14) is baselines — the harness's own
+  small, immutable artifacts: an absent pinned ULID is synced at session
+  start, loudly, and a sync that cannot happen fails only that comparison
+  (see Baselines).
 
 ## Applications
 
@@ -394,7 +396,8 @@ Layout under the output root is the same either way:
 
 ```
 <output-root>/                 # default: pytest tmp dir; else /work-relative
-  run.yaml                     # RunManifest: session ULID, application,
+  run.yaml                     # RunManifest (incl. inputs as found, baselines as
+                               #   found or synced): session ULID, application,
                                #   application_commit (the checkout's HEAD SHA; null
                                #   only when no checkout is configured — an
                                #   unresolvable SHA for a configured root fails the
@@ -736,6 +739,19 @@ Publishing (2026-10-08, `baselines.py`; full design in
   the store is also `ASSAY_BASELINE_ROOT_DIR`, one copy serves both. A ULID
   published locally resolves only where that directory is, so the
   checked-in suites keep pointing at the bucket.
+- **The download half** (2026-10-14, `baselines.ensure_baselines`): at
+  session start (comparisons enabled) and in `fetch`, every ULID the
+  selected suites pin that is absent from `ASSAY_BASELINE_ROOT_DIR` is
+  synced from the store — S3 through the wrapper into `<root>/.staging/`
+  and moved into place only when it holds NetCDF (an absent prefix
+  downloads nothing and exits 0), a directory store by copy; present
+  directories are used as is, no network; the store is probed once, only
+  when a sync is needed; no baseline root means nothing is written and an
+  absent baseline fails naming the setting; a dry run classifies only.
+  `run.yaml` records each pinned baseline's state (`local`, `synced`,
+  `would-sync`, `failed` with the reason) and `test_baseline_comparison`
+  fails on `failed` with that reason. `fetch` skips baselines when
+  comparisons are off (CI has no credentials for the private store).
 - **Compute nodes without network** (2026-10-14): publication never
   needs the session — the post-hoc command reads the output root from
   any node — and the session refuses `--publish-baselines` at start when

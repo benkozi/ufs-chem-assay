@@ -4,6 +4,7 @@ import pytest
 
 from analysis import RunContext, compute_file_stats, write_combo_stats_csv
 from applications.base import Application
+from baselines import StagedBaseline
 from assertions import (
     assert_nc_file_count,
     assert_nc_filenames,
@@ -102,6 +103,7 @@ def test_baseline_comparison(
     settings: Settings,
     application: Application,
     baseline_comparisons: dict[str, BaselineComparison],
+    baseline_states: dict[str, StagedBaseline],
 ) -> None:
     """The combination's NetCDF output matches its configured baseline
     (nccmp-style: structure and attributes exact; data bit-for-bit or
@@ -116,6 +118,9 @@ def test_baseline_comparison(
     # Lazy: only comparing runs pay dask cluster startup.
     request.getfixturevalue("dask_client")
 
+    staged = baseline_states.get(entry.ulid)
+    if staged is not None and staged.state == "failed":
+        pytest.fail(f"baseline {entry.ulid} unavailable: {staged.detail}")
     baseline_dir = (settings.baseline_root_dir or Path.cwd()) / entry.ulid
     if not baseline_dir.is_dir():
         pytest.fail(
