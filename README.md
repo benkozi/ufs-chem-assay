@@ -497,7 +497,9 @@ semantic-release parses them to compute versions).
 
 Every pull request also runs `.github/workflows/dependency-review.yaml`,
 which fails the PR when a dependency change (the lock, an action) brings
-in a known vulnerability of moderate severity or above; Dependabot
+in a known vulnerability of moderate severity or above — it needs the
+repository's **Dependency graph** enabled (Settings → Code security), and
+reports that plainly until it is; Dependabot
 (`.github/dependabot.yml`) opens weekly grouped PRs for the pinned action
 majors and the uv lock. The `tests` job measures the harness
 suite's coverage of `src/` (tests excluded) and **fails under 100%**

@@ -34,6 +34,9 @@ repos:
         exclude: ^(design/|uv\.lock$)
       - id: check-merge-conflict
       - id: detect-private-key
+        # The release-script tests carry a fabricated PEM (BEGIN/END around
+        # "abc") because the verifier under test checks for those markers.
+        exclude: ^src/tests/ufs_chem_assay/test_release_scripts\.py$
       - id: check-added-large-files
   - repo: local
     hooks:
