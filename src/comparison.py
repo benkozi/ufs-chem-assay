@@ -351,13 +351,17 @@ def _compare_file(
         real_vars = set(map(str, real.variables))
         base_vars = set(map(str, base.variables))
         variables_match = real_vars == base_vars
-        # Run stamps (the adapter's volatile_global_attributes) are skipped;
-        # every other global attribute is exact.
-        ignored = set(ignore_global_attributes)
-        global_attributes_match = _stringified_attrs(
-            {k: v for k, v in real.attrs.items() if k not in ignored}
-        ) == _stringified_attrs(
-            {k: v for k, v in base.attrs.items() if k not in ignored}
+        # The adapter's volatile_global_attributes (run stamps) must still be
+        # present on both sides — only their values are not compared; every
+        # other global attribute is exact, name and value.
+        volatile = set(ignore_global_attributes)
+        global_attributes_match = set(real.attrs) == set(base.attrs) and (
+            _stringified_attrs(
+                {k: v for k, v in real.attrs.items() if k not in volatile}
+            )
+            == _stringified_attrs(
+                {k: v for k, v in base.attrs.items() if k not in volatile}
+            )
         )
 
         variables = [
@@ -430,7 +434,8 @@ def compare_with_baseline(
     changed configuration fails even when the data is identical, and a
     baseline published without its configuration cannot pass.
     `ignore_global_attributes`: the adapter's per-run stamps (creation
-    time, history), skipped in the global-attribute check."""
+    time, history) — required present on both sides, their values not
+    compared."""
     logger.info(
         "comparing combo %s against baseline %s (atol=%s)", combo, baseline_ulid, atol
     )

@@ -730,8 +730,9 @@ Publishing (2026-10-08, `baselines.py`; full design in
   wall-clock time, so "global attributes exact" could never pass across
   runs. The adapter declares them (`Application.volatile_global_attributes`,
   `()` by default; CECE's four in `applications/cece/assertions.py`) and
-  `compare_with_baseline(ignore_global_attributes=...)` skips exactly
-  those; every other attribute stays exact. Found by the first republish.
+  `compare_with_baseline(ignore_global_attributes=...)` requires exactly
+  those present on both sides but does not compare their values; every
+  other attribute stays exact, name and value. Found by the first republish.
 - **The store may be a local directory** (2026-10-08, user use case: a
   Dropbox folder as the store of record): `ASSAY_BASELINE_STORE` / `--store`
   accept a path as well as an `s3://` prefix; the probe becomes an
@@ -871,8 +872,10 @@ All code under `src/`; the project is `uv`-managed with its own
     platforms.py          # Platform / Runtime enums, hostname detection
     templates/driver-job.sbatch.j2  # the slurm runtime's per-driver job script
     analysis.py           # descriptive stats (dask distributed), CSV writing
-    baselines.py          # publishing: the gate, plan, manifest, probe + sync,
-                          #   cache copy, textual suite repoint (CLI + session)
+    baselines/            # models (conventions, manifest, records), plan (the gate,
+                          #   the plan, the CLI's reader), publish (manifest, probe,
+                          #   sync, cache, repoint), stage (the download half), suite
+                          #   (the textual repoint), store (S3 prefix or directory)
     assertions.py         # generic post-run assertions (expectations passed in)
     combos.py             # Dimension, Combo, enumerate_combos, write_combos_csv
     comparison.py         # baseline resolution (via the adapter) + NetCDF comparison

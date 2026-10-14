@@ -109,12 +109,6 @@ def _build(config: RunConfig, section: CeceRunSection) -> list[str]:
     ]
 
 
-def _data(_config: RunConfig, _section: CeceRunSection) -> list[str]:
-    # Nothing beyond the shared stage's fetch: CECE's inputs are declared by
-    # its suites.
-    return []
-
-
 def stage_lines(
     stage: Stage, config: RunConfig, section: ApplicationRunSection
 ) -> list[str]:
@@ -124,5 +118,7 @@ def stage_lines(
     if stage is Stage.BUILD:
         return _build(config, cece)
     if stage is Stage.DATA:
-        return _data(config, cece)
+        # Nothing beyond the shared stage's fetch: CECE's inputs are declared
+        # by its suites.
+        return []
     raise ValueError(f"the {stage.value} stage is shared, not the adapter's")

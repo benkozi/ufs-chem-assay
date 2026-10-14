@@ -144,9 +144,10 @@ combination's generated driver configuration must equal the one the
 baseline directory carries (run paths aside) — a changed configuration
 needs a new baseline even when the output did not change, and a baseline
 published without its configuration cannot pass; structure and attributes
-exact — except the global attributes the application stamps per run (for
-CECE `date_created`, `date_modified`, `date_metadata_modified`,
-`history`), which are skipped — data bit-for-bit or within `atol`; RMSE and
+exact — except the values of the global attributes the application stamps
+per run (for CECE `date_created`, `date_modified`,
+`date_metadata_modified`, `history`), which must be present but are not
+compared — data bit-for-bit or within `atol`; RMSE and
 difference statistics recorded per file x variable in
 `<combo_id>-stats-comparison.csv`, concatenated to `stats-comparison.csv`
 at the root; bias maps + GIF render at session end into `plots-baselines/`

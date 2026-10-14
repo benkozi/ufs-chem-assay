@@ -144,6 +144,30 @@ def test_changed_global_attribute_fails(pair_dirs: tuple[Path, Path]) -> None:
     assert not result.files[0].global_attributes_match
 
 
+def test_a_missing_volatile_attribute_still_fails(pair_dirs: tuple[Path, Path]) -> None:
+    # Volatile means the value is not compared; the attribute is still
+    # expected to exist on both sides.
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(realization / "cece_a.nc", values, global_attrs={"title": "t"})
+    _write_nc(
+        baseline / "cece_a.nc", values, global_attrs={"title": "t", "history": "h"}
+    )
+    result = compare_with_baseline(
+        realization,
+        baseline,
+        atol=0.0,
+        run_id="r",
+        application="cece",
+        suite="s",
+        combo="c",
+        combo_id="i",
+        baseline_ulid="b",
+        ignore_global_attributes=("history",),
+    )
+    assert not result.passed and not result.files[0].global_attributes_match
+
+
 def test_volatile_global_attributes_are_ignored(pair_dirs: tuple[Path, Path]) -> None:
     # Run stamps (creation time, a "Simulated on ..." history line) differ
     # between any two runs; the adapter names them and the comparison skips

@@ -18,7 +18,8 @@ STANDARD_DIMENSIONS = ("time", "lev", "lat", "lon")
 
 # Provenance the driver (develop, 2026-10-08) stamps into every file with
 # the simulation's wall-clock time: never equal across two runs, so the
-# baseline comparison skips them and compares every other attribute exactly.
+# baseline comparison requires them present but does not compare their
+# values; every other attribute is compared exactly.
 VOLATILE_GLOBAL_ATTRIBUTES = (
     "date_created",
     "date_modified",

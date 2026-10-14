@@ -500,7 +500,7 @@ def _publish_calls(sync: object) -> list[S3SyncConfig]:
 def test_publish_baselines_publishes_the_runs_suites_by_default(
     publish_env: Run, mocker: MockerFixture
 ) -> None:
-    sync = mocker.patch("baselines.sync", side_effect=fake_sync())
+    sync = mocker.patch("baselines.publish.sync", side_effect=fake_sync())
     code = main(["publish-baselines", f"--output-root={publish_env.root}"])
     assert code == 0
     uploads = [c for c in _publish_calls(sync) if isinstance(c.source, Path)]
@@ -516,7 +516,7 @@ def test_publish_baselines_publishes_the_runs_suites_by_default(
 def test_publish_baselines_dry_run_store_and_no_suite_update(
     publish_env: Run, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    sync = mocker.patch("baselines.sync", side_effect=fake_sync())
+    sync = mocker.patch("baselines.publish.sync", side_effect=fake_sync())
     original = publish_env.suite_path.read_text()
     code = main(
         [
@@ -556,7 +556,7 @@ def test_publish_baselines_exit_code_follows_the_records(
     publish_env: Run, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
     occupied = frozenset({f"s3://ufs-chem/baselines/{publish_env.combos[1].combo_id}/"})
-    mocker.patch("baselines.sync", side_effect=fake_sync(occupied))
+    mocker.patch("baselines.publish.sync", side_effect=fake_sync(occupied))
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
         code = main(["publish-baselines", f"--output-root={publish_env.root}"])
     assert code == 1
@@ -571,7 +571,7 @@ def test_publish_baselines_exit_code_follows_the_records(
 def test_publish_baselines_without_run_yaml_is_a_clean_error(
     publish_env: Run, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    sync = mocker.patch("baselines.sync")
+    sync = mocker.patch("baselines.publish.sync")
     (publish_env.root / "run.yaml").unlink()
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(["publish-baselines", f"--output-root={publish_env.root}"])
@@ -584,7 +584,7 @@ def test_publish_baselines_without_run_yaml_is_a_clean_error(
 def test_publish_baselines_selector_must_cover_the_runs_suites(
     publish_env: Run, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    sync = mocker.patch("baselines.sync")
+    sync = mocker.patch("baselines.publish.sync")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(
             [
@@ -607,7 +607,7 @@ def test_publish_baselines_primes_the_cache_from_the_setting(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    mocker.patch("baselines.sync", side_effect=fake_sync())
+    mocker.patch("baselines.publish.sync", side_effect=fake_sync())
     cache = tmp_path / "cache"
     monkeypatch.setenv("ASSAY_BASELINE_ROOT_DIR", str(cache))
     assert main(["publish-baselines", f"--output-root={publish_env.root}"]) == 0
@@ -618,7 +618,7 @@ def test_publish_baselines_primes_the_cache_from_the_setting(
 def test_publish_baselines_to_a_directory_store(
     publish_env: Run, mocker: MockerFixture, tmp_path: Path
 ) -> None:
-    sync = mocker.patch("baselines.sync")
+    sync = mocker.patch("baselines.publish.sync")
     store = tmp_path / "dropbox"
     store.mkdir()
     code = main(
@@ -637,7 +637,7 @@ def test_publish_baselines_fails_fast_without_network(
     mocker.patch(
         "cli.main.check_reachable", side_effect=ConnectionError("no network to s3")
     )
-    sync = mocker.patch("baselines.sync")
+    sync = mocker.patch("baselines.publish.sync")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(["publish-baselines", f"--output-root={publish_env.root}"])
     assert code == 1

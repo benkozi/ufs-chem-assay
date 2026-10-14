@@ -18,7 +18,7 @@ from pytest_mock import MockerFixture
 
 from applications.registry import load_suite
 from baselines import (
-    BASELINE_MANIFEST,
+    CONVENTIONS,
     BaselineManifest,
     PublishRecord,
     default_selector,
@@ -251,7 +251,7 @@ def _probe_and_upload(
 def test_publish_probes_writes_the_manifest_syncs_and_repoints(
     run: Run, mocker: MockerFixture
 ) -> None:
-    sync = mocker.patch("baselines.sync", side_effect=fake_sync())
+    sync = mocker.patch("baselines.publish.sync", side_effect=fake_sync())
     before = datetime.now(timezone.utc)
     records = _publish(run, _plan(run))
     assert [r.action for r in records] == ["published"] * 3
@@ -268,7 +268,7 @@ def test_publish_probes_writes_the_manifest_syncs_and_repoints(
     assert upload.exclude == [] and upload.include == [] and not upload.delete
 
     manifest = BaselineManifest.model_validate(
-        yaml.safe_load((bilinear.source_dir / BASELINE_MANIFEST).read_text())
+        yaml.safe_load((bilinear.source_dir / CONVENTIONS.manifest).read_text())
     )
     assert manifest.ulid == bilinear.ulid and manifest.store == _STORE
     assert manifest.application == "cece" and manifest.application_commit == COMMIT
@@ -289,7 +289,7 @@ def test_publish_probes_writes_the_manifest_syncs_and_repoints(
     paths = [f.path for f in manifest.files]
     assert paths == sorted(paths)
     assert f"{bilinear.ulid}.yaml" in paths and "cece.log" in paths
-    assert "plots-overview/co.gif" in paths and BASELINE_MANIFEST not in paths
+    assert "plots-overview/co.gif" in paths and CONVENTIONS.manifest not in paths
     first = next(f for f in manifest.files if f.path == "cece_20100101_010000.nc")
     payload = (bilinear.source_dir / "cece_20100101_010000.nc").read_bytes()
     assert first.bytes == len(payload)
@@ -308,12 +308,12 @@ def test_publish_probes_writes_the_manifest_syncs_and_repoints(
 def test_publish_primes_the_local_cache_when_configured(
     run: Run, tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    mocker.patch("baselines.sync", side_effect=fake_sync())
+    mocker.patch("baselines.publish.sync", side_effect=fake_sync())
     cache = tmp_path / "cache"
     records = _publish(run, _plan(run), baseline_root=cache)
     for record in records:
         cached = cache / record.ulid
-        assert (cached / BASELINE_MANIFEST).is_file()
+        assert (cached / CONVENTIONS.manifest).is_file()
         assert (cached / "plots-overview" / "co.gif").is_file()
         assert sorted(p.name for p in cached.glob("*.nc")) == sorted(
             p.name for p in record.source_dir.glob("*.nc")
@@ -325,11 +325,11 @@ def test_publish_refuses_an_occupied_prefix_on_a_fresh_publish(
 ) -> None:
     records = _plan(run)
     occupied = frozenset({records[1].destination})
-    sync = mocker.patch("baselines.sync", side_effect=fake_sync(occupied))
+    sync = mocker.patch("baselines.publish.sync", side_effect=fake_sync(occupied))
     results = _publish(run, records)
     assert [r.action for r in results] == ["published", "failed", "published"]
     assert "append-only" in results[1].detail
-    assert not (results[1].source_dir / BASELINE_MANIFEST).exists()
+    assert not (results[1].source_dir / CONVENTIONS.manifest).exists()
     uploads = [
         c for c in (call.args[0] for call in sync.call_args_list) if not c.dry_run
     ]
@@ -344,30 +344,30 @@ def test_publish_resumes_when_the_directory_was_published_before(
 ) -> None:
     # First publish, then the suite is reverted (git checkout): the prefix is
     # occupied but the directory's manifest names it — no upload, repoint only.
-    mocker.patch("baselines.sync", side_effect=fake_sync())
+    mocker.patch("baselines.publish.sync", side_effect=fake_sync())
     original = run.suite_path.read_text()
     first = _publish(run, _plan(run))
     run.suite_path.write_text(original)
     sync = mocker.patch(
-        "baselines.sync",
+        "baselines.publish.sync",
         side_effect=fake_sync(frozenset(r.destination for r in first)),
     )
-    manifest_before = (first[0].source_dir / BASELINE_MANIFEST).read_text()
+    manifest_before = (first[0].source_dir / CONVENTIONS.manifest).read_text()
     results = _publish(run, _plan(run))
     assert [r.action for r in results] == ["published"] * 3
     assert all("already in the store" in r.detail for r in results)
     calls = [call.args[0] for call in sync.call_args_list]
     assert len(calls) == 3 and all(c.dry_run for c in calls)  # probes only
-    assert (first[0].source_dir / BASELINE_MANIFEST).read_text() == manifest_before
+    assert (first[0].source_dir / CONVENTIONS.manifest).read_text() == manifest_before
     assert all(f"ulid: {r.ulid}\n" in run.suite_path.read_text() for r in results)
 
 
 def test_publish_fails_a_directory_carrying_another_manifest(
     run: Run, mocker: MockerFixture
 ) -> None:
-    sync = mocker.patch("baselines.sync", side_effect=fake_sync())
+    sync = mocker.patch("baselines.publish.sync", side_effect=fake_sync())
     records = _plan(run)
-    foreign = records[0].source_dir / BASELINE_MANIFEST
+    foreign = records[0].source_dir / CONVENTIONS.manifest
     foreign.write_text("ulid: 01KXNXCJ858EE6R4FPF39BC8V2\nstore: s3://elsewhere/b\n")
     results = _publish(run, records[:1])
     assert results[0].action == "failed" and "manifest for" in results[0].detail
@@ -377,19 +377,19 @@ def test_publish_fails_a_directory_carrying_another_manifest(
 def test_publish_dry_run_writes_nothing(
     run: Run, tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    sync = mocker.patch("baselines.sync", side_effect=fake_sync())
+    sync = mocker.patch("baselines.publish.sync", side_effect=fake_sync())
     original = run.suite_path.read_text()
     cache = tmp_path / "cache"
     with caplog.at_level("INFO"):
         results = _publish(run, _plan(run), baseline_root=cache, dry_run=True)
     assert [r.action for r in results] == ["would-publish"] * 3
-    assert all(r.detail == "prefix empty; would upload" for r in results)
+    assert all(r.detail == "store free; would upload" for r in results)
     assert not any(r.suite_updated for r in results)
     calls = [call.args[0] for call in sync.call_args_list]
     assert len(calls) == 6 and all(c.dry_run for c in calls)
     uploads = [c for c in calls if isinstance(c.source, Path)]
     assert all(not c.only_show_errors for c in uploads)
-    assert not any((r.source_dir / BASELINE_MANIFEST).exists() for r in results)
+    assert not any((r.source_dir / CONVENTIONS.manifest).exists() for r in results)
     assert not cache.exists()
     assert run.suite_path.read_text() == original
     assert any("superseded_ulid" in rec.getMessage() for rec in caplog.records)
@@ -398,13 +398,15 @@ def test_publish_dry_run_writes_nothing(
 def test_publish_without_suite_update_leaves_the_file_alone(
     run: Run, mocker: MockerFixture
 ) -> None:
-    mocker.patch("baselines.sync", side_effect=fake_sync())
+    mocker.patch("baselines.publish.sync", side_effect=fake_sync())
     original = run.suite_path.read_text()
     results = _publish(run, _plan(run), suite_update=False)
     assert [r.action for r in results] == ["published"] * 3
     assert not any(r.suite_updated for r in results)
     assert run.suite_path.read_text() == original
-    manifest = yaml.safe_load((results[0].source_dir / BASELINE_MANIFEST).read_text())
+    manifest = yaml.safe_load(
+        (results[0].source_dir / CONVENTIONS.manifest).read_text()
+    )
     assert manifest["superseded_ulid"] == PREVIOUS_ULIDS[0]
 
 
@@ -419,19 +421,19 @@ def test_publish_sync_failure_is_recorded_not_raised(
             raise subprocess.CalledProcessError(1, ["aws"], output="boom\nfatal: no\n")
         return fake_sync()(config)
 
-    mocker.patch("baselines.sync", side_effect=failing)
+    mocker.patch("baselines.publish.sync", side_effect=failing)
     results = _publish(run, records)
     assert [r.action for r in results] == ["published", "failed", "published"]
     assert "fatal: no" in results[1].detail
     # The manifest stays as the record of the attempt (the next run resumes).
-    assert (results[1].source_dir / BASELINE_MANIFEST).is_file()
+    assert (results[1].source_dir / CONVENTIONS.manifest).is_file()
     assert PREVIOUS_ULIDS[1] in run.suite_path.read_text()
 
 
 def test_publish_only_touches_would_publish_records(
     run: Run, mocker: MockerFixture
 ) -> None:
-    sync = mocker.patch("baselines.sync", side_effect=fake_sync())
+    sync = mocker.patch("baselines.publish.sync", side_effect=fake_sync())
     records = _plan(run)
     skipped = records[0].model_copy(update={"action": "skipped", "detail": "x"})
     results = _publish(run, [skipped, *records[1:]])
@@ -442,7 +444,7 @@ def test_publish_only_touches_would_publish_records(
 def test_publish_session_reads_run_yaml_and_publishes(
     run: Run, tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    sync = mocker.patch("baselines.sync", side_effect=fake_sync())
+    sync = mocker.patch("baselines.publish.sync", side_effect=fake_sync())
     cache = tmp_path / "cache"
     results = publish_session(
         run.root,
@@ -454,7 +456,7 @@ def test_publish_session_reads_run_yaml_and_publishes(
     )
     assert [r.action for r in results] == ["published"] * 3
     assert sync.call_count == 6
-    assert all((cache / r.ulid / BASELINE_MANIFEST).is_file() for r in results)
+    assert all((cache / r.ulid / CONVENTIONS.manifest).is_file() for r in results)
     assert all(f"ulid: {r.ulid}\n" in run.suite_path.read_text() for r in results)
 
 
@@ -464,7 +466,7 @@ def test_publish_session_reads_run_yaml_and_publishes(
 def test_publish_to_a_directory_store_copies_and_repoints(
     run: Run, tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    sync = mocker.patch("baselines.sync")
+    sync = mocker.patch("baselines.publish.sync")
     store = tmp_path / "dropbox-store"
     store.mkdir()
     records = _plan(run, store=str(store))
@@ -476,7 +478,7 @@ def test_publish_to_a_directory_store_copies_and_repoints(
     for record in results:
         published = store / record.ulid
         manifest = BaselineManifest.model_validate(
-            yaml.safe_load((published / BASELINE_MANIFEST).read_text())
+            yaml.safe_load((published / CONVENTIONS.manifest).read_text())
         )
         assert manifest.store == str(store) and manifest.ulid == record.ulid
         assert (published / "plots-overview" / "co.gif").is_file()
@@ -489,7 +491,7 @@ def test_publish_to_a_directory_store_copies_and_repoints(
 def test_directory_store_is_append_only_and_resumes(
     run: Run, tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    mocker.patch("baselines.sync")
+    mocker.patch("baselines.publish.sync")
     store = tmp_path / "store"
     store.mkdir()
     records = _plan(run, store=str(store))
@@ -515,7 +517,7 @@ def test_directory_store_is_append_only_and_resumes(
 def test_directory_store_must_exist_and_dry_run_writes_nothing(
     run: Run, tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    mocker.patch("baselines.sync")
+    mocker.patch("baselines.publish.sync")
     store = tmp_path / "absent"
     results = _publish(run, _plan(run, store=str(store)))
     assert {r.action for r in results} == {"failed"}
@@ -524,7 +526,7 @@ def test_directory_store_must_exist_and_dry_run_writes_nothing(
     original = run.suite_path.read_text()
     results = _publish(run, _plan(run, store=str(store)), dry_run=True)
     assert [r.action for r in results] == ["would-publish"] * 3
-    assert all("would copy" in r.detail for r in results)
+    assert all(r.detail == "store free; would copy" for r in results)
     assert list(store.iterdir()) == []
     assert run.suite_path.read_text() == original
 
@@ -575,7 +577,7 @@ def _store_dir_with(tmp_path: Path, ulids: list[str]) -> Path:
     for ulid in ulids:
         (store / ulid / "plots-overview").mkdir(parents=True)
         (store / ulid / "cece_20100101_010000.nc").write_bytes(b"nc " + ulid.encode())
-        (store / ulid / BASELINE_MANIFEST).write_text(f"ulid: {ulid}\nstore: x\n")
+        (store / ulid / CONVENTIONS.manifest).write_text(f"ulid: {ulid}\nstore: x\n")
     return store
 
 
@@ -585,8 +587,8 @@ def test_present_baselines_are_local_and_never_touch_the_network(
     root = tmp_path / "root"
     for ulid in _ulids(run):
         (root / ulid).mkdir(parents=True)
-    probe = mocker.patch("baselines.check_reachable")
-    sync = mocker.patch("baselines.sync")
+    probe = mocker.patch("baselines.stage.check_reachable")
+    sync = mocker.patch("baselines.stage.sync")
     results = ensure_baselines([run.suite], _STORE, root)
     assert [r.state for r in results] == ["local"] * 3
     assert [r.ulid for r in results] == _ulids(run)
@@ -599,17 +601,17 @@ def test_absent_baselines_are_synced_from_s3_into_place(
     run: Run, tmp_path: Path, mocker: MockerFixture
 ) -> None:
     root = tmp_path / "root"
-    probe = mocker.patch("baselines.check_reachable")
+    probe = mocker.patch("baselines.stage.check_reachable")
 
     def fake(config: S3SyncConfig) -> S3SyncResult:
         assert isinstance(config.destination, Path)
         assert config.destination.parent == root / ".staging"
         config.destination.mkdir(parents=True, exist_ok=True)
         (config.destination / "cece_a.nc").write_bytes(b"nc")
-        (config.destination / BASELINE_MANIFEST).write_text("ulid: x\n")
+        (config.destination / CONVENTIONS.manifest).write_text("ulid: x\n")
         return S3SyncResult(argv=config.argv, returncode=0, output="", dry_run=False)
 
-    sync = mocker.patch("baselines.sync", side_effect=fake)
+    sync = mocker.patch("baselines.stage.sync", side_effect=fake)
     results = ensure_baselines([run.suite], _STORE, root)
     assert [r.state for r in results] == ["synced"] * 3
     probe.assert_called_once_with(_STORE)
@@ -626,8 +628,8 @@ def test_a_ulid_pinned_by_two_suites_is_synced_once(
     run: Run, tmp_path: Path, mocker: MockerFixture
 ) -> None:
     root = tmp_path / "root"
-    mocker.patch("baselines.check_reachable")
-    mocker.patch("baselines.sync", side_effect=fake_sync())
+    mocker.patch("baselines.stage.check_reachable")
+    mocker.patch("baselines.stage.sync", side_effect=fake_sync())
     results = ensure_baselines([run.suite, run.suite], _STORE, root, dry_run=True)
     assert len(results) == 3
 
@@ -638,7 +640,7 @@ def test_missing_in_the_store_and_sync_failures_are_recorded(
     import subprocess
 
     root = tmp_path / "root"
-    mocker.patch("baselines.check_reachable")
+    mocker.patch("baselines.stage.check_reachable")
     ulids = _ulids(run)
 
     def fake(config: S3SyncConfig) -> S3SyncResult:
@@ -647,7 +649,7 @@ def test_missing_in_the_store_and_sync_failures_are_recorded(
         # ulids[0] and [2]: nothing downloaded (no such prefix) -> empty dir
         return S3SyncResult(argv=config.argv, returncode=0, output="", dry_run=False)
 
-    mocker.patch("baselines.sync", side_effect=fake)
+    mocker.patch("baselines.stage.sync", side_effect=fake)
     results = ensure_baselines([run.suite], _STORE, root)
     assert [r.state for r in results] == ["failed"] * 3
     assert "not in the store" in results[0].detail
@@ -660,8 +662,8 @@ def test_no_baseline_root_means_nothing_is_written(
     run: Run, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    probe = mocker.patch("baselines.check_reachable")
-    sync = mocker.patch("baselines.sync")
+    probe = mocker.patch("baselines.stage.check_reachable")
+    sync = mocker.patch("baselines.stage.sync")
     results = ensure_baselines([run.suite], _STORE, None)
     assert [r.state for r in results] == ["failed"] * 3
     assert all("ASSAY_BASELINE_ROOT_DIR" in r.detail for r in results)
@@ -677,8 +679,10 @@ def test_unreachable_store_fails_every_absent_baseline_naming_fetch(
 ) -> None:
     root = tmp_path / "root"
     (root / _ulids(run)[0]).mkdir(parents=True)
-    mocker.patch("baselines.check_reachable", side_effect=ConnectionError("no network"))
-    sync = mocker.patch("baselines.sync")
+    mocker.patch(
+        "baselines.stage.check_reachable", side_effect=ConnectionError("no network")
+    )
+    sync = mocker.patch("baselines.stage.sync")
     results = ensure_baselines([run.suite], _STORE, root)
     assert [r.state for r in results] == ["local", "failed", "failed"]
     assert all("no network" in r.detail and "fetch" in r.detail for r in results[1:])
@@ -690,8 +694,8 @@ def test_dry_run_classifies_without_the_network(
 ) -> None:
     root = tmp_path / "root"
     (root / _ulids(run)[2]).mkdir(parents=True)
-    probe = mocker.patch("baselines.check_reachable")
-    sync = mocker.patch("baselines.sync")
+    probe = mocker.patch("baselines.stage.check_reachable")
+    sync = mocker.patch("baselines.stage.sync")
     results = ensure_baselines([run.suite], _STORE, root, dry_run=True)
     assert [r.state for r in results] == ["would-sync", "would-sync", "local"]
     probe.assert_not_called()
@@ -705,14 +709,14 @@ def test_directory_store_baselines_are_copied(
     ulids = _ulids(run)
     store = _store_dir_with(tmp_path, ulids[:2])  # the third is not in the store
     root = tmp_path / "root"
-    probe = mocker.patch("baselines.check_reachable")
-    sync = mocker.patch("baselines.sync")
+    probe = mocker.patch("baselines.stage.check_reachable")
+    sync = mocker.patch("baselines.stage.sync")
     results = ensure_baselines([run.suite], str(store), root)
     assert [r.state for r in results] == ["synced", "synced", "failed"]
     assert "not in the store" in results[2].detail
     for ulid in ulids[:2]:
         assert (root / ulid / "plots-overview").is_dir()
-        assert (root / ulid / BASELINE_MANIFEST).is_file()
+        assert (root / ulid / CONVENTIONS.manifest).is_file()
     probe.assert_not_called()
     sync.assert_not_called()
 

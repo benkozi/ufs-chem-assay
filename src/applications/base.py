@@ -171,7 +171,8 @@ class Application(ABC):
     data_dirname: ClassVar[str]  # input data directory under the checkout ("data")
     standard_dimensions: ClassVar[tuple[str, ...]]  # every output variable's dims
     # Global attributes the driver stamps per run (creation time, a history
-    # line): the baseline comparison skips exactly these; () when none.
+    # line): the baseline comparison requires them present but ignores their
+    # values; () when none.
     volatile_global_attributes: ClassVar[tuple[str, ...]] = ()
     settings_model: ClassVar[type[ApplicationSettings]]
     config_model: ClassVar[type[DriverConfig]]
