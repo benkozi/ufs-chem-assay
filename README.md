@@ -491,6 +491,12 @@ non-conforming message at commit time; in CI the PR title is checked with
 the same hook (squash-merge subjects come from PR titles, and
 semantic-release parses them to compute versions).
 
+Every pull request (and every push to `develop`/`main`) also runs
+`.github/workflows/codeql.yaml`: CodeQL code scanning of the Python and
+the workflow files, with findings under the repository's Security tab and
+PR annotations; it runs weekly as well so new queries reach an unchanged
+branch.
+
 Every pull request (and every push to `develop`/`main`, as post-merge
 validation) runs `.github/workflows/ci.yaml`: the toolchain container is
 built from `Dockerfile` (cached via the GitHub Actions buildx cache;

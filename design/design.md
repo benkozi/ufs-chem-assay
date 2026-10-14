@@ -991,6 +991,12 @@ mechanics:
   download half and OIDC credentials are the follow-up). The CECE pin is
   `ufs-community/CECE` at `develop` (ufs-community/CECE#154 merged
   2026-10-08).
+- **`codeql.yaml`** (2026-10-14): CodeQL code scanning of the Python and
+  of the workflows themselves (the `actions` language), `security-and-quality`
+  queries, on every PR, every push to `develop`/`main`, and weekly;
+  findings under Security > Code scanning, PR runs annotate the diff. Its
+  own job-level `security-events: write`; gated on the bump-commit marker
+  like `release-psr`. Free on a public repository; no image, no S3.
 - **Releases are automatic** (full design in
   `design/feat/20261006-1250-psr-ci/20261006-1250-psr-ci.md`): the `release-psr`
   job of `ci.yaml` runs on every push to `develop` (rc prereleases) or
