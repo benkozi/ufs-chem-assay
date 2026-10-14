@@ -609,3 +609,7 @@ There is no AWS table: the AWS CLI's own `~/.aws/credentials`,
 `~/.aws/config`, and `AWS_*` variables apply unchanged to
 [S3 data sync](#s3-data-sync), and the live test's bucket is fixed at
 `arn:aws:s3:::ufs-chem`, not a variable.
+
+## Super Intelligence (SI) Disclosure
+
+Portions of this code were generated/augmented using agentic SI models and has been reviewed and validated consistent with NOAA's [SI Statement](https://www.noaa.gov/nao-216-128-artificial-intelligence-in-noaa).
