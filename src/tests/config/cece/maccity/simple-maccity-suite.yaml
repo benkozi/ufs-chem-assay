@@ -40,19 +40,19 @@ baseline_comparisons:
         streams:
           - name: MACCITY
             mapalgo: bilinear
-    ulid: 01M4ETZM1Y7Q6RH5Z5AD2Y2BEK
+    ulid: 01M50R4FQZ4G7RYDYBQRKTR324
   - sweep_selector:
       cece_data:
         streams:
           - name: MACCITY
             mapalgo: consd
-    ulid: 01M4ETZM1Y7Q6RH5Z5AD2Y2BEM
+    ulid: 01M50R4FQZ4G7RYDYBQRKTR325
   - sweep_selector:
       cece_data:
         streams:
           - name: MACCITY
             mapalgo: passthrough
-    ulid: 01M4ETZM1Y7Q6RH5Z5AD2Y2BEN
+    ulid: 01M50R4FQZ4G7RYDYBQRKTR326
 analysis:
   compute_descriptive_stats: true  # default; false skips test_descriptive_stats
 plotting:
