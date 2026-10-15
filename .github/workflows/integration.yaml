@@ -24,7 +24,11 @@
 #
 # python-semantic-release's bump commit (pushed by the release job with the
 # App token, so it does trigger workflows) is skipped on its marker: a
-# version bump changes nothing CECE-side.
+# version bump changes nothing CECE-side. Only PR runs cancel each other:
+# a push to develop queues behind the in-progress run instead, so the bump
+# push about a minute after a merge no longer cancels the merge commit's
+# run (which would leave develop with no integration result, since the
+# bump's own run is the one skipped above).
 name: integration
 on:
   pull_request:
@@ -37,7 +41,7 @@ permissions:
   contents: read
 concurrency:
   group: integration-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 # Upstream develop: it carries the build script's --target/--jobs the build
 # step needs (ufs-community/CECE#154, merged 2026-10-08).
 env:
