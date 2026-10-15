@@ -143,15 +143,18 @@ cell bounds and other auxiliary tables are skipped — written to
 baseline: each `baseline_comparisons` entry carries a `sweep_selector` —
 mirroring the sweep structure with regexes at the leaves — that must select
 exactly one combination, a baseline `ulid` under `ASSAY_BASELINE_ROOT_DIR`,
-an optional per-entry `atol`, and a `plot` switch for bias plots; the
-combination's generated driver configuration must equal the one the
+optional per-entry tolerances `atol` and `rtol`, and a `plot` switch for
+bias plots; the combination's generated driver configuration must equal the one the
 baseline directory carries (run paths aside) — a changed configuration
 needs a new baseline even when the output did not change, and a baseline
 published without its configuration cannot pass; structure and attributes
 exact — except the values of the global attributes the application stamps
 per run (for CECE `date_created`, `date_modified`,
 `date_metadata_modified`, `history`), which must be present but are not
-compared — data bit-for-bit or within `atol`; RMSE and
+compared — data bit-for-bit, or within `atol + rtol × |baseline|` (numpy
+style; `rtol: 1.0e-15` admits a few float64 ULPs at any magnitude, which is
+what the checked-in `simple-maccity` entries pin: its baselines come from
+Ursa's Intel build and other builds differ from it by one ULP); RMSE and
 difference statistics recorded per file x variable in
 `<combo_id>-stats-comparison.csv`, concatenated to `stats-comparison.csv`
 at the root; bias maps + GIF render at session end into `plots-baselines/`
@@ -248,6 +251,11 @@ Options:
   ULIDs (see [Publishing baselines](#publishing-baselines)). Needs the AWS
   CLI and credentials it can find. `--no-suite-update` publishes without
   touching the suite files; it is an error without `--publish-baselines`.
+- `--baseline-atol=<float>` / `--baseline-rtol=<float>` — data tolerances
+  applied to every baseline comparison of the session in place of the
+  entries' own `atol` / `rtol` (0 = bit-for-bit for that part), over
+  `ASSAY_BASELINE_ATOL` / `ASSAY_BASELINE_RTOL`; the override is logged
+  once at session start and never edits a suite file.
 - Inputs are never downloaded by the session. When driver execution is
   coming (no `--dry-run`) and a selected suite's declared input is absent
   from the checkout's `data/`, collection fails with a usage error naming
@@ -459,7 +467,9 @@ long as the suite. The CLI never deletes anything except the harness
 output root (`clean_root`), and never mutates an existing checkout
 without `update_source`. `baselines.store` (`ASSAY_BASELINE_STORE`),
 `harness.publish_baselines`, and `harness.no_suite_update` carry the
-[publishing](#publishing-baselines) options into the harness stage.
+[publishing](#publishing-baselines) options into the harness stage;
+`baselines.atol` / `baselines.rtol` (`ASSAY_BASELINE_ATOL` /
+`ASSAY_BASELINE_RTOL`, null = the entries' own) the tolerance overrides.
 
 ## Running on RDHPC (Ursa)
 
@@ -715,6 +725,8 @@ Harness-wide:
 | `ASSAY_BASELINE_ROOT_DIR`       | baselines live at `<root>/<ulid>/`; absent ones are synced there from the store at session start (and by `fetch`); unset means read-only from the cwd, nothing is synced | unset → current working directory |
 | `ASSAY_ENABLE_BASELINE_COMPARISONS` | global switch; `false` skips comparison tests | `true`                          |
 | `ASSAY_BASELINE_STORE`          | where `publish-baselines` writes `<store>/<ulid>/` (append-only): an `s3://bucket/prefix` (never a bucket root) or a local directory | `s3://ufs-chem/baselines` |
+| `ASSAY_BASELINE_ATOL`           | absolute data tolerance over every comparison's own `atol` (`--baseline-atol` wins) | unset → the entries' values |
+| `ASSAY_BASELINE_RTOL`           | relative data tolerance (× \|baseline\|) over every comparison's own `rtol` (`--baseline-rtol` wins) | unset → the entries' values |
 | `ASSAY_CONFIG_SEARCH_PATH`      | prepended to relative `config_path` values     | unset                            |
 | `ASSAY_SUITE_CONFIG_SEARCH_PATH` | colon-separated dirs searched recursively for `--suite-config` selection | unset → built-in suite dir only |
 
