@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.1.0-rc.5 (2026-10-15)
+
+### Documentation
+
+- Add SI disclosure ([#23](https://github.com/benkozi/ufs-chem-assay/pull/23),
+  [`1e699cf`](https://github.com/benkozi/ufs-chem-assay/commit/1e699cf5742f941d74e4d71c539f39e76c27a06b))
+
+### Features
+
+- Add baseline syncing utility ([#24](https://github.com/benkozi/ufs-chem-assay/pull/24),
+  [`c0917de`](https://github.com/benkozi/ufs-chem-assay/commit/c0917de01106ef5b300171ce16fae2e47b771006))
+
+
 ## v0.1.0-rc.4 (2026-10-08)
 
 ### Features
