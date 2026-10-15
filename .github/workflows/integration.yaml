@@ -114,7 +114,7 @@ jobs:
       # The uv cache (wheels, the built cartopy) keyed on the lock file alone,
       # so a comment edit in pyproject.toml does not invalidate it.
       - name: Install uv (interpreter matches the runner Dockerfile)
-        uses: astral-sh/setup-uv@v10.2.0
+        uses: astral-sh/setup-uv@v10.3.0
         with:
           python-version: '3.14'
           enable-cache: true
