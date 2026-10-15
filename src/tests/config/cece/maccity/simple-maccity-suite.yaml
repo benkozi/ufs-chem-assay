@@ -33,26 +33,33 @@ assertions:
           coordinates: time lev lat lon
 # Each entry's sweep_selector mirrors `sweep` with regexes (fullmatch) at the
 # leaves and must select exactly one combination; ulids live under
-# ASSAY_BASELINE_ROOT_DIR; atol is per entry (default 0.0 = bit-for-bit).
+# ASSAY_BASELINE_ROOT_DIR. Tolerances are per entry: |real - baseline| <= atol +
+# rtol * |baseline|, both 0.0 (the defaults) = bit-for-bit. rtol 1.0e-15 admits a
+# few float64 ULPs (one is ~2.2e-16): the baselines come from Ursa's Intel build
+# and the arm64 docker image differs from it by one ULP in the interpolated
+# hours. --baseline-atol/--baseline-rtol (ASSAY_BASELINE_ATOL/RTOL) override.
 baseline_comparisons:
   - sweep_selector:
       cece_data:
         streams:
           - name: MACCITY
             mapalgo: bilinear
-    ulid: 01KXNXCJ858EE6R4FPF39BC8V2
+    ulid: 01M50R4FQZ4G7RYDYBQRKTR324
+    rtol: 1.0e-15
   - sweep_selector:
       cece_data:
         streams:
           - name: MACCITY
             mapalgo: consd
-    ulid: 01KXNXCJ86E8Z2FKVAXRER5ND4
+    ulid: 01M50R4FQZ4G7RYDYBQRKTR325
+    rtol: 1.0e-15
   - sweep_selector:
       cece_data:
         streams:
           - name: MACCITY
             mapalgo: passthrough
-    ulid: 01KXNXCJ87190QGHQZV2913JAW
+    ulid: 01M50R4FQZ4G7RYDYBQRKTR326
+    rtol: 1.0e-15
 analysis:
   compute_descriptive_stats: true  # default; false skips test_descriptive_stats
 plotting:

@@ -21,7 +21,7 @@ from pydantic import ValidationError
 from pytest_mock import MockerFixture
 from ulid import ULID
 
-from s3_sync import S3SyncConfig, S3SyncResult, s3_uri_from_arn, sync
+from s3_sync import S3SyncConfig, S3SyncResult, check_reachable, s3_uri_from_arn, sync
 from s3_sync import logger as s3_logger
 
 # The private test bucket: always this one (user direction, 2026-10-06), as a
@@ -31,7 +31,7 @@ TEST_BUCKET_ARN = "arn:aws:s3:::ufs-chem"
 TEST_PREFIX = "ufs-chem-assay-tests"
 
 
-@pytest.fixture()
+@pytest.fixture
 def local_dir(tmp_path: Path) -> Path:
     path = tmp_path / "local"
     path.mkdir()
@@ -45,7 +45,7 @@ def _completed(
     return subprocess.CompletedProcess(argv, returncode, stdout=output)
 
 
-@pytest.fixture()
+@pytest.fixture
 def aws_on_path(mocker: MockerFixture) -> str:
     """shutil.which resolves `aws` to a fixed path; nothing is executed."""
     mocker.patch("s3_sync.shutil.which", return_value="/usr/local/bin/aws")
@@ -57,9 +57,11 @@ def aws_on_path(mocker: MockerFixture) -> str:
 
 def test_local_to_s3_and_s3_to_local_accepted(local_dir: Path, tmp_path: Path) -> None:
     up = S3SyncConfig(source=local_dir, destination="s3://ufs-chem/prefix")
-    assert up.source == local_dir.resolve() and up.destination == "s3://ufs-chem/prefix"
+    assert up.source == local_dir.resolve()
+    assert up.destination == "s3://ufs-chem/prefix"
     down = S3SyncConfig(source="s3://ufs-chem/prefix", destination=tmp_path / "new")
-    assert isinstance(down.destination, Path) and not (tmp_path / "new").exists()
+    assert isinstance(down.destination, Path)
+    assert not (tmp_path / "new").exists()
 
 
 def test_string_local_path_becomes_absolute_path(
@@ -278,23 +280,29 @@ def test_sync_runs_exactly_once_with_resolved_executable(
 
     assert run.call_count == 1
     args, kwargs = run.call_args
-    assert args[0][0] == aws_on_path and args[0][1:] == config.argv[1:]
+    assert args[0][0] == aws_on_path
+    assert args[0][1:] == config.argv[1:]
     # The child inherits the environment: the CLI resolves credentials itself.
     assert "env" not in kwargs
-    assert kwargs["stdout"] is subprocess.PIPE and kwargs["stderr"] is subprocess.STDOUT
-    assert kwargs["timeout"] == 30 and kwargs["check"] is False
+    assert kwargs["stdout"] is subprocess.PIPE
+    assert kwargs["stderr"] is subprocess.STDOUT
+    assert kwargs["timeout"] == 30
+    assert kwargs["check"] is False
 
     assert isinstance(result, S3SyncResult)
-    assert result.argv == args[0] and result.returncode == 0 and result.dry_run is False
+    assert result.argv == args[0]
+    assert result.returncode == 0
+    assert result.dry_run is False
     assert result.output.startswith("upload: probe.txt")
     assert any(aws_on_path in record.message for record in caplog.records)
     # A real run's output is DEBUG only.
     output_records = [r for r in caplog.records if "upload: probe.txt" in r.message]
-    assert output_records and all(r.levelno == logging.DEBUG for r in output_records)
+    assert output_records
+    assert all(r.levelno == logging.DEBUG for r in output_records)
 
 
+@pytest.mark.usefixtures("aws_on_path")
 def test_sync_dry_run_passes_the_flag_and_logs_the_plan_at_info(
-    aws_on_path: str,
     local_dir: Path,
     mocker: MockerFixture,
     caplog: pytest.LogCaptureFixture,
@@ -302,20 +310,21 @@ def test_sync_dry_run_passes_the_flag_and_logs_the_plan_at_info(
     plan = b"(dryrun) upload: local/probe.txt to s3://ufs-chem/x/probe.txt\n"
     mocker.patch(
         "s3_sync.subprocess.run",
-        side_effect=lambda argv, **kw: _completed(argv, output=plan),
+        side_effect=lambda argv, **kwargs: _completed(argv, output=plan),
     )
     with caplog.at_level(logging.INFO, logger=s3_logger.name):
         result = sync(
             S3SyncConfig(source=local_dir, destination="s3://ufs-chem/x", dry_run=True)
         )
-    assert result.argv[-1] == "--dryrun" and result.dry_run is True
+    assert result.argv[-1] == "--dryrun"
+    assert result.dry_run is True
     assert result.output == plan.decode()
     info = [r for r in caplog.records if r.levelno == logging.INFO]
     assert any("(dryrun) upload:" in r.message for r in info)
 
 
+@pytest.mark.usefixtures("aws_on_path")
 def test_sync_failure_raises_with_output(
-    aws_on_path: str,
     local_dir: Path,
     mocker: MockerFixture,
     caplog: pytest.LogCaptureFixture,
@@ -325,7 +334,9 @@ def test_sync_failure_raises_with_output(
     message = b"fatal error: Unable to locate credentials\n"
     mocker.patch(
         "s3_sync.subprocess.run",
-        side_effect=lambda argv, **kw: _completed(argv, returncode=1, output=message),
+        side_effect=lambda argv, **kwargs: _completed(
+            argv, returncode=1, output=message
+        ),
     )
     config = S3SyncConfig(source=local_dir, destination="s3://ufs-chem/x")
     with (
@@ -339,9 +350,8 @@ def test_sync_failure_raises_with_output(
     assert any("Unable to locate credentials" in r.message for r in caplog.records)
 
 
-def test_sync_timeout_propagates(
-    aws_on_path: str, local_dir: Path, mocker: MockerFixture
-) -> None:
+@pytest.mark.usefixtures("aws_on_path")
+def test_sync_timeout_propagates(local_dir: Path, mocker: MockerFixture) -> None:
     mocker.patch(
         "s3_sync.subprocess.run", side_effect=subprocess.TimeoutExpired("aws", 5)
     )
@@ -369,11 +379,12 @@ def test_s3_uri_from_arn() -> None:
             s3_uri_from_arn(bad)
 
 
+@pytest.mark.usefixtures("aws_on_path")
 def test_round_trip_is_two_syncs_two_calls(
-    aws_on_path: str, local_dir: Path, tmp_path: Path, mocker: MockerFixture
+    local_dir: Path, tmp_path: Path, mocker: MockerFixture
 ) -> None:
     run = mocker.patch(
-        "s3_sync.subprocess.run", side_effect=lambda argv, **kw: _completed(argv)
+        "s3_sync.subprocess.run", side_effect=lambda argv, **kwargs: _completed(argv)
     )
     prefix = f"{s3_uri_from_arn(TEST_BUCKET_ARN)}/{TEST_PREFIX}/{ULID()}/"
     sync(S3SyncConfig(source=local_dir, destination=prefix))
@@ -447,7 +458,8 @@ def test_private_bucket_round_trip(tmp_path: Path) -> None:
     try:
         plan = sync(S3SyncConfig(source=up, destination=prefix, dry_run=True))
         assert plan.output.count("(dryrun) upload:") == 2, plan.output
-        assert "probe.txt" in plan.output and "second.bin" in plan.output
+        assert "probe.txt" in plan.output
+        assert "second.bin" in plan.output
 
         sync(S3SyncConfig(source=up, destination=prefix))
         sync(S3SyncConfig(source=prefix, destination=tmp_path / "down"))
@@ -476,3 +488,42 @@ def test_private_bucket_round_trip(tmp_path: Path) -> None:
             s3_logger.exception(
                 "cleanup of %s failed after the test body failed", prefix
             )
+
+
+# ── check_reachable: fail fast without network ───────────────────────────────
+
+
+def test_check_reachable_connects_to_the_buckets_endpoint(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+    connect = mocker.patch("s3_sync.socket.create_connection")
+    check_reachable("s3://ufs-chem/baselines", timeout_s=1.5)
+    connect.assert_called_once_with(("ufs-chem.s3.amazonaws.com", 443), timeout=1.5)
+    connect.return_value.close.assert_called_once()
+
+
+def test_check_reachable_honours_a_custom_endpoint(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://localhost:9000")
+    connect = mocker.patch("s3_sync.socket.create_connection")
+    check_reachable("s3://ufs-chem/baselines")
+    connect.assert_called_once_with(("localhost", 9000), timeout=3.0)
+
+
+def test_check_reachable_raises_a_clear_error_without_network(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+    mocker.patch(
+        "s3_sync.socket.create_connection",
+        side_effect=OSError("[Errno 8] nodename nor servname provided"),
+    )
+    with pytest.raises(ConnectionError, match="ufs-chem.s3.amazonaws.com.*no network"):
+        check_reachable("s3://ufs-chem/baselines")
+
+
+def test_check_reachable_refuses_a_non_s3_uri() -> None:
+    with pytest.raises(ValueError, match="s3://"):
+        check_reachable("/local/store")

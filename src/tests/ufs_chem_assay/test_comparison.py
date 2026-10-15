@@ -10,8 +10,10 @@ from comparison import (
     VariableComparison,
     compare_with_baseline,
     concatenate_comparison_csvs,
+    resolve_tolerances,
     write_comparison_csv,
 )
+from tests.ufs_chem_assay.baseline_runs import maccity_entry
 
 
 def _write_nc(
@@ -41,7 +43,7 @@ def _values() -> np.ndarray:
     return rng.random((2, 3, 4))
 
 
-@pytest.fixture()
+@pytest.fixture
 def pair_dirs(tmp_path: Path) -> tuple[Path, Path]:
     realization = tmp_path / "realization"
     baseline = tmp_path / "baseline"
@@ -51,12 +53,13 @@ def pair_dirs(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def _compare(
-    realization: Path, baseline: Path, atol: float = 0.0
+    realization: Path, baseline: Path, atol: float = 0.0, rtol: float = 0.0
 ) -> BaselineComparisonResult:
     return compare_with_baseline(
         realization,
         baseline,
         atol=atol,
+        rtol=rtol,
         run_id="01JTESTRUN",
         application="cece",
         suite="simple-maccity",
@@ -64,6 +67,12 @@ def _compare(
         combo_id="deadbeefdeadbeef",
         baseline_ulid="01JTESTBASELINE",
     )
+
+
+def _one_variable(result: BaselineComparisonResult) -> VariableComparison:
+    """The single (file, variable) a one-variable pair produced."""
+    (variable,) = [v for f in result.files for v in f.variables]
+    return variable
 
 
 def test_identical_pair_passes_bit_for_bit(pair_dirs: tuple[Path, Path]) -> None:
@@ -96,17 +105,67 @@ def test_perturbed_value_respects_absolute_tolerance(
 
     # n_mismatched respects atol: the one perturbed element at 0.0/1e-7,
     # none at the covering tolerance (data_match <=> n_mismatched == 0).
-    def _variable(result: BaselineComparisonResult) -> VariableComparison:
-        (variable,) = [v for f in result.files for v in f.variables]
-        return variable
+    assert _one_variable(_compare(realization, baseline, atol=0.0)).n_mismatched == 1
+    assert _one_variable(_compare(realization, baseline, atol=1e-5)).n_mismatched == 0
+    assert _one_variable(_compare(realization, baseline, atol=1e-7)).n_mismatched == 1
 
-    assert _variable(_compare(realization, baseline, atol=0.0)).n_mismatched == 1
-    assert _variable(_compare(realization, baseline, atol=1e-5)).n_mismatched == 0
-    assert _variable(_compare(realization, baseline, atol=1e-7)).n_mismatched == 1
-
-    result = _compare(realization, baseline, atol=0.0)
-    (variable,) = [v for f in result.files for v in f.variables]
+    variable = _one_variable(_compare(realization, baseline, atol=0.0))
     assert variable.max_abs_diff == pytest.approx(1e-6, rel=1e-3)
+
+
+def test_one_ulp_difference_passes_under_a_relative_tolerance(
+    pair_dirs: tuple[Path, Path],
+) -> None:
+    """The cross-machine case: a flux of ~5e-9 one float64 ULP apart. No
+    absolute tolerance fits that magnitude generally; a relative one does."""
+    realization, baseline = pair_dirs
+    values = _values() * 5e-9
+    perturbed = values.copy()
+    perturbed[1, 2, 3] = np.nextafter(values[1, 2, 3], np.inf)
+    _write_nc(realization / "cece_a.nc", perturbed)
+    _write_nc(baseline / "cece_a.nc", values)
+
+    assert not _compare(realization, baseline).passed  # bit-for-bit
+    assert _compare(realization, baseline, rtol=1e-15).passed
+    assert not _compare(realization, baseline, rtol=1e-17).passed  # under one ULP
+    assert _one_variable(_compare(realization, baseline, rtol=1e-15)).n_mismatched == 0
+    assert _one_variable(_compare(realization, baseline, rtol=1e-17)).n_mismatched == 1
+
+
+def test_tolerances_add_numpy_style(pair_dirs: tuple[Path, Path]) -> None:
+    """|real - base| <= atol + rtol * |base|: a difference neither
+    tolerance covers alone passes under their sum."""
+    realization, baseline = pair_dirs
+    values = np.ones((2, 3, 4))
+    perturbed = values.copy()
+    perturbed[0, 0, 0] += 1.5e-6
+    _write_nc(realization / "cece_a.nc", perturbed)
+    _write_nc(baseline / "cece_a.nc", values)
+
+    assert not _compare(realization, baseline, atol=1e-6).passed
+    assert not _compare(realization, baseline, rtol=1e-6).passed
+    assert _compare(realization, baseline, atol=1e-6, rtol=1e-6).passed
+
+
+def test_resolve_tolerances_prefers_the_override_and_keeps_zero() -> None:
+    entry = maccity_entry(atol=1e-9, rtol=1e-15)
+    assert resolve_tolerances(entry, atol=None, rtol=None) == (1e-9, 1e-15)
+    assert resolve_tolerances(entry, atol=0.0, rtol=None) == (0.0, 1e-15)
+    assert resolve_tolerances(entry, atol=None, rtol=1e-12) == (1e-9, 1e-12)
+
+
+def test_rtol_is_recorded_in_the_result_and_the_csv(
+    pair_dirs: tuple[Path, Path], tmp_path: Path
+) -> None:
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(realization / "cece_a.nc", values)
+    _write_nc(baseline / "cece_a.nc", values)
+    result = _compare(realization, baseline, atol=1e-9, rtol=1e-15)
+    assert (result.atol, result.rtol) == (1e-9, 1e-15)
+    frame = write_comparison_csv(result, tmp_path / "c.csv")
+    assert list(frame.columns)[6:8] == ["atol", "rtol"]
+    assert set(frame["rtol"]) == {1e-15}
 
 
 def test_nan_position_mismatch_fails_even_under_tolerance(
@@ -142,6 +201,97 @@ def test_changed_global_attribute_fails(pair_dirs: tuple[Path, Path]) -> None:
     result = _compare(realization, baseline)
     assert not result.passed
     assert not result.files[0].global_attributes_match
+
+
+def test_a_missing_volatile_attribute_still_fails(pair_dirs: tuple[Path, Path]) -> None:
+    # Volatile means the value is not compared; the attribute is still
+    # expected to exist on both sides.
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(realization / "cece_a.nc", values, global_attrs={"title": "t"})
+    _write_nc(
+        baseline / "cece_a.nc", values, global_attrs={"title": "t", "history": "h"}
+    )
+    result = compare_with_baseline(
+        realization,
+        baseline,
+        atol=0.0,
+        run_id="r",
+        application="cece",
+        suite="s",
+        combo="c",
+        combo_id="i",
+        baseline_ulid="b",
+        ignore_global_attributes=("history",),
+    )
+    assert not result.passed
+    assert not result.files[0].global_attributes_match
+
+
+def test_volatile_global_attributes_are_ignored(pair_dirs: tuple[Path, Path]) -> None:
+    # Run stamps (creation time, a "Simulated on ..." history line) differ
+    # between any two runs; the adapter names them and the comparison skips
+    # them — every other global attribute stays exact.
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(
+        realization / "cece_a.nc",
+        values,
+        global_attrs={
+            "title": "t",
+            "date_created": "2026-10-08T22:55:24Z",
+            "history": "Simulated on 2026-10-08T22:55:24Z UTC",
+        },
+    )
+    _write_nc(
+        baseline / "cece_a.nc",
+        values,
+        global_attrs={
+            "title": "t",
+            "date_created": "2026-10-08T22:43:48Z",
+            "history": "Simulated on 2026-10-08T22:43:48Z UTC",
+        },
+    )
+    assert not _compare(realization, baseline).passed
+    result = compare_with_baseline(
+        realization,
+        baseline,
+        atol=0.0,
+        run_id="r",
+        application="cece",
+        suite="s",
+        combo="c",
+        combo_id="i",
+        baseline_ulid="b",
+        ignore_global_attributes=("date_created", "history"),
+    )
+    assert result.passed
+    assert result.files[0].global_attributes_match
+    # Only a stamp may differ: a changed title still fails (fresh file
+    # names: the first comparison's handles are cached by xarray).
+    _write_nc(
+        realization / "cece_b.nc",
+        values,
+        global_attrs={"title": "changed", "history": "x"},
+    )
+    _write_nc(
+        baseline / "cece_b.nc", values, global_attrs={"title": "t", "history": "y"}
+    )
+    (realization / "cece_a.nc").unlink()
+    (baseline / "cece_a.nc").unlink()
+    result = compare_with_baseline(
+        realization,
+        baseline,
+        atol=0.0,
+        run_id="r",
+        application="cece",
+        suite="s",
+        combo="c",
+        combo_id="i",
+        baseline_ulid="b",
+        ignore_global_attributes=("history",),
+    )
+    assert not result.passed
 
 
 def test_dimension_size_change_fails(pair_dirs: tuple[Path, Path]) -> None:
@@ -196,8 +346,7 @@ def test_difference_statistics_match_numpy(pair_dirs: tuple[Path, Path]) -> None
     _write_nc(realization / "cece_a.nc", perturbed)
     _write_nc(baseline / "cece_a.nc", values)
 
-    result = _compare(realization, baseline)
-    (variable,) = [v for f in result.files for v in f.variables]
+    variable = _one_variable(_compare(realization, baseline))
     diff = perturbed - values
     assert variable.rmse == pytest.approx(float(np.sqrt(np.nanmean(diff**2))))
     assert variable.n_evaluated == int(np.sum(~np.isnan(diff)))
@@ -277,3 +426,140 @@ def test_comparison_csvs_concatenate_to_root(
     )
     assert (tmp_path / "stats-comparison.csv").is_file()
     assert len(combined) == 2
+
+
+# ── configuration equality ────────────────────────────────────────────────────
+
+
+def _cece_config(path: Path, mapalgo: str, directory: str) -> None:
+    """A generated CECE config as build_config writes it: the maccity base
+    with one mapalgo and the per-run output paths."""
+    from pathlib import PurePosixPath
+
+    from applications.cece.config import CeceConfig, Mapalgo
+
+    base = (
+        Path(__file__).resolve().parents[1]
+        / "config"
+        / "cece"
+        / "maccity"
+        / "maccity.yaml"
+    )
+    config = CeceConfig.from_yaml(base)
+    assert config.cece_data is not None
+    assert config.output is not None
+    config.cece_data.streams[0].mapalgo = Mapalgo(mapalgo)
+    config.output.directory = directory
+    config.driver.log_file = str(PurePosixPath(directory) / "cece.log")
+    config.to_yaml(path)
+
+
+def _compare_with_app(realization: Path, baseline: Path) -> BaselineComparisonResult:
+    from applications.registry import get_application
+
+    return compare_with_baseline(
+        realization,
+        baseline,
+        atol=0.0,
+        run_id="r",
+        application="cece",
+        suite="s",
+        combo="c",
+        combo_id="01JREALREALREALREALREALREA",
+        baseline_ulid="01JBASEBASEBASEBASEBASEBAS",
+        app=get_application("cece"),
+    )
+
+
+def test_identical_configuration_up_to_run_paths_passes(
+    pair_dirs: tuple[Path, Path],
+) -> None:
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(realization / "cece_a.nc", values)
+    _write_nc(baseline / "cece_a.nc", values)
+    _cece_config(
+        realization / "01JREALREALREALREALREALREA.yaml", "consd", "/combo_runs/01JREAL"
+    )
+    _cece_config(
+        baseline / "01JBASEBASEBASEBASEBASEBAS.yaml", "consd", "/work/out/01JBASE"
+    )
+    result = _compare_with_app(realization, baseline)
+    assert result.passed
+    assert result.config_match
+    assert result.config_detail is None
+
+
+def test_changed_configuration_fails_even_with_identical_output(
+    pair_dirs: tuple[Path, Path],
+) -> None:
+    # A baseline is a claim about the output of a configuration: a changed
+    # configuration needs a new baseline even when the data did not move.
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(realization / "cece_a.nc", values)
+    _write_nc(baseline / "cece_a.nc", values)
+    _cece_config(realization / "01JREALREALREALREALREALREA.yaml", "bilinear", "/x")
+    _cece_config(baseline / "01JBASEBASEBASEBASEBASEBAS.yaml", "consd", "/x")
+    result = _compare_with_app(realization, baseline)
+    assert not result.passed
+    assert not result.config_match
+    assert result.config_detail is not None
+    assert "differs" in result.config_detail
+    assert "configuration" in result.failure_summary()
+    assert all(file.passed for file in result.files)  # the data was identical
+
+
+def test_baseline_without_a_configuration_fails(pair_dirs: tuple[Path, Path]) -> None:
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(realization / "cece_a.nc", values)
+    _write_nc(baseline / "cece_a.nc", values)
+    _cece_config(realization / "01JREALREALREALREALREALREA.yaml", "consd", "/x")
+    result = _compare_with_app(realization, baseline)
+    assert not result.passed
+    assert not result.config_match
+    assert result.config_detail is not None
+    assert "no configuration" in result.config_detail
+
+
+def test_comparison_csv_carries_config_match(
+    pair_dirs: tuple[Path, Path], tmp_path: Path
+) -> None:
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(realization / "cece_a.nc", values)
+    _write_nc(baseline / "cece_a.nc", values)
+    _cece_config(realization / "01JREALREALREALREALREALREA.yaml", "consd", "/x")
+    frame = write_comparison_csv(
+        _compare_with_app(realization, baseline), tmp_path / "c.csv"
+    )
+    assert "config_match" in frame.columns
+    assert not frame["config_match"].iloc[0]
+    assert not frame["passed"].iloc[0]
+
+
+# ── dtype and integer data ────────────────────────────────────────────────────
+
+
+def test_dtype_mismatch_is_reported(pair_dirs: tuple[Path, Path]) -> None:
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(realization / "cece_a.nc", values.astype(np.float32))
+    _write_nc(baseline / "cece_a.nc", values)
+    result = _compare(realization, baseline)
+    variable = result.files[0].variables[0]
+    assert not variable.dtype_match
+    assert variable.detail is not None
+    assert "dtype" in variable.detail
+
+
+def test_integer_data_compares_exactly_and_within_tolerance(
+    pair_dirs: tuple[Path, Path],
+) -> None:
+    realization, baseline = pair_dirs
+    base = np.arange(24, dtype=np.int32).reshape(2, 3, 4)
+    _write_nc(realization / "cece_a.nc", base + 1)
+    _write_nc(baseline / "cece_a.nc", base)
+    assert not _compare(realization, baseline).passed
+    assert _compare(realization, baseline, atol=1.0).passed

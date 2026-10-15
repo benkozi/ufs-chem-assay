@@ -37,6 +37,9 @@ SETTINGS_NOT_MIRRORED = frozenset(
         "platform",  # top level
         "baseline_root_dir",  # baselines.root_dir
         "enable_baseline_comparisons",  # baselines.enabled
+        "baseline_store",  # baselines.store
+        "baseline_atol",  # baselines.atol
+        "baseline_rtol",  # baselines.rtol
         "sbatch_args",  # slurm: (account, qos, partition, cpus)
         "slurm_queue_wait_s",  # slurm.queue_wait_s
         "job_env",  # harness.env under the slurm runtime
@@ -150,6 +153,13 @@ def _exports(
     )
     if config.baselines.root_dir is not None:
         exports.append((f"{ENV_PREFIX}BASELINE_ROOT_DIR", q(config.baselines.root_dir)))
+    exports.append((f"{ENV_PREFIX}BASELINE_STORE", q(config.baselines.store)))
+    for tolerance, override in (
+        ("ATOL", config.baselines.atol),
+        ("RTOL", config.baselines.rtol),
+    ):
+        if override is not None:
+            exports.append((f"{ENV_PREFIX}BASELINE_{tolerance}", str(override)))
     exports.append(("PATH", '"$HOME/.local/bin:$PATH"'))
     exports.append(("UV_CACHE_DIR", q(config.uv_cache_dir)))
     if config.runtime is not Runtime.SLURM:
@@ -171,6 +181,10 @@ def _harness(
         pytest_args.append("--combo-clean-root")
     if harness.pytest_dry_run:
         pytest_args.append("--dry-run")
+    if harness.publish_baselines:
+        pytest_args.append("--publish-baselines")
+    if harness.no_suite_update:
+        pytest_args.append("--no-suite-update")
     pytest_args += harness.pytest_args
     return [
         *clean_python_env(section),

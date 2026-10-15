@@ -174,7 +174,16 @@ class BaselineComparison(StrictModel):
     atol: float = Field(
         0.0,
         ge=0,
-        description="0 = bit-for-bit data comparison; > 0 = absolute tolerance (no scaling)",
+        description="Absolute data tolerance; with rtol 0 too, the comparison is bit-for-bit",
+    )
+    rtol: float = Field(
+        0.0,
+        ge=0,
+        description=(
+            "Relative data tolerance, scaled by the baseline's magnitude: an element "
+            "passes when |real - baseline| <= atol + rtol * |baseline| (numpy "
+            "style); ~2.2e-16 is one float64 ULP"
+        ),
     )
     plot: bool = Field(
         True,
@@ -341,6 +350,21 @@ class RecordedInput(StrictModel):
     )
 
 
+class RecordedBaseline(StrictModel):
+    """One pinned baseline as the session found or staged it at start
+    (run.yaml): local, synced from the store, would-sync (dry run), or
+    failed with the reason."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    suite: str = Field(description="Suite that pins the baseline")
+    ulid: str = Field(description="The baseline's ULID")
+    source: str = Field(description="Where it is synced from: <store>/<ulid>")
+    path: Path = Field(description="Where the session reads it: <baseline root>/<ulid>")
+    state: str = Field(description="local, synced, would-sync, or failed")
+    detail: str = Field(description="Why: present, synced, or the error")
+
+
 class RunManifest(StrictModel):
     """Output-only record of one test run, written to the output root as
     run.yaml. The run_id is generated at runtime (never read from
@@ -387,6 +411,13 @@ class RunManifest(StrictModel):
     inputs: list[RecordedInput] = Field(
         default_factory=list,
         description="Every selected suite's declared inputs as found at session start",
+    )
+    baselines: list[RecordedBaseline] = Field(
+        default_factory=list,
+        description=(
+            "Every pinned baseline as found or staged at session start (empty "
+            "when comparisons are disabled)"
+        ),
     )
 
     @field_validator("suites", mode="before")

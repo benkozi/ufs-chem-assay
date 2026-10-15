@@ -1,0 +1,20 @@
+# Dependency review (https://github.com/actions/dependency-review-action):
+# fails a PR that adds a dependency with a known vulnerability or an
+# unexpected license, from the dependency-graph diff between base and head
+# (pyproject.toml / uv.lock, the workflows' actions). Free on a public
+# repository; needs the dependency graph, which public repositories have.
+name: dependency-review
+on:
+  pull_request:
+permissions:
+  contents: read
+  pull-requests: write  # the summary comment on the PR
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: on-failure

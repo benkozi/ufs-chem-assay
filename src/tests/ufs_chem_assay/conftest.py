@@ -38,32 +38,32 @@ MACCITY_N_TIMESTEPS = 3
 _MACCITY_DIR = _CONFIG_ROOT / "cece" / "maccity"
 
 
-@pytest.fixture()
+@pytest.fixture
 def cece_config_path() -> Path:
     return _MACCITY_DIR / "maccity.yaml"
 
 
-@pytest.fixture()
+@pytest.fixture
 def suite_path() -> Path:
     return _MACCITY_DIR / "simple-maccity-suite.yaml"
 
 
-@pytest.fixture()
+@pytest.fixture
 def suite_dir() -> Path:
     return _MACCITY_DIR
 
 
-@pytest.fixture()
+@pytest.fixture
 def exhaustive_suite_path() -> Path:
     return _MACCITY_DIR / "exhaustive-maccity-run-only-suite.yaml"
 
 
-@pytest.fixture()
+@pytest.fixture
 def maccity_n_timesteps() -> int:
     return MACCITY_N_TIMESTEPS
 
 
-@pytest.fixture()
+@pytest.fixture
 def maccity_expected_filenames(maccity_n_timesteps: int) -> set[str]:
     """Correct output names: hours 1..N (first write at the end of the first
     timestep, not t=0)."""

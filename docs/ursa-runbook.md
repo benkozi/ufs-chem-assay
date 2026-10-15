@@ -87,7 +87,7 @@ Python 3.13 rather than 3.14: every dependency has Linux wheels for
 
 ```bash
 git clone --recurse-submodules --branch "$CECE_REF" \
-    git@github.com:benkozi/CECE.git $ROOT/CECE
+    git@github.com:ufs-community/CECE.git $ROOT/CECE
 ```
 
 ## 4. Driver build (native, modules from the checkout)
@@ -128,8 +128,11 @@ stages them into `$ROOT/CECE/data` through the AWS CLI, anonymously for
 public buckets (the MACCity file, the only input `simple-maccity` reads,
 comes from the public `geos-chem` bucket — no AWS account needed). A file
 already present with the declared `sha256` is skipped without touching the
-network, so re-running is free. The data stage of the run config does the
-same.
+network, so re-running is free. With `baselines.enabled: true` (or
+`ASSAY_ENABLE_BASELINE_COMPARISONS=true`) and a `baselines.root_dir`,
+`fetch` also pulls the baselines the suite pins from the store into that
+root — the login node pre-warming what the session will compare against.
+The data stage of the run config does the same.
 
 ## 6. Render and read the scripts
 
@@ -196,6 +199,33 @@ cd $ROOT/CECE && sbatch --wait $ROOT/CECE/ufs-chem-assay-output/<combo_id>/<comb
 then read the `.out` it rewrites. Edit the script in place to
 experiment (a different modulefile, an extra export); the harness
 regenerates it on the next run.
+
+**Publishing baselines.** Once a run is the one you want to compare
+future runs against, publish its compared combinations from the login
+node (the AWS CLI step above; `AWS_PROFILE` as you configured it) —
+dry-run first, then for real:
+
+```bash
+cd $ROOT/ufs-chem-assay
+AWS_PROFILE=<profile> uv run ufs-chem-assay publish-baselines \
+    --output-root=$ROOT/CECE/ufs-chem-assay-output --dry-run
+AWS_PROFILE=<profile> uv run ufs-chem-assay publish-baselines \
+    --output-root=$ROOT/CECE/ufs-chem-assay-output
+```
+
+Each combination the suite compares against goes to
+`s3://ufs-chem/baselines/<ulid>/` with a `baseline.yaml` manifest, and
+the suite file's `ulid:` lines are repointed in your harness checkout —
+commit that change. Set `baselines.root_dir` in the run config (or
+`ASSAY_BASELINE_ROOT_DIR`) to also keep a local copy the next run reads;
+`harness.publish_baselines: true` does all of this at the end of the
+harness stage instead — the harness stage runs on the login node under
+the slurm runtime, which has network. A session run *inside* an
+allocation (a compute node, no network) refuses `--publish-baselines` at
+start: run without the flag, then publish the output root from a login
+or data-transfer node as above. `--store=/path/to/dir` (or `baselines.store`)
+publishes into a local directory instead of the bucket — no credentials,
+but only reachable on this machine.
 
 The `native` runtime (the driver as a direct host process) is not a
 supported path on Ursa: the harness venv and the driver need conflicting

@@ -1,13 +1,9 @@
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
-
-if TYPE_CHECKING:
-    from dask.distributed import Client
 
 from analysis import (
     RunContext,
@@ -19,10 +15,10 @@ from analysis import (
 )
 
 
-@pytest.fixture()
+@pytest.fixture
 def driver_like_nc(tmp_path: Path) -> tuple[Path, np.ndarray]:
     """A temporary NetCDF matching driver output: a co variable on a small
-    time × lat × lon grid, with a NaN to exercise nan-aware stats."""
+    time x lat x lon grid, with a NaN to exercise nan-aware stats."""
     rng = np.random.default_rng(42)
     data = rng.random((2, 4, 5))
     data[0, 0, 0] = np.nan
@@ -73,8 +69,9 @@ def _stats_rows() -> list[VariableStats]:
     ]
 
 
+@pytest.mark.usefixtures("dask_client")
 def test_compute_file_stats_matches_numpy(
-    dask_client: "Client", driver_like_nc: tuple[Path, np.ndarray]
+    driver_like_nc: tuple[Path, np.ndarray],
 ) -> None:
     from ulid import ULID
 
@@ -84,7 +81,8 @@ def test_compute_file_stats_matches_numpy(
         path, combo="MACCITY.map-consd", combo_id=_COMBO_ID, run=run
     )
 
-    assert stats.run_id == run.run_id and len(stats.run_id) == 26
+    assert stats.run_id == run.run_id
+    assert len(stats.run_id) == 26
     assert stats.suite == "simple-maccity"
     assert stats.combo_id == _COMBO_ID
     assert (stats.combo, stats.file, stats.variable) == (
@@ -105,9 +103,8 @@ def test_compute_file_stats_matches_numpy(
     assert stats.median == pytest.approx(np.nanmedian(data))
 
 
-def test_compute_file_stats_null_time_without_time_coordinate(
-    dask_client: "Client", tmp_path: Path
-) -> None:
+@pytest.mark.usefixtures("dask_client")
+def test_compute_file_stats_null_time_without_time_coordinate(tmp_path: Path) -> None:
     dataset = xr.Dataset({"co": (("lat", "lon"), np.ones((2, 3)))})
     path = tmp_path / "timeless.nc"
     dataset.to_netcdf(path, engine="netcdf4")
@@ -188,8 +185,9 @@ def test_spatial_variables_are_those_with_lat_and_lon(
         assert spatial_variables(ds) == ["co", "nox"]
 
 
+@pytest.mark.usefixtures("dask_client")
 def test_compute_file_stats_skips_bounds_variables(
-    driver_like_nc: tuple[Path, np.ndarray], dask_client: "Client", tmp_path: Path
+    driver_like_nc: tuple[Path, np.ndarray], tmp_path: Path
 ) -> None:
     path, _ = driver_like_nc
     with xr.open_dataset(path) as ds:
@@ -200,3 +198,13 @@ def test_compute_file_stats_skips_bounds_variables(
     stats = compute_file_stats(bounded, combo="c", combo_id=_COMBO_ID, run=_RUN)
 
     assert [row.variable for row in stats] == ["co"]
+
+
+def test_file_time_is_null_for_a_non_datetime_time_coordinate() -> None:
+    from analysis import _file_time
+
+    dataset = xr.Dataset(
+        {"co": (("time", "lat", "lon"), np.ones((1, 2, 3)))},
+        coords={"time": [0.0], "lat": [0.0, 1.0], "lon": [0.0, 1.0, 2.0]},
+    )
+    assert _file_time(dataset) is None

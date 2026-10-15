@@ -97,7 +97,9 @@ def test_dry_run_generates_everything_but_never_executes(tmp_path: Path) -> None
     assert len(combos) == 6 * 3
     assert set(combos["suite"]) == {"simple-maccity"}
     swept = combos[combos["swept"]]
-    assert set(zip(swept["target"], swept["field"])) == {("MACCITY", "mapalgo")}
+    assert set(zip(swept["target"], swept["field"], strict=False)) == {
+        ("MACCITY", "mapalgo")
+    }
     for combo_id in combo_ids:
         assert len(combo_id) == 26  # runtime ULID directory names
         assert (root / combo_id / f"{combo_id}.yaml").is_file()
@@ -230,15 +232,14 @@ def test_slurm_dry_run_writes_a_job_script_per_combo(tmp_path: Path) -> None:
         assert script.is_file()
         text = script.read_text()
         assert f"#SBATCH --output={combo_dir}/{combo_dir.name}.out" in text
-        assert "#SBATCH -A epic" in text and "module load cece_ursa.intelllvm" in text
+        assert "#SBATCH -A epic" in text
+        assert "module load cece_ursa.intelllvm" in text
         assert text.rstrip().endswith(
             f"srun --ntasks=1 ./build/cece_standalone_driver {combo_dir}/{combo_dir.name}.yaml"
         )
     manifest = yaml.safe_load((root / "run.yaml").read_text())
-    assert (
-        manifest["runtime"] == "slurm"
-        and manifest["modulefile"] == "cece_ursa.intelllvm"
-    )
+    assert manifest["runtime"] == "slurm"
+    assert manifest["modulefile"] == "cece_ursa.intelllvm"
     assert not list(root.rglob("*.out"))  # nothing submitted
 
 
@@ -273,7 +274,8 @@ def test_slurm_dry_run_without_a_checkout_writes_no_job_scripts(tmp_path: Path) 
     assert "21 skipped" in result.stdout
     assert not list((tmp_path / "bt").rglob("*.sbatch"))
     manifest = yaml.safe_load(next((tmp_path / "bt").rglob("run.yaml")).read_text())
-    assert manifest["runtime"] == "slurm" and manifest["application_commit"] is None
+    assert manifest["runtime"] == "slurm"
+    assert manifest["application_commit"] is None
 
 
 @pytest.mark.parametrize("how", ["flag", "env"])
@@ -386,3 +388,176 @@ def test_run_yaml_records_a_present_inputs_size(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     manifest = yaml.safe_load((tmp_path / "combo_runs" / "run.yaml").read_text())
     assert manifest["inputs"][0]["bytes"] == 5
+
+
+def _fabricated_checkout(tmp_path: Path) -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CECE_", "ASSAY_"))}
+    env["CECE_ROOT_DIR"] = str(tmp_path)
+    env["ASSAY_PLATFORM"] = "local"
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "x",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    return env
+
+
+def _pytest(
+    tmp_path: Path, env: dict[str, str], *args: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(_RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"),
+            "--dry-run",
+            "--combo-output-root=combo_runs",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            *args,
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+
+def test_dry_run_with_publish_baselines_publishes_nothing(tmp_path: Path) -> None:
+    """Every driver test skipped -> the gate holds every combination back;
+    no aws call, no suite edit, exit 0."""
+    env = _fabricated_checkout(tmp_path)
+    env["ASSAY_LOG_LEVEL"] = "DEBUG"
+    suite = _RUNNER_ROOT / "src/tests/config/cece/maccity/simple-maccity-suite.yaml"
+    before = suite.read_text()
+    result = _pytest(tmp_path, env, "--publish-baselines")
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = result.stdout + result.stderr
+    assert "publish summary: 3 skipped" in output
+    assert "aws s3 sync" not in output
+    assert suite.read_text() == before
+    assert not list((tmp_path / "combo_runs").rglob("baseline.yaml"))
+
+
+def test_no_suite_update_requires_publish_baselines(tmp_path: Path) -> None:
+    env = _fabricated_checkout(tmp_path)
+    result = _pytest(tmp_path, env, "--no-suite-update")
+    assert result.returncode != 0
+    assert "--no-suite-update has no effect without --publish-baselines" in (
+        result.stdout + result.stderr
+    )
+
+
+def test_publish_baselines_fails_fast_at_session_start_without_network(
+    tmp_path: Path,
+) -> None:
+    """A node without network must not run the whole suite and fail at the
+    end: the store is probed at session start. A closed local port stands
+    in for no network (the probe honours AWS_ENDPOINT_URL)."""
+    env = _fabricated_checkout(tmp_path)
+    env["AWS_ENDPOINT_URL"] = "http://127.0.0.1:9"  # discard port: refused at once
+    result = _pytest(tmp_path, env, "--publish-baselines")
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "no network" in output
+    assert "publish-baselines --output-root" in output
+    assert not (tmp_path / "combo_runs" / "run.yaml").exists()  # nothing ran
+
+
+def test_tolerance_overrides_are_read_at_session_start(tmp_path: Path) -> None:
+    """--baseline-rtol / --baseline-atol beat the settings and the suite's
+    entries; the override is logged once; a negative one is a usage error."""
+    env = _fabricated_checkout(tmp_path)
+    env["ASSAY_BASELINE_RTOL"] = "1e-12"  # the option wins over the setting
+    result = _pytest(tmp_path, env, "--baseline-rtol=1e-15", "--baseline-atol=0")
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = result.stdout + result.stderr
+    assert output.count("tolerance override") == 1
+    assert "atol=0.0" in output
+    assert "rtol=1e-15" in output
+    result = _pytest(tmp_path, env, "--baseline-rtol=-1")
+    assert result.returncode != 0
+    assert "baseline_rtol" in result.stdout + result.stderr
+
+
+def test_directory_store_needs_no_network_at_session_start(tmp_path: Path) -> None:
+    env = _fabricated_checkout(tmp_path)
+    env["AWS_ENDPOINT_URL"] = "http://127.0.0.1:9"
+    store = tmp_path / "store"
+    store.mkdir()
+    env["ASSAY_BASELINE_STORE"] = str(store)
+    result = _pytest(tmp_path, env, "--publish-baselines")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _pinned_ulids() -> list[str]:
+    suite = _RUNNER_ROOT / "src/tests/config/cece/maccity/simple-maccity-suite.yaml"
+    return [
+        line.split("ulid:")[1].strip()
+        for line in suite.read_text().splitlines()
+        if line.strip().startswith("ulid:")
+    ]
+
+
+def test_session_start_syncs_missing_baselines_from_the_store(tmp_path: Path) -> None:
+    """A real session (no --dry-run): at session start the pinned ULIDs
+    absent from the baseline root are synced from the store — here a
+    directory store, so no network — before anything else. Collection
+    then fails on the fabricated checkout's missing inputs, which is fine:
+    the sync happened, and run.yaml is not the thing under test."""
+    env = _fabricated_checkout(tmp_path)
+    store = tmp_path / "store"
+    for ulid in _pinned_ulids():
+        (store / ulid).mkdir(parents=True)
+        (store / ulid / "cece_20100101_010000.nc").write_bytes(b"nc")
+        (store / ulid / "baseline.yaml").write_text(f"ulid: {ulid}\n")
+    root = tmp_path / "baseline-root"
+    env["ASSAY_BASELINE_STORE"] = str(store)
+    env["ASSAY_BASELINE_ROOT_DIR"] = str(root)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(_RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"),
+            "--combo-output-root=combo_runs",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode != 0  # the missing inputs, at collection
+    assert "declared inputs are missing" in result.stdout + result.stderr
+    assert sorted(p.name for p in root.iterdir()) == sorted(_pinned_ulids())
+    assert all((root / u / "baseline.yaml").is_file() for u in _pinned_ulids())
+
+
+def test_dry_run_records_baseline_states_without_syncing(tmp_path: Path) -> None:
+    env = _fabricated_checkout(tmp_path)
+    env["ASSAY_BASELINE_ROOT_DIR"] = str(tmp_path / "baseline-root")
+    result = _pytest(tmp_path, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    manifest = yaml.safe_load((tmp_path / "combo_runs" / "run.yaml").read_text())
+    assert [b["state"] for b in manifest["baselines"]] == ["would-sync"] * 3
+    assert sorted(b["ulid"] for b in manifest["baselines"]) == sorted(_pinned_ulids())
+    assert not (tmp_path / "baseline-root").exists()

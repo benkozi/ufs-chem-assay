@@ -145,7 +145,7 @@ def test_mapalgo_matches_driver_canonical_values() -> None:
         "consd",
     }
     for removed in ("consf", "redist"):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="not a valid Mapalgo"):
             Mapalgo(removed)
 
 
@@ -345,3 +345,15 @@ def test_exhaustive_suite_enumerates_full_product(exhaustive_suite_path: Path) -
     # op x vd x tax x tint x map — every enum value via ".*" regexes;
     # category contributes a factor of 1.
     assert len(combos) == 2 * 1 * 5 * 2 * 2 * 6
+
+
+def test_duplicate_stream_names_in_a_sweep_are_rejected() -> None:
+    from applications.cece.suite import CeceDataSweep, StreamSweep
+
+    with pytest.raises(ValidationError, match="duplicate stream names"):
+        CeceDataSweep(
+            streams=[
+                StreamSweep(name="MACCITY", mapalgo=[Mapalgo.consd]),
+                StreamSweep(name="MACCITY", mapalgo=[Mapalgo.bilinear]),
+            ]
+        )

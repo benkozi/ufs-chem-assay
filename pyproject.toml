@@ -40,13 +40,16 @@ exclude = ["src/tests"]
 
 [dependency-groups]
 dev = [
+    "codespell>=2.4",
     "mypy>=1.14",
     "pandas-stubs>=2.0",
     "pre-commit>=4.0",
     # The 0.12 family the codebase is formatted with; keeps `uv run ruff`
     # resolving from the lock instead of whatever is on a machine's PATH.
+    "pytest-cov>=6",
     "ruff>=0.12,<0.13",
     "types-pyyaml>=6.0",
+    "vulture>=2.16",
     "yamlfix>=1.16",
     "yamllint>=1.35",
 ]
@@ -77,11 +80,10 @@ explicit_package_bases = true
 # python_version deliberately unpinned: checking runs against the venv's
 # interpreter (3.14); dependency stubs (numpy) need >=3.12 syntax.
 plugins = ["pydantic.mypy"]
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
-warn_return_any = true
-warn_unused_ignores = true
-warn_redundant_casts = true
+# --strict, except disallow_untyped_calls: dask, xarray's dask arrays, and
+# netCDF4 expose untyped entry points that the harness must call.
+strict = true
+disallow_untyped_calls = false
 
 [[tool.mypy.overrides]]
 # cartopy ships no stubs and no py.typed marker; the only untyped library.
@@ -91,6 +93,51 @@ ignore_missing_imports = true
 [tool.pydantic-mypy]
 init_typed = true
 init_forbid_extra = true
+
+# Coverage (CI gates on it; local runs: uv run pytest src/tests/ufs_chem_assay --cov).
+# Production code only: the test modules are not the thing being covered,
+# and the `python -m cli` shim is exercised through a subprocess, which
+# coverage does not see. 100%: every line of src/ (tests excluded) is
+# exercised by the harness suite, or is one of the exclude_also patterns.
+[tool.coverage.run]
+source = ["src"]
+omit = ["src/tests/*", "src/cli/__main__.py"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "raise NotImplementedError",
+    "^\\s*\\.\\.\\.$",
+]
+
+# Spelling (pre-commit): code, docs, templates. design/ holds records,
+# not maintained text; uv.lock is generated.
+[tool.codespell]
+skip = "./design,./uv.lock,./.venv,./.git,*.nc"
+
+# Dead-code detection (pre-commit, whole tree). Names bound by frameworks
+# rather than by code are ignored: pydantic's model_config, pytest's hook
+# functions, pydantic-settings' source hook; validators, properties, and
+# pytest fixtures/hooks are called by their framework. CeceConfig mirrors
+# the driver's YAML schema -- its fields and enum members are read by
+# serialization and by the driver, never by name here -- so it is excluded.
+[tool.vulture]
+paths = ["src", ".github/workflows/scripts"]
+min_confidence = 60
+ignore_names = ["model_config", "pytest_*", "settings_customise_sources"]
+ignore_decorators = [
+    "@field_validator",
+    "@model_validator",
+    "@classmethod",
+    "@property",
+    "@pytest.fixture",
+    "@pytest.hookimpl",
+]
+exclude = ["src/applications/cece/config.py"]
 
 [tool.yamlfix]
 # Minimize churn on checked-in suite/driver configs: no forced document

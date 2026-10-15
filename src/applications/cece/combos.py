@@ -5,9 +5,10 @@ the effective-parameter rows for combos.csv."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Callable, TypedDict
+from typing import TypedDict
 
 from applications.cece.config import CeceConfig, Vdist, VdistMethod
 from applications.cece.suite import CeceSweep

@@ -10,7 +10,8 @@ from assertions import (
     assert_output_variable_dimensions,
     assert_species_attributes,
 )
-from comparison import compare_with_baseline, write_comparison_csv
+from baselines import StagedBaseline
+from comparison import compare_with_baseline, resolve_tolerances, write_comparison_csv
 from models.suite_config import Analysis, Assertions, BaselineComparison
 from runner import DriverRunResult
 from settings import Settings
@@ -100,11 +101,14 @@ def test_baseline_comparison(
     driver_run: DriverRunResult,
     run_context: RunContext,
     settings: Settings,
+    application: Application,
     baseline_comparisons: dict[str, BaselineComparison],
+    baseline_states: dict[str, StagedBaseline],
 ) -> None:
     """The combination's NetCDF output matches its configured baseline
     (nccmp-style: structure and attributes exact; data bit-for-bit or
-    within the suite's absolute tolerance)."""
+    within the entry's `atol + rtol * |baseline|`, a session override
+    taking precedence)."""
     if driver_run.error is not None:
         pytest.skip(f"driver run failed: {driver_run.error}")
     if not settings.enable_baseline_comparisons:
@@ -115,6 +119,9 @@ def test_baseline_comparison(
     # Lazy: only comparing runs pay dask cluster startup.
     request.getfixturevalue("dask_client")
 
+    staged = baseline_states.get(entry.ulid)
+    if staged is not None and staged.state == "failed":
+        pytest.fail(f"baseline {entry.ulid} unavailable: {staged.detail}")
     baseline_dir = (settings.baseline_root_dir or Path.cwd()) / entry.ulid
     if not baseline_dir.is_dir():
         pytest.fail(
@@ -122,16 +129,22 @@ def test_baseline_comparison(
             "(set ASSAY_BASELINE_ROOT_DIR)"
         )
 
+    atol, rtol = resolve_tolerances(
+        entry, atol=settings.baseline_atol, rtol=settings.baseline_rtol
+    )
     result = compare_with_baseline(
         driver_run.combo_dir,
         baseline_dir,
-        atol=entry.atol,
+        atol=atol,
+        rtol=rtol,
         run_id=run_context.run_id,
         application=run_context.application,
         suite=run_context.suite,
         combo=driver_run.combo.name,
         combo_id=driver_run.combo.combo_id,
         baseline_ulid=entry.ulid,
+        ignore_global_attributes=application.volatile_global_attributes,
+        app=application,
     )
     write_comparison_csv(
         result,

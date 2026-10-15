@@ -18,18 +18,19 @@ import matplotlib
 
 matplotlib.use("Agg")
 
-import cartopy.crs as ccrs  # noqa: E402
-import cartopy.feature as cfeature  # noqa: E402
-import matplotlib.pyplot as plt  # noqa: E402
-import numpy as np  # noqa: E402
-import pandas as pd  # noqa: E402
-import xarray as xr  # noqa: E402
-from cartopy.mpl.ticker import LatitudeFormatter, LongitudeFormatter  # noqa: E402
-from PIL import Image  # noqa: E402
-from pydantic import BaseModel, ConfigDict  # noqa: E402
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import xarray as xr
+from cartopy.mpl.ticker import LatitudeFormatter, LongitudeFormatter
+from PIL import Image
+from pydantic import BaseModel, ConfigDict
 
-from analysis import _file_time, spatial_variables  # noqa: E402
-from logs import HARNESS_NAME, get_logger  # noqa: E402
+from analysis import _file_time, spatial_variables
+from identity import HARNESS_NAME
+from logs import get_logger
 
 logger = get_logger("plotting")
 

@@ -114,7 +114,8 @@ def test_grid_name_replaces_nx_ny(tmp_path: Path, cece_config_path: Path) -> Non
     grid["grid_name"] = "F360"
     config = CeceConfig.from_yaml(_write_config(tmp_path, content))
     assert config.driver.grid.grid_name == "F360"
-    assert config.driver.grid.nx is None and config.driver.grid.ny is None
+    assert config.driver.grid.nx is None
+    assert config.driver.grid.ny is None
 
 
 def test_grid_name_alongside_dims_parses(

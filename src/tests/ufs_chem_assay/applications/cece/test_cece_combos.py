@@ -26,12 +26,12 @@ def _enumerate(sweep: CeceSweep, base_config: CeceConfig) -> list[Combo]:
     return enumerate_combos(dimensions(sweep, base_config))
 
 
-@pytest.fixture()
+@pytest.fixture
 def base_config(cece_config_path: Path) -> CeceConfig:
     return CeceConfig.from_yaml(cece_config_path)
 
 
-@pytest.fixture()
+@pytest.fixture
 def two_stream_config_path(tmp_path: Path, cece_config_path: Path) -> Path:
     """The maccity base config plus a second stream named AUXDATA."""
     content = yaml.safe_load(cece_config_path.read_text())
@@ -227,17 +227,20 @@ def test_build_config_supplies_vdist_companions_per_method(
     height = vdist_for("co.vd-height")
     assert height.method is VdistMethod.height
     assert (height.h_start, height.h_end) == (0.0, 100.0)
-    assert height.layer_start is None and height.p_start is None
+    assert height.layer_start is None
+    assert height.p_start is None
 
     pressure = vdist_for("co.vd-pressure")
     assert pressure.method is VdistMethod.pressure
     assert (pressure.p_start, pressure.p_end) == (100000.0, 90000.0)
-    assert pressure.layer_start is None and pressure.h_start is None
+    assert pressure.layer_start is None
+    assert pressure.h_start is None
 
     layer_range = vdist_for("co.vd-range")
     assert layer_range.method is VdistMethod.range
     assert (layer_range.layer_start, layer_range.layer_end) == (0, 2)
-    assert layer_range.p_start is None and layer_range.h_start is None
+    assert layer_range.p_start is None
+    assert layer_range.h_start is None
 
     single = vdist_for("co.vd-single")
     assert single.method is VdistMethod.single
@@ -341,7 +344,8 @@ def test_write_combos_csv_is_effective_parameter_table(
     assert by_key[("co", "operation")] == ("add", False)
     # Unset optionals record an empty value.
     value, swept = by_key[("co", "category")]
-    assert value == "" and not swept
+    assert value == ""
+    assert not swept
 
 
 def test_write_combos_csv_covers_sweep_less_combos(
@@ -360,3 +364,21 @@ def test_write_combos_csv_covers_sweep_less_combos(
     assert not frame["swept"].any()
     mapalgo = frame[(frame["target"] == "MACCITY") & (frame["field"] == "mapalgo")]
     assert mapalgo["value"].iloc[0] == "consd"  # the base-config value
+
+
+def test_apply_to_a_missing_stream_is_an_error(cece_config_path: Path) -> None:
+    from applications.cece.combos import _apply_stream_field
+
+    base = CeceConfig.from_yaml(cece_config_path)
+    with pytest.raises(ValueError, match="not found in config"):
+        _apply_stream_field("GHOST", "mapalgo")(base, Mapalgo.consd)
+
+
+def test_build_config_applies_a_species_operation(cece_config_path: Path) -> None:
+    base = CeceConfig.from_yaml(cece_config_path)
+    sweep = CeceSweep(
+        species={"co": [SpeciesEntrySweep(operation=[Operation.replace])]}
+    )
+    (combo,) = _enumerate(sweep, base)
+    config = build_config(combo, output_directory="/out", config_path=cece_config_path)
+    assert config.species["co"][0].operation is Operation.replace

@@ -23,10 +23,13 @@ never installed by this module. See the README for the install per machine.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+import socket
 import subprocess
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlparse
 
 from pydantic import (
     BaseModel,
@@ -59,6 +62,31 @@ def s3_uri_from_arn(arn: str) -> str:
     if not arn.startswith(_S3_ARN_PREFIX) or len(arn) == len(_S3_ARN_PREFIX):
         raise ValueError(f"not an S3 bucket ARN: {arn!r}")
     return _S3_SCHEME + arn[len(_S3_ARN_PREFIX) :]
+
+
+def check_reachable(uri: str, timeout_s: float = 3.0) -> None:
+    """Fail fast when there is no network to S3: one TCP connect to the
+    bucket's endpoint (`<bucket>.s3.amazonaws.com:443`, or the host of
+    AWS_ENDPOINT_URL when set), no credentials involved. ConnectionError
+    with a plain message on failure — before the AWS CLI's own retries with
+    backoff turn a dead network (an HPC compute node) into minutes of
+    waiting. Says nothing about credentials: that stays the CLI's."""
+    if not uri.startswith(_S3_SCHEME):
+        raise ValueError(f"not an s3:// URI: {uri!r}")
+    bucket = uri[len(_S3_SCHEME) :].partition("/")[0]
+    endpoint = os.environ.get("AWS_ENDPOINT_URL")
+    if endpoint:
+        parsed = urlparse(endpoint)
+        host = parsed.hostname or endpoint
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    else:
+        host, port = f"{bucket}.s3.amazonaws.com", 443
+    try:
+        socket.create_connection((host, port), timeout=timeout_s).close()
+    except OSError as exc:
+        raise ConnectionError(
+            f"cannot reach {host}:{port} ({exc}): no network to S3 from this node"
+        ) from exc
 
 
 def _is_s3(side: str | Path) -> bool:

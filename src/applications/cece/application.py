@@ -35,6 +35,7 @@ class CeceApplication(Application):
     checkout_dirname = "CECE"
     data_dirname = "data"
     standard_dimensions = assertions.STANDARD_DIMENSIONS
+    volatile_global_attributes = assertions.VOLATILE_GLOBAL_ATTRIBUTES
     settings_model = CeceSettings
     config_model = CeceConfig
     suite_model = suite.CeceSuiteConfig
@@ -64,6 +65,15 @@ class CeceApplication(Application):
 
     def output_variable_names(self, config: DriverConfig) -> list[str]:
         return assertions.output_variable_names(_config(config))
+
+    def config_fingerprint(self, path: Path) -> str:
+        # build_config points output.directory and driver.log_file at the
+        # combination's own directory: run paths, not configuration.
+        config = CeceConfig.from_yaml(path)
+        assert config.output is not None
+        config.output.directory = "<combo>"
+        config.driver.log_file = "<combo>/cece.log"
+        return config.model_dump_json()
 
     def selector_matches(self, selector: SweepSelectorBase, combo: Combo) -> bool:
         assert isinstance(selector, suite.CeceSweepSelector), type(selector)

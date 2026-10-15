@@ -11,8 +11,8 @@ from applications.registry import REGISTRY, get_application
 from cli.run_config import HARNESS_ROOT, RunConfig
 from cli.stages import Stage, application_output_root, render_stage
 from platforms import Platform
-from tests.ufs_chem_assay.stubs import stub_application
 from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR, run_config_file
+from tests.ufs_chem_assay.stubs import stub_application
 
 _CECE = get_application("cece")
 
@@ -22,19 +22,26 @@ _CECE = get_application("cece")
 _URSA_ROOT = Path("/scratch/ursa-run")
 
 
-@pytest.fixture()
+@pytest.fixture
 def ursa(tmp_path: Path) -> RunConfig:
     return RunConfig.from_yaml(run_config_file(tmp_path, root_dir=_URSA_ROOT))
 
 
-@pytest.fixture()
+@pytest.fixture
 def local(tmp_path: Path) -> RunConfig:
     return RunConfig.from_yaml(
         run_config_file(tmp_path, "local.yaml", root_dir=tmp_path / "runs")
     )
 
 
-@pytest.fixture()
+def _ursa(tmp_path: Path, overrides: dict[str, object]) -> RunConfig:
+    """The Ursa template with dotted-key overrides, at the runbook root."""
+    return RunConfig.from_yaml(
+        run_config_file(tmp_path, overrides=overrides, root_dir=_URSA_ROOT)
+    )
+
+
+@pytest.fixture
 def stub(monkeypatch: pytest.MonkeyPatch) -> Application:
     app = stub_application()
     monkeypatch.setitem(REGISTRY, "stub", app)
@@ -63,8 +70,8 @@ def test_source_stage_clones_when_missing_and_guards_submodules(
     script = render_stage(Stage.SOURCE, ursa, _CECE)
     clone = str(ursa.checkout_dir("cece"))
     assert (
-        "git clone --recurse-submodules --branch feature/buid-test-tweaks "
-        f"git@github.com:benkozi/CECE.git {clone}"
+        "git clone --recurse-submodules --branch develop "
+        f"git@github.com:ufs-community/CECE.git {clone}"
     ) in script.text
     assert f"{clone}/extern/helm/libs" in script.text
     assert "log -1 --oneline" in script.text
@@ -72,17 +79,12 @@ def test_source_stage_clones_when_missing_and_guards_submodules(
 
 
 def test_source_stage_update_source_fast_forwards(tmp_path: Path) -> None:
-    config = RunConfig.from_yaml(
-        run_config_file(
-            tmp_path,
-            overrides={"applications.cece.update_source": True},
-            root_dir=_URSA_ROOT,
-        )
-    )
+    config = _ursa(tmp_path, {"applications.cece.update_source": True})
     script = render_stage(Stage.SOURCE, config, _CECE)
-    assert "git -C" in script.text and "fetch origin" in script.text
-    assert "checkout feature/buid-test-tweaks" in script.text
-    assert "pull --ff-only origin feature/buid-test-tweaks" in script.text
+    assert "git -C" in script.text
+    assert "fetch origin" in script.text
+    assert "checkout develop" in script.text
+    assert "pull --ff-only origin develop" in script.text
     assert "submodule update --init --recursive" in script.text
 
 
@@ -186,6 +188,7 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "export ASSAY_SBATCH_ARGS='-A epic -q debug -p u1-compute -N 1 -n 1 -c 8'",
         "export ASSAY_JOB_ENV='I_MPI_FABRICS=shm FI_PROVIDER=tcp'",  # the driver jobs' env
         "export ASSAY_ENABLE_BASELINE_COMPARISONS=false",
+        "export ASSAY_BASELINE_STORE=s3://ufs-chem/baselines",
         "export ASSAY_RUN_TIMEOUT_S=300",
         "export ASSAY_DASK_NWORKERS=2",
         f"export UV_CACHE_DIR={ursa.root_dir}/uv-cache",
@@ -197,6 +200,8 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         assert line in text, line
     for absent in (
         "ASSAY_BASELINE_ROOT_DIR",
+        "ASSAY_BASELINE_ATOL",  # null in the template: the suite's entries apply
+        "ASSAY_BASELINE_RTOL",
         "UV_PYTHON",
         "UV_OFFLINE",
         "ASSAY_LAUNCHER",
@@ -208,6 +213,8 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "CECE_RUNTIME",
         "--dry-run",
         "--run-examples",
+        "--publish-baselines",
+        "--no-suite-update",
     ):
         assert absent not in text, absent
 
@@ -215,19 +222,16 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
 def test_harness_stage_exports_are_field_driven(tmp_path: Path) -> None:
     # A harness: key that mirrors a setting renders as ASSAY_<FIELD>; an
     # application key as <PREFIX><FIELD>; the pytest options as flags.
-    config = RunConfig.from_yaml(
-        run_config_file(
-            tmp_path,
-            overrides={
-                "harness.log_level": "DEBUG",
-                "harness.config_search_path": "/configs",
-                "harness.suite_config_search_path": ["/suites/a", "/suites/b"],
-                "harness.pytest_dry_run": True,
-                "applications.cece.docker_image": "img:tag",
-                "applications.cece.driver_path": "./build/other",
-            },
-            root_dir=_URSA_ROOT,
-        )
+    config = _ursa(
+        tmp_path,
+        {
+            "harness.log_level": "DEBUG",
+            "harness.config_search_path": "/configs",
+            "harness.suite_config_search_path": ["/suites/a", "/suites/b"],
+            "harness.pytest_dry_run": True,
+            "applications.cece.docker_image": "img:tag",
+            "applications.cece.driver_path": "./build/other",
+        },
     )
     text = render_stage(Stage.HARNESS, config, _CECE).text
     for line in (
@@ -244,15 +248,12 @@ def test_harness_stage_exports_are_field_driven(tmp_path: Path) -> None:
 
 def test_native_harness_stage_keeps_the_launcher(tmp_path: Path) -> None:
     # Inside an salloc shell: ASSAY_RUNTIME=native with a plain launcher.
-    config = RunConfig.from_yaml(
-        run_config_file(
-            tmp_path,
-            overrides={
-                "harness.launcher": "srun --ntasks=1",
-                "harness.runtime": "native",
-            },
-            root_dir=_URSA_ROOT,
-        )
+    config = _ursa(
+        tmp_path,
+        {
+            "harness.launcher": "srun --ntasks=1",
+            "harness.runtime": "native",
+        },
     )
     text = render_stage(Stage.HARNESS, config, _CECE).text
     assert "export ASSAY_RUNTIME=native" in text
@@ -287,11 +288,7 @@ def test_harness_stage_exports_the_queue_allowance_under_slurm_only(
     assert (
         "ASSAY_SLURM_QUEUE_WAIT_S" not in render_stage(Stage.HARNESS, local, _CECE).text
     )
-    long_wait = RunConfig.from_yaml(
-        run_config_file(
-            tmp_path, overrides={"slurm.queue_wait_s": 28800}, root_dir=_URSA_ROOT
-        )
-    )
+    long_wait = _ursa(tmp_path, {"slurm.queue_wait_s": 28800})
     assert (
         "export ASSAY_SLURM_QUEUE_WAIT_S=28800"
         in render_stage(Stage.HARNESS, long_wait, _CECE).text
@@ -300,13 +297,7 @@ def test_harness_stage_exports_the_queue_allowance_under_slurm_only(
 
 def test_regex_suite_selector_survives_quoting(tmp_path: Path) -> None:
     # Several suites in one session: the selector is a regex, every match runs.
-    config = RunConfig.from_yaml(
-        run_config_file(
-            tmp_path,
-            overrides={"harness.suite_config": "ex[0-9]-suite.yaml"},
-            root_dir=_URSA_ROOT,
-        )
-    )
+    config = _ursa(tmp_path, {"harness.suite_config": "ex[0-9]-suite.yaml"})
     text = render_stage(Stage.HARNESS, config, _CECE).text
     assert "'--suite-config=ex[0-9]-suite.yaml'" in text
 
@@ -319,13 +310,7 @@ def test_output_root_is_suffixed_only_with_several_applications(
 ) -> None:
     one = RunConfig.from_yaml(run_config_file(tmp_path, root_dir=_URSA_ROOT))
     assert application_output_root(one, _CECE) == "ufs-chem-assay-output"
-    two = RunConfig.from_yaml(
-        run_config_file(
-            tmp_path,
-            overrides={"applications.stub": {"git_url": "u", "ref": "main"}},
-            root_dir=_URSA_ROOT,
-        )
-    )
+    two = _ursa(tmp_path, {"applications.stub": {"git_url": "u", "ref": "main"}})
     assert application_output_root(two, _CECE) == "ufs-chem-assay-output/cece"
     assert application_output_root(two, stub) == "ufs-chem-assay-output/stub"
     text = render_stage(Stage.HARNESS, two, stub).text
@@ -336,3 +321,35 @@ def test_output_root_is_suffixed_only_with_several_applications(
     assert (
         render_stage(Stage.SOURCE, two, stub).text.rstrip().endswith("echo stub source")
     )
+
+
+def test_harness_stage_renders_the_publish_flags(tmp_path: Path) -> None:
+    config = _ursa(
+        tmp_path,
+        {
+            "harness.publish_baselines": True,
+            "harness.no_suite_update": True,
+            "baselines.store": "s3://other/prefix",
+            "baselines.root_dir": "/scratch/baselines",
+        },
+    )
+    text = render_stage(Stage.HARNESS, config, _CECE).text
+    assert "export ASSAY_BASELINE_STORE=s3://other/prefix" in text
+    assert "export ASSAY_BASELINE_ROOT_DIR=/scratch/baselines" in text
+    assert "--combo-clean-root --publish-baselines --no-suite-update" in text
+
+
+def test_harness_stage_exports_the_tolerance_overrides(tmp_path: Path) -> None:
+    config = _ursa(tmp_path, {"baselines.atol": 1e-24, "baselines.rtol": 1e-15})
+    text = render_stage(Stage.HARNESS, config, _CECE).text
+    assert "export ASSAY_BASELINE_ATOL=1e-24" in text
+    assert "export ASSAY_BASELINE_RTOL=1e-15" in text
+    assert "ASSAY_BASELINE_RTOL" in render_stage(Stage.DATA, config, _CECE).text
+
+
+def test_env_value_renders_an_enum_by_its_value() -> None:
+    from cli.stages import _env_value
+    from platforms import Runtime
+
+    assert _env_value(Runtime.SLURM) == "slurm"
+    assert _env_value(None) is None

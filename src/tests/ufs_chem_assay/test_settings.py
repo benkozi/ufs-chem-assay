@@ -20,11 +20,12 @@ _SCRUBBED = (
     "SUITE_CONFIG_SEARCH_PATH",
     "DASK_NWORKERS",
     "BASELINE_ROOT_DIR",
+    "BASELINE_STORE",
     "LOG_LEVEL",
 )
 
 
-@pytest.fixture()
+@pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> pytest.MonkeyPatch:
     for prefix in (ENV_PREFIX, LEGACY_ENV_PREFIX):
         for key in _SCRUBBED:
@@ -35,7 +36,8 @@ def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> pytest.MonkeyP
 
 
 def test_prefixes() -> None:
-    assert ENV_PREFIX == "ASSAY_" and LEGACY_ENV_PREFIX == "CECE_"
+    assert ENV_PREFIX == "ASSAY_"
+    assert LEGACY_ENV_PREFIX == "CECE_"
 
 
 def test_no_application_settings_on_the_harness_model(
@@ -48,7 +50,8 @@ def test_no_application_settings_on_the_harness_model(
     assert not hasattr(Settings(), "root_dir")
 
 
-def test_application_defaults_to_none(clean_env: pytest.MonkeyPatch) -> None:
+@pytest.mark.usefixtures("clean_env")
+def test_application_defaults_to_none() -> None:
     assert Settings().application is None
 
 
@@ -77,9 +80,8 @@ def test_assay_wins_over_legacy_within_the_environment(
     assert Settings().dask_nworkers == 5
 
 
-def test_env_file_supplies_values_under_either_prefix(
-    clean_env: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+@pytest.mark.usefixtures("clean_env")
+def test_env_file_supplies_values_under_either_prefix(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text(
         "cece_root_dir=/from/dotenv\n"  # the adapter's key: ignored here
         "cece_baseline_root_dir=/baselines\n"
@@ -100,14 +102,14 @@ def test_real_env_beats_env_file_across_prefixes(
     assert Settings().dask_nworkers == 9
 
 
-def test_init_kwarg_beats_env_file(
-    clean_env: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+@pytest.mark.usefixtures("clean_env")
+def test_init_kwarg_beats_env_file(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("assay_platform=ursa\n")
     assert Settings(platform=Platform.LOCAL).platform is Platform.LOCAL
 
 
-def test_settings_is_frozen(clean_env: pytest.MonkeyPatch) -> None:
+@pytest.mark.usefixtures("clean_env")
+def test_settings_is_frozen() -> None:
     settings = Settings()
     with pytest.raises(ValidationError):
         settings.log_level = "DEBUG"  # type: ignore[misc]
@@ -130,10 +132,74 @@ def test_search_path_single_directory_legacy_spelling(
     assert Settings().suite_config_search_path == [Path("/suites/a")]
 
 
-def test_search_path_defaults_to_empty(clean_env: pytest.MonkeyPatch) -> None:
+@pytest.mark.usefixtures("clean_env")
+def test_search_path_defaults_to_empty() -> None:
     assert Settings().suite_config_search_path == []
 
 
 def test_runtime_from_legacy_env(clean_env: pytest.MonkeyPatch) -> None:
     clean_env.setenv("CECE_RUNTIME", "native")
     assert Settings(platform=Platform.LOCAL).runtime is Runtime.NATIVE
+
+
+# ── baseline tolerance overrides ──────────────────────────────────────────────
+
+
+def test_baseline_tolerance_overrides_default_to_none_and_read_from_env(
+    clean_env: pytest.MonkeyPatch,
+) -> None:
+    assert (Settings().baseline_atol, Settings().baseline_rtol) == (None, None)
+    clean_env.setenv(f"{ENV_PREFIX}BASELINE_ATOL", "1e-24")
+    clean_env.setenv(f"{ENV_PREFIX}BASELINE_RTOL", "1e-12")
+    assert (Settings().baseline_atol, Settings().baseline_rtol) == (1e-24, 1e-12)
+    assert (
+        Settings(baseline_rtol=0.0).baseline_rtol == 0.0
+    )  # 0 = bit-for-bit, not unset
+
+
+def test_baseline_tolerance_overrides_reject_negatives() -> None:
+    with pytest.raises(ValidationError, match="baseline_atol"):
+        Settings(baseline_atol=-1e-15)
+    with pytest.raises(ValidationError, match="baseline_rtol"):
+        Settings(baseline_rtol=-1e-15)
+
+
+# ── baseline_store ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.usefixtures("clean_env")
+def test_baseline_store_defaults_to_the_ufs_chem_baselines_prefix() -> None:
+    assert Settings().baseline_store == "s3://ufs-chem/baselines"
+
+
+def test_baseline_store_from_env_trailing_slash_stripped(
+    clean_env: pytest.MonkeyPatch,
+) -> None:
+    clean_env.setenv("ASSAY_BASELINE_STORE", "s3://other-bucket/some/prefix/")
+    assert Settings().baseline_store == "s3://other-bucket/some/prefix"
+
+
+@pytest.mark.usefixtures("clean_env")
+@pytest.mark.parametrize(
+    "value", ["s3://ufs-chem", "s3://ufs-chem/", "https://ufs-chem/baselines", ""]
+)
+def test_baseline_store_rejects_bucket_roots_other_schemes_and_empty(
+    value: str,
+) -> None:
+    with pytest.raises(ValidationError, match="baseline_store"):
+        Settings(baseline_store=value)
+
+
+def test_baseline_store_accepts_a_directory(
+    clean_env: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A local store of record (a Dropbox folder, a scratch directory): the
+    # path is kept absolute; it need not exist until publication.
+    clean_env.setenv("ASSAY_BASELINE_STORE", str(tmp_path / "store") + "/")
+    assert Settings().baseline_store == str(tmp_path / "store")
+    assert Settings(baseline_store="relative/store").baseline_store == str(
+        Path("relative/store").resolve()
+    )
+    assert Settings(baseline_store="~/baselines").baseline_store == str(
+        Path("~/baselines").expanduser()
+    )

@@ -111,7 +111,8 @@ def test_docker_prefix_precedes_the_driver_command() -> None:
     settings = Settings(platform=Platform.LOCAL)
     app_settings = CeceSettings(root_dir=Path("/host/cece"), docker_image="img:tag")
     prefix = docker_prefix(app_settings, CONTAINER_WORKDIR)
-    assert prefix[0:3] == ["docker", "run", "--rm"] and prefix[-1] == "img:tag"
+    assert prefix[0:3] == ["docker", "run", "--rm"]
+    assert prefix[-1] == "img:tag"
     driver = build_command(settings, _APP, app_settings, PurePosixPath("/work/x.yaml"))
     assert driver[: len(prefix)] == prefix
     assert driver[len(prefix) :] == ["./build/cece_standalone_driver", "/work/x.yaml"]

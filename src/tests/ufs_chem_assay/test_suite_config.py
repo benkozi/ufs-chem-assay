@@ -20,6 +20,7 @@ from models.suite_config import (
     SuiteConfig,
 )
 from platforms import Platform, Runtime
+from tests.ufs_chem_assay.baseline_runs import maccity_entry
 
 _SWEEP = "sweep:\n  cece_data:\n    streams:\n      - name: MACCITY\n        mapalgo: [consd]\n"
 
@@ -38,6 +39,25 @@ def _manifest(suites: list[SuiteConfig], **overrides: object) -> RunManifest:
     }
     values.update(overrides)
     return RunManifest.model_validate(values)
+
+
+def test_baseline_comparison_rtol_defaults_to_zero_and_rejects_negative() -> None:
+    entry = maccity_entry()
+    assert (entry.atol, entry.rtol) == (0.0, 0.0)
+    with pytest.raises(ValidationError, match="rtol"):
+        maccity_entry(rtol=-1e-15)
+
+
+def test_checked_in_maccity_suite_pins_a_relative_tolerance() -> None:
+    """The cross-machine comparison (Ursa's Intel build against the arm64
+    image) differs by one ULP in the interpolated hours; the entries admit
+    a few ULPs at any magnitude and stay bit-for-bit otherwise."""
+    suite = load_suite(
+        Path(__file__).resolve().parents[1]
+        / "config/cece/maccity/simple-maccity-suite.yaml"
+    )
+    assert [e.rtol for e in suite.baseline_comparisons] == [1e-15] * 3
+    assert [e.atol for e in suite.baseline_comparisons] == [0.0] * 3
 
 
 def test_config_path_resolves_relative_to_suite_file(suite_path: Path) -> None:
@@ -310,7 +330,8 @@ def test_inputs_parse_with_public_defaulting_false(
     assert first.dst == PurePosixPath("MACCity_4x5.nc")
     assert first.sha256 == _MACCITY_SHA
     assert first.public is False
-    assert second.public is True and second.sha256 is None
+    assert second.public is True
+    assert second.sha256 is None
     assert second.dst == PurePosixPath("sub/file.nc")
 
 
@@ -319,7 +340,8 @@ def test_input_parent_prefix_and_filename() -> None:
     assert entry.parent_prefix == "s3://geos-chem/HEMCO/MACCITY/v2014-07/"
     assert entry.filename == "MACCity_4x5.nc"
     top = InputFile(url="s3://bucket/file.nc", dst=PurePosixPath("file.nc"))
-    assert top.parent_prefix == "s3://bucket/" and top.filename == "file.nc"
+    assert top.parent_prefix == "s3://bucket/"
+    assert top.filename == "file.nc"
 
 
 # A leading "./" is normalized away by PurePosixPath, so it is not rejectable.
@@ -449,7 +471,7 @@ def test_missing_directory_config_path_raises(tmp_path: Path) -> None:
 # ── The ${<PREFIX>ROOT_DIR} anchor ────────────────────────────────────────────
 
 
-@pytest.fixture()
+@pytest.fixture
 def fake_checkout(tmp_path: Path, cece_config_path: Path) -> Path:
     """An application-checkout-shaped tree holding a schema-valid config."""
     root = tmp_path / "checkout"
@@ -498,3 +520,24 @@ def test_plain_relative_config_path_ignores_root_dir(
     suite = load_suite(suite_path, root_dir=fake_checkout)
     assert suite.config_path.parent != fake_checkout
     assert suite.config_path.is_file()
+
+
+def test_run_manifest_suites_must_be_a_list() -> None:
+    from pydantic import ValidationError
+
+    from models.suite_config import RunManifest
+
+    with pytest.raises(ValidationError, match="suites"):
+        RunManifest.model_validate(
+            {
+                "run_id": "r",
+                "application": "cece",
+                "application_commit": None,
+                "harness_version": "0",
+                "harness_commit": None,
+                "platform": "local",
+                "runtime": "docker",
+                "modulefile": None,
+                "suites": "not-a-list",
+            }
+        )

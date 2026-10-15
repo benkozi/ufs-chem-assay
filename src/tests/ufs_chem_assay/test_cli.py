@@ -14,11 +14,14 @@ from pytest_mock import MockerFixture
 
 from applications.base import Application
 from applications.registry import REGISTRY
+from baselines import BaselineState, StagedBaseline
 from cli.main import main
 from logs import LOGGER_NAME
+from s3_sync import S3SyncConfig
 from staging import Action, StagedInput
-from tests.ufs_chem_assay.stubs import stub_application
+from tests.ufs_chem_assay.baseline_runs import Run, fabricate_run, fake_sync
 from tests.ufs_chem_assay.run_configs import run_config_file
+from tests.ufs_chem_assay.stubs import stub_application
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI_LOGGER = f"{LOGGER_NAME}.cli"
@@ -46,7 +49,7 @@ def _scripts(tmp_path: Path) -> list[str]:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def stub(monkeypatch: pytest.MonkeyPatch) -> Application:
     app = stub_application()
     monkeypatch.setitem(REGISTRY, "stub", app)
@@ -111,7 +114,8 @@ def test_bad_override_is_a_clean_error(
         )
     assert code == 1
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
-    assert len(errors) == 1 and "nonsense" in errors[0]
+    assert len(errors) == 1
+    assert "nonsense" in errors[0]
 
 
 def test_stage_selection_renders_only_those(
@@ -152,7 +156,8 @@ def test_failed_stage_stops_the_run_and_logs_at_error(
     assert code == 2
     assert run_bash.call_count == 2
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
-    assert len(errors) == 1 and "02-build-cece" in errors[0].getMessage()
+    assert len(errors) == 1
+    assert "02-build-cece" in errors[0].getMessage()
 
 
 def test_local_config_runs_the_same_stages(
@@ -224,7 +229,8 @@ def test_uncreatable_root_dir_is_a_clean_error(
         code = main(["run", f"--config-file={path}", "--dry-run"])
     assert code == 1
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
-    assert len(errors) == 1 and str(blocker / "root") in errors[0]
+    assert len(errors) == 1
+    assert str(blocker / "root") in errors[0]
     assert "root_dir" in errors[0]
 
 
@@ -244,8 +250,9 @@ def test_root_dir_flag_overrides_the_derived_root(
 # ── Several applications in one run ──────────────────────────────────────────
 
 
+@pytest.mark.usefixtures("stub")
 def test_comprehensive_run_renders_stage_major_per_application(
-    tmp_path: Path, mocker: MockerFixture, stub: Application
+    tmp_path: Path, mocker: MockerFixture
 ) -> None:
     run_bash = mocker.patch("cli.main.run_bash", return_value=0)
     path = _config(
@@ -272,8 +279,9 @@ def test_comprehensive_run_renders_stage_major_per_application(
     )
 
 
+@pytest.mark.usefixtures("stub")
 def test_application_flag_narrows_a_comprehensive_run(
-    tmp_path: Path, mocker: MockerFixture, stub: Application
+    tmp_path: Path, mocker: MockerFixture
 ) -> None:
     mocker.patch("cli.main.run_bash")
     path = _config(
@@ -307,7 +315,9 @@ def test_unconfigured_application_is_a_clean_error(
         )
     assert code == 1
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
-    assert len(errors) == 1 and "catchem" in errors[0] and "['cece']" in errors[0]
+    assert len(errors) == 1
+    assert "catchem" in errors[0]
+    assert "['cece']" in errors[0]
 
 
 # ── `ufs-chem-assay fetch` ───────────────────────────────────────────────────
@@ -316,15 +326,27 @@ _MACCITY_URL = "s3://geos-chem/HEMCO/MACCITY/v2014-07/MACCity_4x5.nc"
 _MACCITY_SHA = "ef70975af53499ab45f620a778043ff6fd29ec4e7e2777f3fd1f2db59a12aab9"
 
 
-@pytest.fixture()
+@pytest.fixture
 def fetch_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cece_config_path: Path
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mocker: MockerFixture,
+    cece_config_path: Path,
 ) -> Path:
     """A neutral cwd (the repo .env out of scope), a fabricated checkout as
-    CECE_ROOT_DIR, and a suite root with two suites declaring inputs."""
+    CECE_ROOT_DIR, a suite root with two suites declaring inputs, and the
+    baseline staging mocked out (a test that wants it patches it again)."""
     monkeypatch.chdir(tmp_path)
-    for key in ("CECE_ROOT_DIR", "ASSAY_SUITE_CONFIG_SEARCH_PATH", "ASSAY_APPLICATION"):
+    for key in (
+        "CECE_ROOT_DIR",
+        "ASSAY_SUITE_CONFIG_SEARCH_PATH",
+        "ASSAY_APPLICATION",
+        "ASSAY_BASELINE_ROOT_DIR",
+        "ASSAY_BASELINE_STORE",
+        "ASSAY_ENABLE_BASELINE_COMPARISONS",
+    ):
         monkeypatch.delenv(key, raising=False)
+    mocker.patch("cli.main.ensure_baselines", return_value=[])
     checkout = tmp_path / "checkout"
     (checkout / "data").mkdir(parents=True)
     suites = tmp_path / "suites"
@@ -352,7 +374,7 @@ def test_fetch_stages_the_merged_inputs_of_the_selected_suites(
 ) -> None:
     stage = mocker.patch(
         "cli.main.stage_inputs",
-        side_effect=lambda inputs, data_dir, dry_run: [
+        side_effect=lambda inputs, data_dir, **_: [
             _staged(i.url, data_dir / i.dst, "skipped") for i in inputs
         ],
     )
@@ -397,14 +419,15 @@ def test_fetch_exit_code_follows_the_results(
     assert any("b.nc" in m for m in errors)
 
 
-def test_fetch_dry_run_passes_through(fetch_env: Path, mocker: MockerFixture) -> None:
+@pytest.mark.usefixtures("fetch_env")
+def test_fetch_dry_run_passes_through(mocker: MockerFixture) -> None:
     stage = mocker.patch("cli.main.stage_inputs", return_value=[])
     assert main(["fetch", "--suite-config=one-suite.yaml", "--dry-run"]) == 0
     assert stage.call_args.kwargs == {"dry_run": True}
 
 
+@pytest.mark.usefixtures("fetch_env")
 def test_fetch_without_the_application_root_is_a_clean_error(
-    fetch_env: Path,
     monkeypatch: pytest.MonkeyPatch,
     mocker: MockerFixture,
     caplog: pytest.LogCaptureFixture,
@@ -416,11 +439,13 @@ def test_fetch_without_the_application_root_is_a_clean_error(
     assert code == 1
     stage.assert_not_called()
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
-    assert len(errors) == 1 and "CECE_ROOT_DIR" in errors[0]
+    assert len(errors) == 1
+    assert "CECE_ROOT_DIR" in errors[0]
 
 
+@pytest.mark.usefixtures("fetch_env")
 def test_fetch_no_matching_suite_is_a_clean_error(
-    fetch_env: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
     stage = mocker.patch("cli.main.stage_inputs")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
@@ -428,7 +453,8 @@ def test_fetch_no_matching_suite_is_a_clean_error(
     assert code == 1
     stage.assert_not_called()
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
-    assert len(errors) == 1 and "matches no suite" in errors[0]
+    assert len(errors) == 1
+    assert "matches no suite" in errors[0]
 
 
 def test_fetch_conflicting_inputs_is_a_clean_error(
@@ -447,4 +473,368 @@ def test_fetch_conflicting_inputs_is_a_clean_error(
     assert code == 1
     stage.assert_not_called()
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
-    assert len(errors) == 1 and "declared differently" in errors[0]
+    assert len(errors) == 1
+    assert "declared differently" in errors[0]
+
+
+# ── `ufs-chem-assay publish-baselines` ──────────────────────────────────────
+
+
+@pytest.fixture
+def publish_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suite_dir: Path
+) -> Run:
+    """A neutral cwd, a fabricated run of a renamed copy of the maccity suite
+    (so the selector finds it beside the built-in one), the suite root on
+    the search path, no baseline cache, the S3 wrapper mocked."""
+    monkeypatch.chdir(tmp_path)
+    for key in (
+        "CECE_ROOT_DIR",
+        "ASSAY_SUITE_CONFIG_SEARCH_PATH",
+        "ASSAY_APPLICATION",
+        "ASSAY_BASELINE_ROOT_DIR",
+        "ASSAY_BASELINE_STORE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    run = fabricate_run(tmp_path, suite_dir, name="pub-test")
+    monkeypatch.setenv("ASSAY_SUITE_CONFIG_SEARCH_PATH", str(run.suite_path.parent))
+    return run
+
+
+def _publish_calls(sync: object) -> list[S3SyncConfig]:
+    return [call.args[0] for call in sync.call_args_list]  # type: ignore[attr-defined]
+
+
+def test_publish_baselines_publishes_the_runs_suites_by_default(
+    publish_env: Run, mocker: MockerFixture
+) -> None:
+    sync = mocker.patch("baselines.publish.sync", side_effect=fake_sync())
+    code = main(["publish-baselines", f"--output-root={publish_env.root}"])
+    assert code == 0
+    uploads = [c for c in _publish_calls(sync) if isinstance(c.source, Path)]
+    assert len(uploads) == 3
+    assert all(
+        str(c.destination).startswith("s3://ufs-chem/baselines/") for c in uploads
+    )
+    text = publish_env.suite_path.read_text()
+    for combo in publish_env.combos:
+        assert f"ulid: {combo.combo_id}" in text
+
+
+def test_publish_baselines_dry_run_store_and_no_suite_update(
+    publish_env: Run, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sync = mocker.patch("baselines.publish.sync", side_effect=fake_sync())
+    original = publish_env.suite_path.read_text()
+    code = main(
+        [
+            "publish-baselines",
+            f"--output-root={publish_env.root}",
+            "--store=s3://other-bucket/prefix/",
+            "--dry-run",
+        ]
+    )
+    assert code == 0
+    calls = _publish_calls(sync)
+    assert calls
+    assert all(c.dry_run for c in calls)
+    assert all(
+        str(c.destination).startswith("s3://other-bucket/prefix/")
+        for c in calls
+        if isinstance(c.source, Path)
+    )
+    assert publish_env.suite_path.read_text() == original
+    assert not any(
+        (d / "baseline.yaml").exists() for d in publish_env.root.iterdir() if d.is_dir()
+    )
+
+    monkeypatch.setenv("ASSAY_BASELINE_STORE", "s3://env-bucket/p")
+    code = main(
+        ["publish-baselines", f"--output-root={publish_env.root}", "--no-suite-update"]
+    )
+    assert code == 0
+    assert publish_env.suite_path.read_text() == original
+    uploads = [
+        c for c in _publish_calls(sync) if isinstance(c.source, Path) and not c.dry_run
+    ]
+    assert len(uploads) == 3
+    assert all(str(c.destination).startswith("s3://env-bucket/p/") for c in uploads)
+
+
+def test_publish_baselines_exit_code_follows_the_records(
+    publish_env: Run, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    occupied = frozenset({f"s3://ufs-chem/baselines/{publish_env.combos[1].combo_id}/"})
+    mocker.patch("baselines.publish.sync", side_effect=fake_sync(occupied))
+    with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
+        code = main(["publish-baselines", f"--output-root={publish_env.root}"])
+    assert code == 1
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any("append-only" in m for m in errors)
+    assert any(
+        "publish summary: 2 published, 1 failed" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_publish_baselines_without_run_yaml_is_a_clean_error(
+    publish_env: Run, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    sync = mocker.patch("baselines.publish.sync")
+    (publish_env.root / "run.yaml").unlink()
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["publish-baselines", f"--output-root={publish_env.root}"])
+    assert code == 1
+    sync.assert_not_called()
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "run.yaml" in errors[0]
+
+
+def test_publish_baselines_selector_must_cover_the_runs_suites(
+    publish_env: Run, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    sync = mocker.patch("baselines.publish.sync")
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "publish-baselines",
+                f"--output-root={publish_env.root}",
+                "--suite-config=simple-maccity-suite.yaml",
+            ]
+        )
+    assert code == 1
+    sync.assert_not_called()
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "pub-test" in errors[0]
+    assert "--suite-config" in errors[0]
+
+
+def test_publish_baselines_primes_the_cache_from_the_setting(
+    publish_env: Run,
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    mocker.patch("baselines.publish.sync", side_effect=fake_sync())
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("ASSAY_BASELINE_ROOT_DIR", str(cache))
+    assert main(["publish-baselines", f"--output-root={publish_env.root}"]) == 0
+    for combo in publish_env.combos:
+        assert (cache / combo.combo_id / "baseline.yaml").is_file()
+
+
+def test_publish_baselines_to_a_directory_store(
+    publish_env: Run, mocker: MockerFixture, tmp_path: Path
+) -> None:
+    sync = mocker.patch("baselines.publish.sync")
+    store = tmp_path / "dropbox"
+    store.mkdir()
+    code = main(
+        ["publish-baselines", f"--output-root={publish_env.root}", f"--store={store}"]
+    )
+    assert code == 0
+    sync.assert_not_called()
+    assert sorted(p.name for p in store.iterdir()) == sorted(
+        c.combo_id for c in publish_env.combos
+    )
+
+
+def test_publish_baselines_fails_fast_without_network(
+    publish_env: Run, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch(
+        "cli.main.check_reachable", side_effect=ConnectionError("no network to s3")
+    )
+    sync = mocker.patch("baselines.publish.sync")
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["publish-baselines", f"--output-root={publish_env.root}"])
+    assert code == 1
+    sync.assert_not_called()
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "no network" in errors[0]
+
+
+def test_publish_baselines_to_a_directory_never_probes_the_network(
+    publish_env: Run, mocker: MockerFixture, tmp_path: Path
+) -> None:
+    probe = mocker.patch("cli.main.check_reachable")
+    store = tmp_path / "dropbox"
+    store.mkdir()
+    assert (
+        main(
+            [
+                "publish-baselines",
+                f"--output-root={publish_env.root}",
+                f"--store={store}",
+            ]
+        )
+        == 0
+    )
+    probe.assert_not_called()
+
+
+# ── fetch stages baselines too ──────────────────────────────────────────────
+
+
+def _staged_baseline(ulid: str, state: BaselineState) -> StagedBaseline:
+    return StagedBaseline(
+        suite="one",
+        ulid=ulid,
+        source="s",
+        path=Path("/b") / ulid,
+        state=state,
+        detail="d",
+    )
+
+
+@pytest.mark.usefixtures("fetch_env")
+def test_fetch_stages_the_pinned_baselines_after_the_inputs(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ASSAY_BASELINE_ROOT_DIR", "/baselines")
+    monkeypatch.setenv("ASSAY_BASELINE_STORE", "s3://bkt/p")
+    mocker.patch("cli.main.stage_inputs", return_value=[])
+    ensure = mocker.patch(
+        "cli.main.ensure_baselines", return_value=[_staged_baseline("01JX", "synced")]
+    )
+    assert main(["fetch", "--suite-config=one-suite.yaml", "--dry-run"]) == 0
+    ensure.assert_called_once()
+    suites, store, root = ensure.call_args.args
+    assert [s.name for s in suites] == ["one"]
+    assert store == "s3://bkt/p"
+    assert root == Path("/baselines")
+    assert ensure.call_args.kwargs == {"dry_run": True}
+
+
+@pytest.mark.usefixtures("fetch_env")
+def test_fetch_skips_baselines_when_comparisons_are_disabled(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ASSAY_ENABLE_BASELINE_COMPARISONS", "false")
+    mocker.patch("cli.main.stage_inputs", return_value=[])
+    ensure = mocker.patch("cli.main.ensure_baselines")
+    assert main(["fetch", "--suite-config=one-suite.yaml"]) == 0
+    ensure.assert_not_called()
+
+
+@pytest.mark.usefixtures("fetch_env")
+def test_fetch_exit_code_covers_failed_baselines(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch("cli.main.stage_inputs", return_value=[])
+    mocker.patch(
+        "cli.main.ensure_baselines",
+        return_value=[
+            _staged_baseline("01JX", "failed"),
+            _staged_baseline("01JY", "local"),
+        ],
+    )
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["fetch", "--suite-config=one-suite.yaml"])
+    assert code == 1
+    # ensure_baselines logs the states itself (grouped); fetch adds nothing.
+    assert not [r for r in caplog.records if "baseline" in r.getMessage()]
+
+
+# ── the remaining error branches ─────────────────────────────────────────────
+
+
+@pytest.mark.usefixtures("fetch_env")
+def test_fetch_with_a_nonexistent_root_is_a_clean_error(
+    monkeypatch: pytest.MonkeyPatch,
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("CECE_ROOT_DIR", "/nowhere/at/all")
+    stage = mocker.patch("cli.main.stage_inputs")
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["fetch", "--suite-config=one-suite.yaml"])
+    assert code == 1
+    stage.assert_not_called()
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "not an existing directory" in errors[0]
+
+
+def test_publish_baselines_application_flag_alone(
+    publish_env: Run, mocker: MockerFixture
+) -> None:
+    mocker.patch("cli.main.check_reachable")
+    sync = mocker.patch("baselines.publish.sync", side_effect=fake_sync())
+    code = main(
+        ["publish-baselines", f"--output-root={publish_env.root}", "--application=cece"]
+    )
+    assert code == 0
+    assert sync.call_count == 6
+
+
+def test_publish_baselines_application_and_store_flags_together(
+    publish_env: Run, mocker: MockerFixture, tmp_path: Path
+) -> None:
+    probe = mocker.patch("cli.main.check_reachable")
+    store = tmp_path / "dir-store"
+    store.mkdir()
+    original = publish_env.suite_path.read_text()
+    code = main(
+        [
+            "publish-baselines",
+            f"--output-root={publish_env.root}",
+            "--application=cece",
+            f"--store={store}",
+            "--no-suite-update",
+        ]
+    )
+    assert code == 0
+    probe.assert_not_called()
+    assert sorted(p.name for p in store.iterdir()) == sorted(
+        c.combo_id for c in publish_env.combos
+    )
+    assert publish_env.suite_path.read_text() == original
+
+
+def test_publish_baselines_bad_selector_and_wrong_application(
+    publish_env: Run, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch("cli.main.check_reachable")
+    sync = mocker.patch("baselines.publish.sync")
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "publish-baselines",
+                f"--output-root={publish_env.root}",
+                "--suite-config=absent-suite.yaml",
+            ]
+        )
+    assert code == 1
+    assert any("matches no suite" in r.getMessage() for r in caplog.records)
+    # run.yaml says another application than the suites the selector finds.
+    run_yaml = publish_env.root / "run.yaml"
+    run_yaml.write_text(
+        run_yaml.read_text().replace("application: cece\n", "application: other\n", 1)
+    )
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["publish-baselines", f"--output-root={publish_env.root}"])
+    assert code == 1
+    assert any("is a other run" in r.getMessage() for r in caplog.records)
+    sync.assert_not_called()
+
+
+def test_publish_baselines_refuses_a_suite_edited_since_the_run(
+    publish_env: Run, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch("cli.main.check_reachable")
+    sync = mocker.patch("baselines.publish.sync")
+    text = publish_env.suite_path.read_text()
+    first_ulid = next(line for line in text.splitlines() if "ulid:" in line)
+    publish_env.suite_path.write_text(
+        text.replace(first_ulid, first_ulid + "\n    atol: 0.5", 1)
+    )
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["publish-baselines", f"--output-root={publish_env.root}"])
+    assert code == 1
+    sync.assert_not_called()
+    assert any("edited since the run" in r.getMessage() for r in caplog.records)

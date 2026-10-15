@@ -32,6 +32,12 @@ repos:
         exclude: ^(design/|uv\.lock$)
       - id: end-of-file-fixer
         exclude: ^(design/|uv\.lock$)
+      - id: check-merge-conflict
+      - id: detect-private-key
+        # The release-script tests carry a fabricated PEM (BEGIN/END around
+        # "abc") because the verifier under test checks for those markers.
+        exclude: ^src/tests/ufs_chem_assay/test_release_scripts\.py$
+      - id: check-added-large-files
   - repo: local
     hooks:
       - id: ruff-check
@@ -54,6 +60,27 @@ repos:
           - python
         # Whole-src/ run (config's files setting): per-file mypy is unsound
         # across module boundaries.
+        pass_filenames: false
+      - id: codespell
+        name: codespell
+        entry: uv run codespell
+        language: system
+        # [tool.codespell] skips design/ and the lock; whole-tree like mypy
+        pass_filenames: false
+      - id: uv-lock-check
+        name: uv lock --check
+        entry: uv lock --check
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+      - id: vulture
+        name: vulture
+        entry: uv run vulture
+        language: system
+        types:
+          - python
+        # Whole-tree run ([tool.vulture] paths): a name's only use may be
+        # in another file.
         pass_filenames: false
       - id: yamlfix
         name: yamlfix

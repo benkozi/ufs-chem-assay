@@ -27,7 +27,8 @@ def test_ursa_template_loads() -> None:
     assert isinstance(cece, CeceRunSection)
     assert cece.modulefile == "cece_ursa.intelllvm"
     assert config.checkout_dir("cece") == config.root_dir / "CECE"
-    assert config.slurm is not None and config.slurm.account == "epic"
+    assert config.slurm is not None
+    assert config.slurm.account == "epic"
     assert config.slurm.sbatch_args == "-A epic -q debug -p u1-compute -N 1 -n 1 -c 8"
     assert config.harness.launcher == ""  # ignored under slurm; not set by the template
     assert config.harness.dask_nworkers == 2  # analysis runs on the login node
@@ -134,13 +135,15 @@ def test_run_tests_knob_is_gone_but_targets_stay(tmp_path: Path) -> None:
         run_config_file(tmp_path, overrides={"applications.cece.targets": ["all"]})
     )
     section = config.applications["cece"]
-    assert isinstance(section, CeceRunSection) and section.targets == ["all"]
+    assert isinstance(section, CeceRunSection)
+    assert section.targets == ["all"]
 
 
 def test_slurm_account_defaults_to_epic(tmp_path: Path) -> None:
     path = run_config_file(tmp_path, overrides={"slurm.account": REMOVE})
     config = RunConfig.from_yaml(path)
-    assert config.slurm is not None and config.slurm.account == "epic"
+    assert config.slurm is not None
+    assert config.slurm.account == "epic"
 
 
 def test_uv_python_is_not_a_knob(tmp_path: Path) -> None:
@@ -166,7 +169,8 @@ def test_templates_ship_without_a_root_and_derive_the_harness_parent() -> None:
         ), name
         config = RunConfig.from_yaml(TEMPLATES_DIR / name)
         assert config.root_dir == HARNESS_ROOT.parent
-        assert config.root_dir.is_absolute() and "<" not in str(config.root_dir)
+        assert config.root_dir.is_absolute()
+        assert "<" not in str(config.root_dir)
         assert config.checkout_dir("cece") == HARNESS_ROOT.parent / "CECE"
 
 
@@ -196,7 +200,8 @@ def test_root_dir_is_required_on_direct_validation() -> None:
 
 def test_slurm_queue_wait_defaults_and_renders() -> None:
     config = RunConfig.from_yaml(TEMPLATES_DIR / "ursa.yaml")
-    assert config.slurm is not None and config.slurm.queue_wait_s == 3600
+    assert config.slurm is not None
+    assert config.slurm.queue_wait_s == 3600
 
 
 # ── The mirror rule: the YAML surface is complete ────────────────────────────
@@ -208,15 +213,28 @@ def test_harness_section_mirrors_every_setting() -> None:
     mirrored = set(settings_mirror_fields())
     assert mirrored == set(Settings.model_fields) - SETTINGS_NOT_MIRRORED
     assert mirrored <= set(HarnessSection.model_fields)
-    assert SETTINGS_NOT_MIRRORED == {
+    assert {
         "application",
         "platform",
         "baseline_root_dir",
         "enable_baseline_comparisons",
+        "baseline_store",
+        "baseline_atol",
+        "baseline_rtol",
         "sbatch_args",
         "slurm_queue_wait_s",
         "job_env",
-    }
+    } == SETTINGS_NOT_MIRRORED
+
+
+def test_baselines_section_tolerances_default_to_null_and_reject_negatives() -> None:
+    from cli.run_config import BaselinesSection
+
+    section = BaselinesSection()
+    assert (section.atol, section.rtol) == (None, None)
+    assert BaselinesSection(rtol=1e-15).rtol == 1e-15
+    with pytest.raises(ValidationError, match="atol"):
+        BaselinesSection(atol=-1.0)
 
 
 def test_application_section_mirrors_application_settings() -> None:
@@ -224,7 +242,8 @@ def test_application_section_mirrors_application_settings() -> None:
     for app in REGISTRY.values():
         section_fields = set(app.run_section_model.model_fields)
         settings_fields = set(app.settings_model.model_fields)
-        assert "clone_dir" in section_fields and "root_dir" in settings_fields
+        assert "clone_dir" in section_fields
+        assert "root_dir" in settings_fields
         assert settings_fields - {"root_dir"} <= section_fields, app.name
         assert issubclass(app.run_section_model, ApplicationRunSection)
         assert issubclass(app.settings_model, ApplicationSettings)
@@ -233,7 +252,8 @@ def test_application_section_mirrors_application_settings() -> None:
 def test_null_section_keys_keep_the_settings_defaults() -> None:
     config = RunConfig.from_yaml(TEMPLATES_DIR / "local.yaml")
     section = config.applications["cece"]
-    assert section.docker_image is None and section.driver_path is None
+    assert section.docker_image is None
+    assert section.driver_path is None
 
 
 # ── Overrides ────────────────────────────────────────────────────────────────
@@ -257,9 +277,11 @@ def test_overrides_merge_before_validation(tmp_path: Path) -> None:
     assert config.harness.pytest_args == ["-x", "-k", "base"]
     section = config.applications["cece"]
     assert isinstance(section, CeceRunSection)
-    assert section.ref == "develop" and section.build_jobs == 2
+    assert section.ref == "develop"
+    assert section.build_jobs == 2
     assert section.clone_dir is None
-    assert config.slurm is not None and config.slurm.qos == "batch"
+    assert config.slurm is not None
+    assert config.slurm.qos == "batch"
     assert config.harness.env["OMP_NUM_THREADS"] == "8"
 
 
@@ -316,7 +338,8 @@ def test_effective_config_round_trips(tmp_path: Path) -> None:
     reloaded = RunConfig.from_yaml(out)
     assert reloaded == config
     section = reloaded.applications["cece"]
-    assert isinstance(section, CeceRunSection) and section.ref == "develop"
+    assert isinstance(section, CeceRunSection)
+    assert section.ref == "develop"
 
 
 # ── The example keys are gone ─────────────────────────────────────────────────
@@ -335,3 +358,38 @@ def test_example_keys_are_rejected(tmp_path: Path, dotted: str) -> None:
     )
     with pytest.raises(ValidationError, match=dotted.split(".")[-1]):
         RunConfig.from_yaml(path)
+
+
+# ── Publishing baselines ──────────────────────────────────────────────────────
+
+
+def test_baselines_store_defaults_and_publish_keys_default_off() -> None:
+    for name in ("ursa.yaml", "local.yaml"):
+        config = RunConfig.from_yaml(TEMPLATES_DIR / name)
+        assert config.baselines.store == "s3://ufs-chem/baselines", name
+        assert config.harness.publish_baselines is False, name
+        assert config.harness.no_suite_update is False, name
+
+
+def test_no_suite_update_requires_publish_baselines(tmp_path: Path) -> None:
+    path = run_config_file(tmp_path, overrides={"harness.no_suite_update": True})
+    with pytest.raises(ValidationError, match="no_suite_update.*publish_baselines"):
+        RunConfig.from_yaml(path)
+    path = run_config_file(
+        tmp_path,
+        overrides={"harness.no_suite_update": True, "harness.publish_baselines": True},
+    )
+    assert RunConfig.from_yaml(path).harness.no_suite_update is True
+
+
+def test_malformed_values_fail_validation(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="root_dir"):
+        RunConfig.from_yaml(run_config_file(tmp_path, overrides={"root_dir": 7}))
+    with pytest.raises(ValidationError, match="applications"):
+        RunConfig.from_yaml(
+            run_config_file(tmp_path, overrides={"applications": "cece"})
+        )
+    not_a_mapping = tmp_path / "list.yaml"
+    not_a_mapping.write_text("- a\n- b\n")
+    with pytest.raises(ValueError, match="not a mapping"):
+        RunConfig.from_yaml(not_a_mapping)

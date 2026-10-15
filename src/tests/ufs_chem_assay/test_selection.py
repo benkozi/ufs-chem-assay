@@ -19,7 +19,7 @@ def _settings(**overrides: object) -> Settings:
 
 
 def test_builtin_config_dir_is_the_checked_in_tree() -> None:
-    assert BUILTIN_CONFIG_DIR == Path(__file__).resolve().parents[1] / "config"
+    assert Path(__file__).resolve().parents[1] / "config" == BUILTIN_CONFIG_DIR
     assert (
         BUILTIN_CONFIG_DIR / "cece" / "maccity" / "simple-maccity-suite.yaml"
     ).is_file()
@@ -43,9 +43,7 @@ def test_regex_selects_several_suites_in_name_order() -> None:
     ]
 
 
-def test_explicit_application_drops_other_applications_suites(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_explicit_application_drops_other_applications_suites(tmp_path: Path) -> None:
     other = tmp_path / "other-suite.yaml"
     other.write_text(
         "name: other\napplication: stub\nconfig_path: x.yaml\ntimeout_s: 5\n"
@@ -96,3 +94,50 @@ def test_root_dir_flows_into_config_path_resolution(
         resolved.suites[0][1].config_path
         == (checkout / "configs" / "base.yaml").resolve()
     )
+
+
+def test_unreadable_suite_is_a_value_error(tmp_path: Path) -> None:
+    (tmp_path / "bad-suite.yaml").write_text("name: [unclosed\n")
+    with pytest.raises(ValueError, match="bad-suite"):
+        resolve_suites(
+            _settings(suite_config_search_path=[tmp_path]), r".*-suite\.yaml"
+        )
+
+
+def test_explicit_application_skips_other_suites_and_needs_one_left(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from applications.registry import REGISTRY
+    from tests.ufs_chem_assay.stubs import stub_application
+
+    monkeypatch.setitem(REGISTRY, "stub", stub_application())
+    (tmp_path / "other-suite.yaml").write_text(
+        "name: other\napplication: stub\nconfig_path: x.yaml\ntimeout_s: 5\n"
+    )
+    with caplog.at_level("INFO"):
+        resolved = resolve_suites(
+            _settings(application="cece", suite_config_search_path=[tmp_path]),
+            r"(other|simple-maccity)-suite\.yaml",
+        )
+    assert [s.name for _, s in resolved.suites] == ["simple-maccity"]
+    assert any("application stub, skipped" in r.getMessage() for r in caplog.records)
+    with pytest.raises(ValueError, match="none of the selected suites is a cece suite"):
+        resolve_suites(
+            _settings(application="cece", suite_config_search_path=[tmp_path]),
+            "other-suite.yaml",
+        )
+    with pytest.raises(ValueError, match="several applications"):
+        resolve_suites(
+            _settings(suite_config_search_path=[tmp_path]),
+            r"(other|simple-maccity)-suite\.yaml",
+        )
+
+
+def test_missing_config_path_is_a_value_error(tmp_path: Path) -> None:
+    (tmp_path / "gone-suite.yaml").write_text(
+        "name: gone\nconfig_path: absent.yaml\ntimeout_s: 5\n"
+    )
+    with pytest.raises(ValueError, match="does not exist"):
+        resolve_suites(
+            _settings(suite_config_search_path=[tmp_path]), "gone-suite.yaml"
+        )

@@ -70,7 +70,8 @@ def test_job_env_pairs() -> None:
 
 
 def test_template_is_shipped_and_strict() -> None:
-    assert TEMPLATE_PATH.name == "driver-job.sbatch.j2" and TEMPLATE_PATH.is_file()
+    assert TEMPLATE_PATH.name == "driver-job.sbatch.j2"
+    assert TEMPLATE_PATH.is_file()
     with pytest.raises(UndefinedError):
         render_job_script(
             job_name="x",
@@ -114,9 +115,11 @@ def test_render_job_script_golden() -> None:
     ]
     body = lines[len(directives) + 1 :]
     assert body[0] == "set -euo pipefail"
-    assert "module purge" in body and "module use /host/cece/modulefiles" in body
+    assert "module purge" in body
+    assert "module use /host/cece/modulefiles" in body
     assert "module load cece_ursa.intelllvm" in body
-    assert "export I_MPI_FABRICS=shm" in body and "export FI_PROVIDER=tcp" in body
+    assert "export I_MPI_FABRICS=shm" in body
+    assert "export FI_PROVIDER=tcp" in body
     # The PMI fix: MPI programs inside a batch job must be launched by srun.
     assert (
         body[-1]
@@ -138,7 +141,8 @@ def test_render_job_script_without_modules_or_env() -> None:
         env={},
         command="ctest --test-dir /r/build",
     )
-    assert "module" not in text and "export" not in text
+    assert "module" not in text
+    assert "export" not in text
     assert text.rstrip().endswith("srun --ntasks=1 ctest --test-dir /r/build")
 
 
@@ -215,7 +219,8 @@ def test_slurm_run_driver_writes_the_script_and_submits_it(
     )
 
     script = tmp_path / "x.sbatch"
-    assert script.is_file() and "srun --ntasks=1" in script.read_text()
+    assert script.is_file()
+    assert "srun --ntasks=1" in script.read_text()
     assert popen.call_args.args[0] == ["sbatch", "--wait", "--parsable", str(script)]
     assert popen.call_args.kwargs["stdout"] == subprocess.PIPE
     assert out_path.read_bytes() == b"driver ok\n"  # untouched: Slurm owns it
@@ -282,9 +287,8 @@ def test_slurm_roots_are_host_roots() -> None:
     host, driver = resolve_output_roots(
         "runs", Path("/host/cece"), Runtime.SLURM, container_workdir=CONTAINER_WORKDIR
     )
-    assert host == Path("/host/cece/runs") and driver == PurePosixPath(
-        "/host/cece/runs"
-    )
+    assert host == Path("/host/cece/runs")
+    assert driver == PurePosixPath("/host/cece/runs")
 
 
 def test_docker_and_native_paths_unchanged_by_the_new_runtime() -> None:
