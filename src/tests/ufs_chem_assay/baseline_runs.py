@@ -15,6 +15,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from applications.base import Application
+from applications.cece.suite import CeceBaselineComparison
 from applications.registry import get_application, load_suite
 from baselines import SuiteInput
 from combos import Combo, enumerate_combos, write_combos_csv
@@ -193,3 +194,17 @@ def fake_sync(
         )
 
     return fake
+
+
+def maccity_entry(ulid: str = "01JX", **fields: object) -> CeceBaselineComparison:
+    """One `baseline_comparisons` entry as the maccity suites spell it (the
+    `bilinear` selector), with any further fields (`atol`, `rtol`, `plot`)."""
+    return CeceBaselineComparison.model_validate(
+        {
+            "sweep_selector": {
+                "cece_data": {"streams": [{"name": "MACCITY", "mapalgo": "bilinear"}]}
+            },
+            "ulid": ulid,
+            **fields,
+        }
+    )

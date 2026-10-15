@@ -34,6 +34,13 @@ def local(tmp_path: Path) -> RunConfig:
     )
 
 
+def _ursa(tmp_path: Path, overrides: dict[str, object]) -> RunConfig:
+    """The Ursa template with dotted-key overrides, at the runbook root."""
+    return RunConfig.from_yaml(
+        run_config_file(tmp_path, overrides=overrides, root_dir=_URSA_ROOT)
+    )
+
+
 @pytest.fixture
 def stub(monkeypatch: pytest.MonkeyPatch) -> Application:
     app = stub_application()
@@ -72,13 +79,7 @@ def test_source_stage_clones_when_missing_and_guards_submodules(
 
 
 def test_source_stage_update_source_fast_forwards(tmp_path: Path) -> None:
-    config = RunConfig.from_yaml(
-        run_config_file(
-            tmp_path,
-            overrides={"applications.cece.update_source": True},
-            root_dir=_URSA_ROOT,
-        )
-    )
+    config = _ursa(tmp_path, {"applications.cece.update_source": True})
     script = render_stage(Stage.SOURCE, config, _CECE)
     assert "git -C" in script.text
     assert "fetch origin" in script.text
@@ -221,19 +222,16 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
 def test_harness_stage_exports_are_field_driven(tmp_path: Path) -> None:
     # A harness: key that mirrors a setting renders as ASSAY_<FIELD>; an
     # application key as <PREFIX><FIELD>; the pytest options as flags.
-    config = RunConfig.from_yaml(
-        run_config_file(
-            tmp_path,
-            overrides={
-                "harness.log_level": "DEBUG",
-                "harness.config_search_path": "/configs",
-                "harness.suite_config_search_path": ["/suites/a", "/suites/b"],
-                "harness.pytest_dry_run": True,
-                "applications.cece.docker_image": "img:tag",
-                "applications.cece.driver_path": "./build/other",
-            },
-            root_dir=_URSA_ROOT,
-        )
+    config = _ursa(
+        tmp_path,
+        {
+            "harness.log_level": "DEBUG",
+            "harness.config_search_path": "/configs",
+            "harness.suite_config_search_path": ["/suites/a", "/suites/b"],
+            "harness.pytest_dry_run": True,
+            "applications.cece.docker_image": "img:tag",
+            "applications.cece.driver_path": "./build/other",
+        },
     )
     text = render_stage(Stage.HARNESS, config, _CECE).text
     for line in (
@@ -250,15 +248,12 @@ def test_harness_stage_exports_are_field_driven(tmp_path: Path) -> None:
 
 def test_native_harness_stage_keeps_the_launcher(tmp_path: Path) -> None:
     # Inside an salloc shell: ASSAY_RUNTIME=native with a plain launcher.
-    config = RunConfig.from_yaml(
-        run_config_file(
-            tmp_path,
-            overrides={
-                "harness.launcher": "srun --ntasks=1",
-                "harness.runtime": "native",
-            },
-            root_dir=_URSA_ROOT,
-        )
+    config = _ursa(
+        tmp_path,
+        {
+            "harness.launcher": "srun --ntasks=1",
+            "harness.runtime": "native",
+        },
     )
     text = render_stage(Stage.HARNESS, config, _CECE).text
     assert "export ASSAY_RUNTIME=native" in text
@@ -293,11 +288,7 @@ def test_harness_stage_exports_the_queue_allowance_under_slurm_only(
     assert (
         "ASSAY_SLURM_QUEUE_WAIT_S" not in render_stage(Stage.HARNESS, local, _CECE).text
     )
-    long_wait = RunConfig.from_yaml(
-        run_config_file(
-            tmp_path, overrides={"slurm.queue_wait_s": 28800}, root_dir=_URSA_ROOT
-        )
-    )
+    long_wait = _ursa(tmp_path, {"slurm.queue_wait_s": 28800})
     assert (
         "export ASSAY_SLURM_QUEUE_WAIT_S=28800"
         in render_stage(Stage.HARNESS, long_wait, _CECE).text
@@ -306,13 +297,7 @@ def test_harness_stage_exports_the_queue_allowance_under_slurm_only(
 
 def test_regex_suite_selector_survives_quoting(tmp_path: Path) -> None:
     # Several suites in one session: the selector is a regex, every match runs.
-    config = RunConfig.from_yaml(
-        run_config_file(
-            tmp_path,
-            overrides={"harness.suite_config": "ex[0-9]-suite.yaml"},
-            root_dir=_URSA_ROOT,
-        )
-    )
+    config = _ursa(tmp_path, {"harness.suite_config": "ex[0-9]-suite.yaml"})
     text = render_stage(Stage.HARNESS, config, _CECE).text
     assert "'--suite-config=ex[0-9]-suite.yaml'" in text
 
@@ -325,13 +310,7 @@ def test_output_root_is_suffixed_only_with_several_applications(
 ) -> None:
     one = RunConfig.from_yaml(run_config_file(tmp_path, root_dir=_URSA_ROOT))
     assert application_output_root(one, _CECE) == "ufs-chem-assay-output"
-    two = RunConfig.from_yaml(
-        run_config_file(
-            tmp_path,
-            overrides={"applications.stub": {"git_url": "u", "ref": "main"}},
-            root_dir=_URSA_ROOT,
-        )
-    )
+    two = _ursa(tmp_path, {"applications.stub": {"git_url": "u", "ref": "main"}})
     assert application_output_root(two, _CECE) == "ufs-chem-assay-output/cece"
     assert application_output_root(two, stub) == "ufs-chem-assay-output/stub"
     text = render_stage(Stage.HARNESS, two, stub).text
@@ -345,17 +324,14 @@ def test_output_root_is_suffixed_only_with_several_applications(
 
 
 def test_harness_stage_renders_the_publish_flags(tmp_path: Path) -> None:
-    config = RunConfig.from_yaml(
-        run_config_file(
-            tmp_path,
-            overrides={
-                "harness.publish_baselines": True,
-                "harness.no_suite_update": True,
-                "baselines.store": "s3://other/prefix",
-                "baselines.root_dir": "/scratch/baselines",
-            },
-            root_dir=_URSA_ROOT,
-        )
+    config = _ursa(
+        tmp_path,
+        {
+            "harness.publish_baselines": True,
+            "harness.no_suite_update": True,
+            "baselines.store": "s3://other/prefix",
+            "baselines.root_dir": "/scratch/baselines",
+        },
     )
     text = render_stage(Stage.HARNESS, config, _CECE).text
     assert "export ASSAY_BASELINE_STORE=s3://other/prefix" in text
@@ -364,13 +340,7 @@ def test_harness_stage_renders_the_publish_flags(tmp_path: Path) -> None:
 
 
 def test_harness_stage_exports_the_tolerance_overrides(tmp_path: Path) -> None:
-    config = RunConfig.from_yaml(
-        run_config_file(
-            tmp_path,
-            overrides={"baselines.atol": 1e-24, "baselines.rtol": 1e-15},
-            root_dir=_URSA_ROOT,
-        )
-    )
+    config = _ursa(tmp_path, {"baselines.atol": 1e-24, "baselines.rtol": 1e-15})
     text = render_stage(Stage.HARNESS, config, _CECE).text
     assert "export ASSAY_BASELINE_ATOL=1e-24" in text
     assert "export ASSAY_BASELINE_RTOL=1e-15" in text

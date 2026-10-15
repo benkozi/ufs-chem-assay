@@ -20,6 +20,7 @@ from models.suite_config import (
     SuiteConfig,
 )
 from platforms import Platform, Runtime
+from tests.ufs_chem_assay.baseline_runs import maccity_entry
 
 _SWEEP = "sweep:\n  cece_data:\n    streams:\n      - name: MACCITY\n        mapalgo: [consd]\n"
 
@@ -41,17 +42,10 @@ def _manifest(suites: list[SuiteConfig], **overrides: object) -> RunManifest:
 
 
 def test_baseline_comparison_rtol_defaults_to_zero_and_rejects_negative() -> None:
-    from applications.cece.suite import CeceBaselineComparison
-
-    selector = {"cece_data": {"streams": [{"name": "MACCITY", "mapalgo": "bilinear"}]}}
-    entry = CeceBaselineComparison.model_validate(
-        {"sweep_selector": selector, "ulid": "01JX"}
-    )
+    entry = maccity_entry()
     assert (entry.atol, entry.rtol) == (0.0, 0.0)
     with pytest.raises(ValidationError, match="rtol"):
-        CeceBaselineComparison.model_validate(
-            {"sweep_selector": selector, "ulid": "01JX", "rtol": -1e-15}
-        )
+        maccity_entry(rtol=-1e-15)
 
 
 def test_checked_in_maccity_suite_pins_a_relative_tolerance() -> None:

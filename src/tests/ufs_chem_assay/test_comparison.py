@@ -10,8 +10,10 @@ from comparison import (
     VariableComparison,
     compare_with_baseline,
     concatenate_comparison_csvs,
+    resolve_tolerances,
     write_comparison_csv,
 )
+from tests.ufs_chem_assay.baseline_runs import maccity_entry
 
 
 def _write_nc(
@@ -67,6 +69,12 @@ def _compare(
     )
 
 
+def _one_variable(result: BaselineComparisonResult) -> VariableComparison:
+    """The single (file, variable) a one-variable pair produced."""
+    (variable,) = [v for f in result.files for v in f.variables]
+    return variable
+
+
 def test_identical_pair_passes_bit_for_bit(pair_dirs: tuple[Path, Path]) -> None:
     realization, baseline = pair_dirs
     values = _values()
@@ -97,22 +105,12 @@ def test_perturbed_value_respects_absolute_tolerance(
 
     # n_mismatched respects atol: the one perturbed element at 0.0/1e-7,
     # none at the covering tolerance (data_match <=> n_mismatched == 0).
-    def _variable(result: BaselineComparisonResult) -> VariableComparison:
-        (variable,) = [v for f in result.files for v in f.variables]
-        return variable
+    assert _one_variable(_compare(realization, baseline, atol=0.0)).n_mismatched == 1
+    assert _one_variable(_compare(realization, baseline, atol=1e-5)).n_mismatched == 0
+    assert _one_variable(_compare(realization, baseline, atol=1e-7)).n_mismatched == 1
 
-    assert _variable(_compare(realization, baseline, atol=0.0)).n_mismatched == 1
-    assert _variable(_compare(realization, baseline, atol=1e-5)).n_mismatched == 0
-    assert _variable(_compare(realization, baseline, atol=1e-7)).n_mismatched == 1
-
-    result = _compare(realization, baseline, atol=0.0)
-    (variable,) = [v for f in result.files for v in f.variables]
+    variable = _one_variable(_compare(realization, baseline, atol=0.0))
     assert variable.max_abs_diff == pytest.approx(1e-6, rel=1e-3)
-
-
-def _one_variable(result: BaselineComparisonResult) -> VariableComparison:
-    (variable,) = [v for f in result.files for v in f.variables]
-    return variable
 
 
 def test_one_ulp_difference_passes_under_a_relative_tolerance(
@@ -150,19 +148,7 @@ def test_tolerances_add_numpy_style(pair_dirs: tuple[Path, Path]) -> None:
 
 
 def test_resolve_tolerances_prefers_the_override_and_keeps_zero() -> None:
-    from applications.cece.suite import CeceBaselineComparison
-    from comparison import resolve_tolerances
-
-    entry = CeceBaselineComparison.model_validate(
-        {
-            "sweep_selector": {
-                "cece_data": {"streams": [{"name": "MACCITY", "mapalgo": "bilinear"}]}
-            },
-            "ulid": "01JX",
-            "atol": 1e-9,
-            "rtol": 1e-15,
-        }
-    )
+    entry = maccity_entry(atol=1e-9, rtol=1e-15)
     assert resolve_tolerances(entry, atol=None, rtol=None) == (1e-9, 1e-15)
     assert resolve_tolerances(entry, atol=0.0, rtol=None) == (0.0, 1e-15)
     assert resolve_tolerances(entry, atol=None, rtol=1e-12) == (1e-9, 1e-12)
@@ -360,8 +346,7 @@ def test_difference_statistics_match_numpy(pair_dirs: tuple[Path, Path]) -> None
     _write_nc(realization / "cece_a.nc", perturbed)
     _write_nc(baseline / "cece_a.nc", values)
 
-    result = _compare(realization, baseline)
-    (variable,) = [v for f in result.files for v in f.variables]
+    variable = _one_variable(_compare(realization, baseline))
     diff = perturbed - values
     assert variable.rmse == pytest.approx(float(np.sqrt(np.nanmean(diff**2))))
     assert variable.n_evaluated == int(np.sum(~np.isnan(diff)))
