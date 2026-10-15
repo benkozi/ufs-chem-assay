@@ -11,7 +11,7 @@ from assertions import (
     assert_species_attributes,
 )
 from baselines import StagedBaseline
-from comparison import compare_with_baseline, write_comparison_csv
+from comparison import compare_with_baseline, resolve_tolerances, write_comparison_csv
 from models.suite_config import Analysis, Assertions, BaselineComparison
 from runner import DriverRunResult
 from settings import Settings
@@ -107,7 +107,8 @@ def test_baseline_comparison(
 ) -> None:
     """The combination's NetCDF output matches its configured baseline
     (nccmp-style: structure and attributes exact; data bit-for-bit or
-    within the suite's absolute tolerance)."""
+    within the entry's `atol + rtol * |baseline|`, a session override
+    taking precedence)."""
     if driver_run.error is not None:
         pytest.skip(f"driver run failed: {driver_run.error}")
     if not settings.enable_baseline_comparisons:
@@ -128,10 +129,14 @@ def test_baseline_comparison(
             "(set ASSAY_BASELINE_ROOT_DIR)"
         )
 
+    atol, rtol = resolve_tolerances(
+        entry, atol=settings.baseline_atol, rtol=settings.baseline_rtol
+    )
     result = compare_with_baseline(
         driver_run.combo_dir,
         baseline_dir,
-        atol=entry.atol,
+        atol=atol,
+        rtol=rtol,
         run_id=run_context.run_id,
         application=run_context.application,
         suite=run_context.suite,

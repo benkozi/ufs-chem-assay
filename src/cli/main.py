@@ -361,20 +361,8 @@ def _fetch(args: argparse.Namespace) -> int:
             settings.baseline_root_dir,
             dry_run=args.dry_run,
         )
-        for baseline in staged:
-            (logger.error if baseline.state == "failed" else logger.info)(
-                "baseline %s: %s (%s)", baseline.ulid, baseline.state, baseline.detail
-            )
-        states = {
-            state: sum(1 for r in staged if r.state == state)
-            for state in ("local", "synced", "would-sync", "failed")
-        }
-        logger.info(
-            "baseline summary: %s",
-            ", ".join(f"{count} {state}" for state, count in states.items() if count)
-            or "none pinned",
-        )
-        failed_baselines = states["failed"]
+        # ensure_baselines logs the states itself, grouped by state and reason.
+        failed_baselines = sum(1 for r in staged if r.state == "failed")
     return 1 if failed or failed_baselines else 0
 
 

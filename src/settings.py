@@ -124,6 +124,22 @@ class Settings(BaseSettings):
             "directory (a Dropbox folder, a scratch area)"
         ),
     )
+    baseline_atol: float | None = Field(
+        None,
+        ge=0,
+        description=(
+            "Absolute data tolerance applied to every baseline comparison of the "
+            "session in place of the entries' own atol; None = the entries' values"
+        ),
+    )
+    baseline_rtol: float | None = Field(
+        None,
+        ge=0,
+        description=(
+            "Relative data tolerance (scaled by |baseline|) applied to every baseline "
+            "comparison in place of the entries' own rtol; None = the entries' values"
+        ),
+    )
     dask_nworkers: int | None = Field(
         None,
         gt=0,

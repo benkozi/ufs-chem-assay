@@ -219,10 +219,22 @@ def test_harness_section_mirrors_every_setting() -> None:
         "baseline_root_dir",
         "enable_baseline_comparisons",
         "baseline_store",
+        "baseline_atol",
+        "baseline_rtol",
         "sbatch_args",
         "slurm_queue_wait_s",
         "job_env",
     } == SETTINGS_NOT_MIRRORED
+
+
+def test_baselines_section_tolerances_default_to_null_and_reject_negatives() -> None:
+    from cli.run_config import BaselinesSection
+
+    section = BaselinesSection()
+    assert (section.atol, section.rtol) == (None, None)
+    assert BaselinesSection(rtol=1e-15).rtol == 1e-15
+    with pytest.raises(ValidationError, match="atol"):
+        BaselinesSection(atol=-1.0)
 
 
 def test_application_section_mirrors_application_settings() -> None:

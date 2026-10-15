@@ -39,7 +39,7 @@ def _sync_into(store: str, ulid: str, staging_dir: Path) -> str | None:
     if not is_s3(store):
         source = Path(store) / ulid
         if not source.is_dir():
-            return f"{ulid} is not in the store {store}"
+            return f"not in the store {store}"
         shutil.copytree(source, staging_dir)
         return None
     try:
@@ -54,7 +54,7 @@ def _sync_into(store: str, ulid: str, staging_dir: Path) -> str | None:
         return error_detail(exc)
     if not any(staging_dir.glob("*.nc")):
         # aws exits 0 and downloads nothing for a prefix that does not exist.
-        return f"{ulid} is not in the store {store} (nothing downloaded)"
+        return f"not in the store {store} (nothing downloaded)"
     return None
 
 
@@ -87,7 +87,11 @@ def ensure_baselines(
     place), would-sync (a dry run's plan), or failed with the reason. With
     no baseline root nothing is written (the harness never writes into the
     cwd) and an absent baseline fails naming the setting; no network fails
-    every absent baseline naming `fetch`. Never raises for one baseline."""
+    every absent baseline naming `fetch`. Never raises for one baseline.
+
+    Logged here, once, one line per (state, reason) naming the ULIDs in it
+    — a suite pinning many baselines must not flood the session start —
+    so callers record the results without logging them again."""
     root = baseline_root if baseline_root is not None else Path.cwd()
     staging_root = root / CONVENTIONS.staging_dirname
     reachability = _Reachability(store)
@@ -103,9 +107,6 @@ def ensure_baselines(
             root_set=baseline_root is not None,
             dry_run=dry_run,
         )
-        (logger.error if state == "failed" else logger.info)(
-            "baseline %s: %s (%s)", ulid, state, detail
-        )
         results.append(
             StagedBaseline(
                 suite=suite_name,
@@ -118,7 +119,25 @@ def ensure_baselines(
         )
     if staging_root.exists():
         shutil.rmtree(staging_root, ignore_errors=True)
+    _log_grouped(results)
     return results
+
+
+def _log_grouped(results: Sequence[StagedBaseline]) -> None:
+    """`<n> baseline(s) <state> (<ulids>): <reason>` per distinct pair, in
+    first-seen order; failures at ERROR, the rest at INFO."""
+    groups: dict[tuple[BaselineState, str], list[str]] = {}
+    for record in results:
+        groups.setdefault((record.state, record.detail), []).append(record.ulid)
+    for (state, detail), ulids in groups.items():
+        (logger.error if state == "failed" else logger.info)(
+            "%d baseline%s %s (%s): %s",
+            len(ulids),
+            "" if len(ulids) == 1 else "s",
+            state,
+            ", ".join(ulids),
+            detail,
+        )
 
 
 def _stage_one(
@@ -135,7 +154,7 @@ def _stage_one(
         return "local", "present"
     if not root_set:
         return "failed", (
-            f"baseline {ulid} is absent and ASSAY_BASELINE_ROOT_DIR is unset: "
+            "absent and ASSAY_BASELINE_ROOT_DIR is unset: "
             "set it to let the harness sync baselines there"
         )
     if dry_run:
@@ -153,4 +172,4 @@ def _stage_one(
         return "failed", error
     path.parent.mkdir(parents=True, exist_ok=True)
     os.replace(staging_dir, path)
-    return "synced", f"synced from {store}"
+    return "synced", f"from {store}"

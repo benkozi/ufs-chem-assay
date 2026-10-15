@@ -479,6 +479,22 @@ def test_publish_baselines_fails_fast_at_session_start_without_network(
     assert not (tmp_path / "combo_runs" / "run.yaml").exists()  # nothing ran
 
 
+def test_tolerance_overrides_are_read_at_session_start(tmp_path: Path) -> None:
+    """--baseline-rtol / --baseline-atol beat the settings and the suite's
+    entries; the override is logged once; a negative one is a usage error."""
+    env = _fabricated_checkout(tmp_path)
+    env["ASSAY_BASELINE_RTOL"] = "1e-12"  # the option wins over the setting
+    result = _pytest(tmp_path, env, "--baseline-rtol=1e-15", "--baseline-atol=0")
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = result.stdout + result.stderr
+    assert output.count("tolerance override") == 1
+    assert "atol=0.0" in output
+    assert "rtol=1e-15" in output
+    result = _pytest(tmp_path, env, "--baseline-rtol=-1")
+    assert result.returncode != 0
+    assert "baseline_rtol" in result.stdout + result.stderr
+
+
 def test_directory_store_needs_no_network_at_session_start(tmp_path: Path) -> None:
     env = _fabricated_checkout(tmp_path)
     env["AWS_ENDPOINT_URL"] = "http://127.0.0.1:9"

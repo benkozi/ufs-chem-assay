@@ -6,7 +6,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 import pytest
-from pydantic import BaseModel, ConfigDict, InstanceOf
+from pydantic import BaseModel, ConfigDict, InstanceOf, ValidationError
 from ulid import ULID
 
 from analysis import RunContext, concatenate_stats_csvs
@@ -171,6 +171,25 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         help="With --publish-baselines: publish, but leave the suite files alone.",
     )
+    group.addoption(
+        "--baseline-atol",
+        type=float,
+        default=None,
+        help=(
+            "Absolute data tolerance for every baseline comparison this session, "
+            "over ASSAY_BASELINE_ATOL and the entries' own atol (0 = bit-for-bit)."
+        ),
+    )
+    group.addoption(
+        "--baseline-rtol",
+        type=float,
+        default=None,
+        help=(
+            "Relative data tolerance (x |baseline|) for every baseline comparison "
+            "this session, over ASSAY_BASELINE_RTOL and the entries' own rtol; "
+            "~2.2e-16 is one float64 ULP."
+        ),
+    )
 
 
 def _root_dir_source(app: Application) -> str:
@@ -179,15 +198,31 @@ def _root_dir_source(app: Application) -> str:
 
 def pytest_sessionstart(session: pytest.Session) -> None:
     config = session.config
-    # Init kwargs beat env vars in pydantic-settings, so the flag wins over
-    # ASSAY_APPLICATION here (Settings is frozen).
-    application_option = config.getoption("--application")
-    settings = (
-        Settings()
-        if application_option is None
-        else Settings(application=application_option)
-    )
+    # Init kwargs beat env vars in pydantic-settings, so the flags win over
+    # ASSAY_APPLICATION / ASSAY_BASELINE_ATOL / ASSAY_BASELINE_RTOL here
+    # (Settings is frozen).
+    overrides = {
+        field: value
+        for field, option in (
+            ("application", "--application"),
+            ("baseline_atol", "--baseline-atol"),
+            ("baseline_rtol", "--baseline-rtol"),
+        )
+        if (value := config.getoption(option)) is not None
+    }
+    try:
+        settings = Settings(**overrides)
+    except ValidationError as exc:
+        raise pytest.UsageError(str(exc)) from exc
     configure_logging(settings.log_level)
+    if settings.enable_baseline_comparisons and (
+        settings.baseline_atol is not None or settings.baseline_rtol is not None
+    ):
+        logger.info(
+            "baseline tolerance override for every entry: atol=%s rtol=%s",
+            "entry" if settings.baseline_atol is None else settings.baseline_atol,
+            "entry" if settings.baseline_rtol is None else settings.baseline_rtol,
+        )
     if config.getoption("--no-suite-update") and not config.getoption(
         "--publish-baselines"
     ):
@@ -313,9 +348,6 @@ def pytest_sessionstart(session: pytest.Session) -> None:
             dry_run=bool(config.getoption("--dry-run")),
         ):
             states[staged.ulid] = staged
-            (logger.error if staged.state == "failed" else logger.info)(
-                "baseline %s: %s (%s)", staged.ulid, staged.state, staged.detail
-            )
     config.stash[_BASELINE_STATES] = states
     config.stash[_EXPLICIT_ROOTS] = roots
     # test-report.csv rows, keyed by nodeid in execution order; filled by the

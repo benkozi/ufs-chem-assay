@@ -40,6 +40,32 @@ def _manifest(suites: list[SuiteConfig], **overrides: object) -> RunManifest:
     return RunManifest.model_validate(values)
 
 
+def test_baseline_comparison_rtol_defaults_to_zero_and_rejects_negative() -> None:
+    from applications.cece.suite import CeceBaselineComparison
+
+    selector = {"cece_data": {"streams": [{"name": "MACCITY", "mapalgo": "bilinear"}]}}
+    entry = CeceBaselineComparison.model_validate(
+        {"sweep_selector": selector, "ulid": "01JX"}
+    )
+    assert (entry.atol, entry.rtol) == (0.0, 0.0)
+    with pytest.raises(ValidationError, match="rtol"):
+        CeceBaselineComparison.model_validate(
+            {"sweep_selector": selector, "ulid": "01JX", "rtol": -1e-15}
+        )
+
+
+def test_checked_in_maccity_suite_pins_a_relative_tolerance() -> None:
+    """The cross-machine comparison (Ursa's Intel build against the arm64
+    image) differs by one ULP in the interpolated hours; the entries admit
+    a few ULPs at any magnitude and stay bit-for-bit otherwise."""
+    suite = load_suite(
+        Path(__file__).resolve().parents[1]
+        / "config/cece/maccity/simple-maccity-suite.yaml"
+    )
+    assert [e.rtol for e in suite.baseline_comparisons] == [1e-15] * 3
+    assert [e.atol for e in suite.baseline_comparisons] == [0.0] * 3
+
+
 def test_config_path_resolves_relative_to_suite_file(suite_path: Path) -> None:
     suite = load_suite(suite_path)
     assert suite.name == "simple-maccity"

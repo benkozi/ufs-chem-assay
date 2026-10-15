@@ -1,8 +1,10 @@
 """Baseline comparison of combination NetCDF output, modeled on nccmp.
 
 Structural checks (file sets, formats, dimensions, variables, attributes)
-are always exact; data compares bit-for-bit (atol=0) or within an absolute
-tolerance (atol>0, no scaling by the baseline's magnitude). Per-variable
+are always exact; data compares bit-for-bit (atol and rtol both 0) or within
+`atol + rtol * |baseline|` (numpy style: the relative part scales with the
+baseline's magnitude, so a few float64 ULPs is `rtol ~ 1e-15` whatever the
+field's size). Per-variable
 reductions are dask graphs gathered into one dask.compute per file pair,
 executed on the active distributed client.
 """
@@ -39,7 +41,7 @@ class VariableComparison(StrictModel):
         description="Whether realization and baseline dtypes are identical"
     )
     data_match: bool = Field(
-        description="Whether the data matched (bit-for-bit or within atol)"
+        description="Whether the data matched (bit-for-bit or within atol + rtol * |baseline|)"
     )
     attributes_match: bool = Field(
         description="Whether the variable attribute dictionaries are identical"
@@ -58,7 +60,7 @@ class VariableComparison(StrictModel):
     )
     n_mismatched: int | None = Field(
         None,
-        description="Number of elements failing the data check under atol (NaN-position mismatches included); data_match iff 0",
+        description="Number of elements failing the data check under the tolerances (NaN-position mismatches included); data_match iff 0",
     )
     diff_sum: float | None = Field(
         None, description="Sum of the difference values (nan-aware)"
@@ -126,7 +128,10 @@ class BaselineComparisonResult(StrictModel):
     combo: str = Field(description="Canonical combination name")
     combo_id: str = Field(description="Content-hash combination id")
     baseline_ulid: str = Field(description="ULID identifying the baseline")
-    atol: float = Field(description="Absolute data tolerance used (0 = bit-for-bit)")
+    atol: float = Field(description="Absolute data tolerance used")
+    rtol: float = Field(
+        description="Relative data tolerance used, scaled by |baseline| (both 0 = bit-for-bit)"
+    )
     file_names_match: bool = Field(
         description="Whether the NetCDF file name sets are identical"
     )
@@ -211,7 +216,7 @@ def resolve_baseline_comparisons(
                 f"(ulids {resolved[combo.name].ulid} and {entry.ulid})"
             )
         resolved[combo.name] = entry
-        logger.info("baseline %s resolved to combination %s", entry.ulid, combo.name)
+        logger.debug("baseline %s resolved to combination %s", entry.ulid, combo.name)
     return resolved
 
 
@@ -220,7 +225,11 @@ def _stringified_attrs(attrs: dict[str, object]) -> dict[str, str]:
 
 
 def _compare_variable(
-    name: str, realization: xr.DataArray, baseline: xr.DataArray, atol: float
+    name: str,
+    realization: xr.DataArray,
+    baseline: xr.DataArray,
+    atol: float,
+    rtol: float,
 ) -> VariableComparison:
     dtype_match = realization.dtype == baseline.dtype
     attrs_real = _stringified_attrs(realization.attrs)
@@ -252,16 +261,20 @@ def _compare_variable(
     ):
         nan_positions_equal = dsa.isnan(real) == dsa.isnan(base)
         both_nan = dsa.isnan(real) & dsa.isnan(base)
-        if atol == 0.0:
+        if atol == 0.0 and rtol == 0.0:
             values_equal = (real == base) | both_nan
         else:
-            values_equal = (abs(real - base) <= atol) | both_nan
+            values_equal = (abs(real - base) <= atol + rtol * abs(base)) | both_nan
         elements_ok = values_equal & nan_positions_equal
         equal_graph = elements_ok.all()
         mismatch_graph = dsa.sum(~elements_ok)
         diff_graph = dsa.nanmax(abs(real - base))
     else:
-        elements_ok = (real == base) if atol == 0.0 else (abs(real - base) <= atol)
+        elements_ok = (
+            (real == base)
+            if atol == 0.0 and rtol == 0.0
+            else (abs(real - base) <= atol + rtol * abs(base))
+        )
         equal_graph = elements_ok.all()
         mismatch_graph = dsa.sum(~elements_ok)
         diff_graph = abs(real - base).max()
@@ -325,6 +338,7 @@ def _compare_file(
     realization_path: Path,
     baseline_path: Path,
     atol: float,
+    rtol: float,
     ignore_global_attributes: Sequence[str] = (),
 ) -> FileComparison:
     format_match = _netcdf_data_model(realization_path) == _netcdf_data_model(
@@ -365,7 +379,7 @@ def _compare_file(
         )
 
         variables = [
-            _compare_variable(name, real[name], base[name], atol)
+            _compare_variable(name, real[name], base[name], atol, rtol)
             for name in sorted(real_vars & base_vars)
         ]
 
@@ -414,6 +428,19 @@ def _compare_configuration(
     return True, None
 
 
+def resolve_tolerances(
+    entry: BaselineComparison, *, atol: float | None, rtol: float | None
+) -> tuple[float, float]:
+    """The tolerances a comparison runs under: a session override (the
+    `--baseline-atol` / `--baseline-rtol` options, the `ASSAY_BASELINE_ATOL`
+    / `ASSAY_BASELINE_RTOL` settings) applies to every entry; `None` leaves
+    the entry's own value. 0 is a value (bit-for-bit), not "unset"."""
+    return (
+        entry.atol if atol is None else atol,
+        entry.rtol if rtol is None else rtol,
+    )
+
+
 def compare_with_baseline(
     combo_dir: Path,
     baseline_dir: Path,
@@ -426,6 +453,7 @@ def compare_with_baseline(
     baseline_ulid: str,
     ignore_global_attributes: Sequence[str] = (),
     app: Application | None = None,
+    rtol: float = 0.0,
 ) -> BaselineComparisonResult:
     """Compare every NetCDF of a combination against its baseline, and —
     with `app` — the combination's generated configuration against the
@@ -435,9 +463,13 @@ def compare_with_baseline(
     baseline published without its configuration cannot pass.
     `ignore_global_attributes`: the adapter's per-run stamps (creation
     time, history) — required present on both sides, their values not
-    compared."""
+    compared. `atol`/`rtol`: the data tolerances (see the module docstring)."""
     logger.info(
-        "comparing combo %s against baseline %s (atol=%s)", combo, baseline_ulid, atol
+        "comparing combo %s against baseline %s (atol=%s, rtol=%s)",
+        combo,
+        baseline_ulid,
+        atol,
+        rtol,
     )
     real_names = {path.name for path in combo_dir.glob("*.nc")}
     base_names = {path.name for path in baseline_dir.glob("*.nc")}
@@ -452,7 +484,7 @@ def compare_with_baseline(
 
     files = [
         _compare_file(
-            combo_dir / name, baseline_dir / name, atol, ignore_global_attributes
+            combo_dir / name, baseline_dir / name, atol, rtol, ignore_global_attributes
         )
         for name in sorted(real_names & base_names)
     ]
@@ -472,6 +504,7 @@ def compare_with_baseline(
         combo_id=combo_id,
         baseline_ulid=baseline_ulid,
         atol=atol,
+        rtol=rtol,
         file_names_match=file_names_match,
         config_match=config_match,
         config_detail=config_detail,
@@ -495,6 +528,7 @@ _COMPARISON_COLUMNS = [
     "combo",
     "baseline_ulid",
     "atol",
+    "rtol",
     "config_match",
     "file",
     "file_names_match",
@@ -537,6 +571,7 @@ def write_comparison_csv(
                     "combo": result.combo,
                     "baseline_ulid": result.baseline_ulid,
                     "atol": result.atol,
+                    "rtol": result.rtol,
                     "config_match": result.config_match,
                     "file": file.file,
                     "file_names_match": result.file_names_match,

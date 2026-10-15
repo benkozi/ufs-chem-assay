@@ -179,7 +179,8 @@ baseline_comparisons:                      # optional; each entry pairs one comb
           - name: MACCITY
             mapalgo: consd
     ulid: 01KXNXCJ86E8Z2FKVAXRER5ND4       # baseline under ASSAY_BASELINE_ROOT_DIR
-    atol: 0.0                              # per entry; 0 = bit-for-bit (default)
+    atol: 0.0                              # per entry; absolute tolerance (default 0)
+    rtol: 1.0e-15                          # per entry; × |baseline| (default 0); both 0 = bit-for-bit
     plot: true                             # per entry; bias plots + GIF at session end
 sweep:
   cece_data:
@@ -753,6 +754,24 @@ Publishing (2026-10-08, `baselines.py`; full design in
   `would-sync`, `failed` with the reason) and `test_baseline_comparison`
   fails on `failed` with that reason. `fetch` skips baselines when
   comparisons are off (CI has no credentials for the private store).
+  The states are logged once, by `ensure_baselines`, one line per
+  (state, reason) naming the ULIDs in it (`3 baselines failed (A, B, C):
+  absent and ASSAY_BASELINE_ROOT_DIR is unset: ...`); a reason never
+  repeats the ULID, and callers record without re-logging, so a suite
+  pinning many baselines costs a handful of lines at session start.
+- **Tolerances** (2026-10-15, the first cross-machine comparison): an
+  element passes when `|real − baseline| <= atol + rtol × |baseline|`
+  (numpy style; both 0 = bit-for-bit, unchanged). `rtol` exists because
+  Ursa's Intel build and the arm64 image differ by exactly one float64
+  ULP in the time-interpolated hours, and the absolute tolerance that
+  admits one ULP depends on the field's magnitude. The checked-in
+  `simple-maccity` entries pin `rtol: 1.0e-15`, `atol: 0.0`. Overrides,
+  highest first: `--baseline-atol` / `--baseline-rtol`, then
+  `ASSAY_BASELINE_ATOL` / `ASSAY_BASELINE_RTOL` (`baselines.atol` /
+  `baselines.rtol` in the run config), then the entry; an override applies
+  to every entry of the session, is logged once, and never edits a suite.
+  `BaselineComparisonResult.rtol` and the `rtol` CSV column record what
+  the verdict used.
 - **Compute nodes without network** (2026-10-14): publication never
   needs the session — the post-hoc command reads the output root from
   any node — and the session refuses `--publish-baselines` at start when
@@ -822,6 +841,7 @@ Harness-wide (`Settings`; `platform`, `runtime`, `launcher`, `sbatch_args`,
 | `baseline_root_dir` | `ASSAY_BASELINE_ROOT_DIR` | unset → cwd; baselines at `<root>/<ulid>/` |
 | `enable_baseline_comparisons` | `ASSAY_ENABLE_BASELINE_COMPARISONS` | `true`; false skips all comparison tests |
 | `baseline_store` | `ASSAY_BASELINE_STORE` | `s3://ufs-chem/baselines`; an `s3://bucket/prefix` (never a bucket root) or a local directory; `publish-baselines` writes `<store>/<ulid>/` |
+| `baseline_atol` / `baseline_rtol` | `ASSAY_BASELINE_ATOL` / `ASSAY_BASELINE_RTOL` | unset → each entry's own `atol` / `rtol`; a value applies to every comparison of the session (`--baseline-atol` / `--baseline-rtol` win) |
 | `dask_nworkers`  | `ASSAY_DASK_NWORKERS` | unset → all available; else int > 0 |
 | `config_search_path`       | `ASSAY_CONFIG_SEARCH_PATH`       | unset |
 | `suite_config_search_path` | `ASSAY_SUITE_CONFIG_SEARCH_PATH` | unset → built-in suite dir only; `os.pathsep`-separated list, searched recursively for suite selection |

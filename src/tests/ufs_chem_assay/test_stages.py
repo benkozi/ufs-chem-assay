@@ -199,6 +199,8 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         assert line in text, line
     for absent in (
         "ASSAY_BASELINE_ROOT_DIR",
+        "ASSAY_BASELINE_ATOL",  # null in the template: the suite's entries apply
+        "ASSAY_BASELINE_RTOL",
         "UV_PYTHON",
         "UV_OFFLINE",
         "ASSAY_LAUNCHER",
@@ -359,6 +361,20 @@ def test_harness_stage_renders_the_publish_flags(tmp_path: Path) -> None:
     assert "export ASSAY_BASELINE_STORE=s3://other/prefix" in text
     assert "export ASSAY_BASELINE_ROOT_DIR=/scratch/baselines" in text
     assert "--combo-clean-root --publish-baselines --no-suite-update" in text
+
+
+def test_harness_stage_exports_the_tolerance_overrides(tmp_path: Path) -> None:
+    config = RunConfig.from_yaml(
+        run_config_file(
+            tmp_path,
+            overrides={"baselines.atol": 1e-24, "baselines.rtol": 1e-15},
+            root_dir=_URSA_ROOT,
+        )
+    )
+    text = render_stage(Stage.HARNESS, config, _CECE).text
+    assert "export ASSAY_BASELINE_ATOL=1e-24" in text
+    assert "export ASSAY_BASELINE_RTOL=1e-15" in text
+    assert "ASSAY_BASELINE_RTOL" in render_stage(Stage.DATA, config, _CECE).text
 
 
 def test_env_value_renders_an_enum_by_its_value() -> None:

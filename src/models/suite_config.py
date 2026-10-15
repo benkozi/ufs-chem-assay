@@ -174,7 +174,16 @@ class BaselineComparison(StrictModel):
     atol: float = Field(
         0.0,
         ge=0,
-        description="0 = bit-for-bit data comparison; > 0 = absolute tolerance (no scaling)",
+        description="Absolute data tolerance; with rtol 0 too, the comparison is bit-for-bit",
+    )
+    rtol: float = Field(
+        0.0,
+        ge=0,
+        description=(
+            "Relative data tolerance, scaled by the baseline's magnitude: an element "
+            "passes when |real - baseline| <= atol + rtol * |baseline| (numpy "
+            "style); ~2.2e-16 is one float64 ULP"
+        ),
     )
     plot: bool = Field(
         True,

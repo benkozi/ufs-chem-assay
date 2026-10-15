@@ -735,8 +735,8 @@ def test_fetch_exit_code_covers_failed_baselines(
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(["fetch", "--suite-config=one-suite.yaml"])
     assert code == 1
-    messages = [r.getMessage() for r in caplog.records]
-    assert any("baseline summary: 1 local, 1 failed" in m for m in messages)
+    # ensure_baselines logs the states itself (grouped); fetch adds nothing.
+    assert not [r for r in caplog.records if "baseline" in r.getMessage()]
 
 
 # ── the remaining error branches ─────────────────────────────────────────────

@@ -7,6 +7,7 @@ combos.csv, test-report.csv, one directory per combination."""
 from __future__ import annotations
 
 import hashlib
+import logging
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -31,6 +32,7 @@ from baselines import (
     rewrite_suite_ulid,
 )
 from comparison import resolve_baseline_comparisons
+from identity import HARNESS_NAME
 from platforms import Platform, Runtime
 from s3_sync import S3SyncConfig, S3SyncResult
 from tests.ufs_chem_assay.baseline_runs import (
@@ -672,7 +674,7 @@ def test_missing_in_the_store_and_sync_failures_are_recorded(
     mocker.patch("baselines.stage.sync", side_effect=fake)
     results = ensure_baselines([run.suite], _STORE, root)
     assert [r.state for r in results] == ["failed"] * 3
-    assert "not in the store" in results[0].detail
+    assert results[0].detail == f"not in the store {_STORE} (nothing downloaded)"
     assert "AccessDenied" in results[1].detail
     assert not any((root / u).exists() for u in ulids)
     assert not (root / ".staging").exists()
@@ -709,6 +711,40 @@ def test_unreachable_store_fails_every_absent_baseline_naming_fetch(
     sync.assert_not_called()
 
 
+def test_states_are_logged_once_grouped_by_state_and_reason(
+    run: Run, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """One line per (state, reason) naming every ULID in it — not one line
+    per baseline (a suite with many baselines would flood the session start)
+    — and a reason never repeats the ULID the record already carries."""
+    ulids = _ulids(run)
+    store = _store_dir_with(tmp_path, ulids[1:])
+    root = tmp_path / "root"
+    (root / ulids[0]).mkdir(parents=True)
+    with caplog.at_level("INFO", logger=f"{HARNESS_NAME}.baselines"):
+        results = ensure_baselines([run.suite], str(store), root)
+    assert [r.state for r in results] == ["local", "synced", "synced"]
+    messages = [r.getMessage() for r in caplog.records]
+    assert messages == [
+        f"1 baseline local ({ulids[0]}): present",
+        f"2 baselines synced ({ulids[1]}, {ulids[2]}): from {store}",
+    ]
+    assert all(r.levelno == logging.INFO for r in caplog.records)
+    caplog.clear()
+    with caplog.at_level("INFO", logger=f"{HARNESS_NAME}.baselines"):
+        results = ensure_baselines([run.suite], _STORE, None)
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert (
+        errors[0]
+        .getMessage()
+        .startswith(
+            f"3 baselines failed ({', '.join(ulids)}): absent and ASSAY_BASELINE_ROOT_DIR"
+        )
+    )
+    assert not any(ulid in r.detail for r in results for ulid in ulids)
+
+
 def test_dry_run_classifies_without_the_network(
     run: Run, tmp_path: Path, mocker: MockerFixture
 ) -> None:
@@ -733,7 +769,7 @@ def test_directory_store_baselines_are_copied(
     sync = mocker.patch("baselines.stage.sync")
     results = ensure_baselines([run.suite], str(store), root)
     assert [r.state for r in results] == ["synced", "synced", "failed"]
-    assert "not in the store" in results[2].detail
+    assert results[2].detail == f"not in the store {store}"
     for ulid in ulids[:2]:
         assert (root / ulid / "plots-overview").is_dir()
         assert (root / ulid / CONVENTIONS.manifest).is_file()

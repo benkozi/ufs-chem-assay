@@ -51,12 +51,13 @@ def pair_dirs(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def _compare(
-    realization: Path, baseline: Path, atol: float = 0.0
+    realization: Path, baseline: Path, atol: float = 0.0, rtol: float = 0.0
 ) -> BaselineComparisonResult:
     return compare_with_baseline(
         realization,
         baseline,
         atol=atol,
+        rtol=rtol,
         run_id="01JTESTRUN",
         application="cece",
         suite="simple-maccity",
@@ -107,6 +108,78 @@ def test_perturbed_value_respects_absolute_tolerance(
     result = _compare(realization, baseline, atol=0.0)
     (variable,) = [v for f in result.files for v in f.variables]
     assert variable.max_abs_diff == pytest.approx(1e-6, rel=1e-3)
+
+
+def _one_variable(result: BaselineComparisonResult) -> VariableComparison:
+    (variable,) = [v for f in result.files for v in f.variables]
+    return variable
+
+
+def test_one_ulp_difference_passes_under_a_relative_tolerance(
+    pair_dirs: tuple[Path, Path],
+) -> None:
+    """The cross-machine case: a flux of ~5e-9 one float64 ULP apart. No
+    absolute tolerance fits that magnitude generally; a relative one does."""
+    realization, baseline = pair_dirs
+    values = _values() * 5e-9
+    perturbed = values.copy()
+    perturbed[1, 2, 3] = np.nextafter(values[1, 2, 3], np.inf)
+    _write_nc(realization / "cece_a.nc", perturbed)
+    _write_nc(baseline / "cece_a.nc", values)
+
+    assert not _compare(realization, baseline).passed  # bit-for-bit
+    assert _compare(realization, baseline, rtol=1e-15).passed
+    assert not _compare(realization, baseline, rtol=1e-17).passed  # under one ULP
+    assert _one_variable(_compare(realization, baseline, rtol=1e-15)).n_mismatched == 0
+    assert _one_variable(_compare(realization, baseline, rtol=1e-17)).n_mismatched == 1
+
+
+def test_tolerances_add_numpy_style(pair_dirs: tuple[Path, Path]) -> None:
+    """|real - base| <= atol + rtol * |base|: a difference neither
+    tolerance covers alone passes under their sum."""
+    realization, baseline = pair_dirs
+    values = np.ones((2, 3, 4))
+    perturbed = values.copy()
+    perturbed[0, 0, 0] += 1.5e-6
+    _write_nc(realization / "cece_a.nc", perturbed)
+    _write_nc(baseline / "cece_a.nc", values)
+
+    assert not _compare(realization, baseline, atol=1e-6).passed
+    assert not _compare(realization, baseline, rtol=1e-6).passed
+    assert _compare(realization, baseline, atol=1e-6, rtol=1e-6).passed
+
+
+def test_resolve_tolerances_prefers_the_override_and_keeps_zero() -> None:
+    from applications.cece.suite import CeceBaselineComparison
+    from comparison import resolve_tolerances
+
+    entry = CeceBaselineComparison.model_validate(
+        {
+            "sweep_selector": {
+                "cece_data": {"streams": [{"name": "MACCITY", "mapalgo": "bilinear"}]}
+            },
+            "ulid": "01JX",
+            "atol": 1e-9,
+            "rtol": 1e-15,
+        }
+    )
+    assert resolve_tolerances(entry, atol=None, rtol=None) == (1e-9, 1e-15)
+    assert resolve_tolerances(entry, atol=0.0, rtol=None) == (0.0, 1e-15)
+    assert resolve_tolerances(entry, atol=None, rtol=1e-12) == (1e-9, 1e-12)
+
+
+def test_rtol_is_recorded_in_the_result_and_the_csv(
+    pair_dirs: tuple[Path, Path], tmp_path: Path
+) -> None:
+    realization, baseline = pair_dirs
+    values = _values()
+    _write_nc(realization / "cece_a.nc", values)
+    _write_nc(baseline / "cece_a.nc", values)
+    result = _compare(realization, baseline, atol=1e-9, rtol=1e-15)
+    assert (result.atol, result.rtol) == (1e-9, 1e-15)
+    frame = write_comparison_csv(result, tmp_path / "c.csv")
+    assert list(frame.columns)[6:8] == ["atol", "rtol"]
+    assert set(frame["rtol"]) == {1e-15}
 
 
 def test_nan_position_mismatch_fails_even_under_tolerance(

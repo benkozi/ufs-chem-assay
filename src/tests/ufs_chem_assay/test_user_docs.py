@@ -98,6 +98,9 @@ def test_readme_documents_the_new_surfaces() -> None:
         "ASSAY_BASELINE_STORE",
         "baseline.yaml",
         "vulture",
+        "rtol",
+        "--baseline-rtol",
+        "ASSAY_BASELINE_RTOL",
     ):
         assert needle in text, needle
     assert "buid-test-tweaks" not in text

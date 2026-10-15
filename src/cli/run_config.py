@@ -42,6 +42,16 @@ class BaselinesSection(StrictModel):
             "(append-only): an s3://bucket/prefix or a local directory"
         ),
     )
+    atol: float | None = Field(
+        default=None,
+        ge=0,
+        description="ASSAY_BASELINE_ATOL: absolute tolerance over every entry; null = the entries' own",
+    )
+    rtol: float | None = Field(
+        default=None,
+        ge=0,
+        description="ASSAY_BASELINE_RTOL: relative tolerance (x |baseline|) over every entry; null = the entries' own",
+    )
 
 
 class HarnessSection(StrictModel):

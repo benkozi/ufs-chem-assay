@@ -142,6 +142,28 @@ def test_runtime_from_legacy_env(clean_env: pytest.MonkeyPatch) -> None:
     assert Settings(platform=Platform.LOCAL).runtime is Runtime.NATIVE
 
 
+# ── baseline tolerance overrides ──────────────────────────────────────────────
+
+
+def test_baseline_tolerance_overrides_default_to_none_and_read_from_env(
+    clean_env: pytest.MonkeyPatch,
+) -> None:
+    assert (Settings().baseline_atol, Settings().baseline_rtol) == (None, None)
+    clean_env.setenv(f"{ENV_PREFIX}BASELINE_ATOL", "1e-24")
+    clean_env.setenv(f"{ENV_PREFIX}BASELINE_RTOL", "1e-12")
+    assert (Settings().baseline_atol, Settings().baseline_rtol) == (1e-24, 1e-12)
+    assert (
+        Settings(baseline_rtol=0.0).baseline_rtol == 0.0
+    )  # 0 = bit-for-bit, not unset
+
+
+def test_baseline_tolerance_overrides_reject_negatives() -> None:
+    with pytest.raises(ValidationError, match="baseline_atol"):
+        Settings(baseline_atol=-1e-15)
+    with pytest.raises(ValidationError, match="baseline_rtol"):
+        Settings(baseline_rtol=-1e-15)
+
+
 # ── baseline_store ────────────────────────────────────────────────────────────
 
 
