@@ -85,8 +85,10 @@ def _build(config: RunConfig, section: CeceRunSection) -> list[str]:
         # CECE's own container build entrypoint owns configure + build in
         # cece/cece-dev; nothing to reinvent locally.
         return [
-            f"python3 {q(clone / 'scripts/build-and-test-container.py')} --no-test "
-            f"{targets} --jobs {section.build_jobs}"
+            (
+                f"python3 {q(clone / 'scripts/build-and-test-container.py')} --no-test "
+                f"{targets} --jobs {section.build_jobs}"
+            )
         ]
     build = clone / "build"
     log = build / "configure.log"

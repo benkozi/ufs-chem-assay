@@ -520,7 +520,9 @@ def test_check_reachable_raises_a_clear_error_without_network(
         "s3_sync.socket.create_connection",
         side_effect=OSError("[Errno 8] nodename nor servname provided"),
     )
-    with pytest.raises(ConnectionError, match="ufs-chem.s3.amazonaws.com.*no network"):
+    with pytest.raises(
+        ConnectionError, match=r"ufs-chem\.s3\.amazonaws\.com.*no network"
+    ):
         check_reachable("s3://ufs-chem/baselines")
 
 

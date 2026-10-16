@@ -809,7 +809,16 @@ incl. `RUF100` so a `noqa` that suppresses nothing is itself a finding,
 `runner.py` are the two documented exceptions — `DTZ` aware datetimes,
 `PT` pytest style, and `ARG` unused arguments — side-effect fixtures are
 declared with `pytest.mark.usefixtures`, unused interface parameters are
-`_`-prefixed, never `noqa`), ruff format, a whole-`src/` **`mypy --strict`**
+`_`-prefixed, never `noqa`; since 2026-10-15 the linter is **ruff 0.17**
+— `ruff>=0.17,<0.18`, the 2026 formatter style and ruff's expanded default
+rule set — with two configured exceptions, `BLE001` in `plotting.py` and
+`tests/conftest.py`, deliberate boundaries that swallow any failure into
+one log line, and `TRY004` project-wide, since malformed input is a
+`ValueError` the CLI turns into a usage error; see
+`design/fix/20261015-1738-ruff-017-defaults/20261015-1738-ruff-017-defaults.md`),
+ruff format (`[format] exclude` keeps it out of `design/` — ruff formats
+Markdown code blocks, and records are not maintained code), a whole-`src/`
+**`mypy --strict`**
 pass (`disallow_untyped_calls` off: dask, xarray's dask arrays, and
 netCDF4 are untyped at the call sites the harness needs), **vulture** (dead
 code, 2026-10-08; `[tool.vulture]` ignores framework-bound names and

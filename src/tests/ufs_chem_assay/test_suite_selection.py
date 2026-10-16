@@ -27,6 +27,7 @@ def _run_pytest(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
             "-p",
             "no:cacheprovider",
         ],
+        check=False,
         cwd=cwd,
         env=env,
         capture_output=True,

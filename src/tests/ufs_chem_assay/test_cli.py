@@ -200,6 +200,7 @@ def test_python_m_cli_entrypoint(tmp_path: Path) -> None:
             f"--config-file={_config(tmp_path)}",
             "--dry-run",
         ],
+        check=False,
         cwd=tmp_path,
         capture_output=True,
         text=True,

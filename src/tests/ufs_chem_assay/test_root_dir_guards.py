@@ -33,6 +33,7 @@ def _run_pytest(
             "-p",
             "no:cacheprovider",
         ],
+        check=False,
         cwd=cwd,
         env=env,
         capture_output=True,

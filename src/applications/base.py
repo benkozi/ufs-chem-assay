@@ -74,6 +74,7 @@ class ApplicationSettings(BaseSettings):
         try:
             completed = subprocess.run(
                 ["git", "-C", str(self.root_dir), "rev-parse", "HEAD"],
+                check=False,
                 capture_output=True,
                 text=True,
                 timeout=10,

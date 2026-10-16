@@ -42,6 +42,7 @@ def harness_commit(root: Path = HARNESS_ROOT) -> str | None:
     try:
         head = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=False,
             capture_output=True,
             text=True,
             timeout=10,
@@ -55,6 +56,7 @@ def harness_commit(root: Path = HARNESS_ROOT) -> str | None:
             return None
         status = subprocess.run(
             ["git", "-C", str(root), "status", "--porcelain"],
+            check=False,
             capture_output=True,
             text=True,
             timeout=10,

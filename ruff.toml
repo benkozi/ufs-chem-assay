@@ -4,7 +4,10 @@
 target-version = "py311"
 
 [lint]
-# Beyond the defaults (E4/E7/E9/F):
+# Beyond ruff's default rule set (the expanded set since ruff 0.16 --
+# https://docs.astral.sh/ruff/default-rules/ -- which already covers, among
+# others, PLW1510 explicit subprocess `check=`, RUF043 raw regexes in
+# pytest.raises, ISC004, BLE001, EXE001):
 #   I    import sorting
 #   B    bugbear: likely bugs and design traps
 #   UP   pyupgrade: syntax the target version makes obsolete
@@ -15,6 +18,11 @@ target-version = "py311"
 #   PT   pytest style: raises with match, fixtures and parametrize used right
 #   ARG  unused function/method/lambda arguments
 extend-select = ["I", "B", "UP", "SIM", "RUF", "T20", "DTZ", "PT", "ARG"]
+# TRY004 wants TypeError from an isinstance check; the harness raises
+# ValueError for malformed user input (a run config whose top level is not
+# a mapping, an override whose parent is not a mapping), which cli/main.py
+# turns into a logged usage error -- TypeError would escape as a traceback.
+ignore = ["TRY004"]
 
 [lint.per-file-ignores]
 # Stdlib-only scripts that run on the bare CI runner: print is their output.
@@ -22,7 +30,20 @@ extend-select = ["I", "B", "UP", "SIM", "RUF", "T20", "DTZ", "PT", "ARG"]
 # The captured driver output is re-emitted through pytest's capture model
 # (live with -s, in failure reports otherwise) on purpose: not a log line.
 "src/runner.py" = ["T20"]
+# Deliberate boundaries that swallow any failure into one log line: cartopy's
+# coastline/border decoration (an offline machine still gets a data-only
+# map), and the session-end baseline publication (the hook must not fail
+# the session; the error names the manual command).
+"src/plotting.py" = ["BLE001"]
+"src/tests/conftest.py" = ["BLE001"]
 
 [lint.flake8-unused-arguments]
 # `**kwargs` in a mock's side_effect lambda is the signature, not a value.
 ignore-variadic-names = true
+
+[format]
+# ruff >= 0.16 formats Python code blocks inside Markdown. design/ holds
+# records, not maintained code (codespell, yamlfix/yamllint, and the
+# whitespace hooks skip it for the same reason); README and docs/ keep it.
+# The relative glob: a bare "design" matches nothing here (verified, 0.17.0).
+exclude = ["design/**"]
