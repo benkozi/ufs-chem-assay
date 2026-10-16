@@ -10,9 +10,8 @@ from pathlib import Path
 
 from pydantic import Field
 
-from applications.base import ApplicationRunSection
-from cli.run_config import RunConfig
-from cli.stages import LMOD_INIT, Stage, q
+from applications.base import ApplicationRunSection, RunConfigView, Stage
+from cli.stages import LMOD_INIT, q
 from platforms import Runtime
 
 
@@ -80,7 +79,7 @@ def _source(checkout: Path, section: CeceRunSection) -> list[str]:
     return lines
 
 
-def _build(config: RunConfig, checkout: Path, section: CeceRunSection) -> list[str]:
+def _build(config: RunConfigView, checkout: Path, section: CeceRunSection) -> list[str]:
     clone = checkout
     targets = " ".join(f"--target {q(target)}" for target in section.targets)
     if config.runtime is Runtime.DOCKER:
@@ -114,7 +113,7 @@ def _build(config: RunConfig, checkout: Path, section: CeceRunSection) -> list[s
 
 
 def stage_lines(
-    stage: Stage, config: RunConfig, section: ApplicationRunSection, checkout: Path
+    stage: Stage, config: RunConfigView, section: ApplicationRunSection, checkout: Path
 ) -> list[str]:
     """The adapter passes its own checkout (config.checkout_dir(self)): this
     module never names the adapter, so the registry is not needed here."""

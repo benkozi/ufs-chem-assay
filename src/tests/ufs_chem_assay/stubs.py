@@ -13,10 +13,10 @@ from applications.base import (
     ApplicationRunSection,
     ApplicationSettings,
     DriverConfig,
+    Stage,
     SweepBase,
     SweepSelectorBase,
 )
-from cli.stages import Stage
 from combos import Combo, Dimension, ParameterRow
 from models.suite_config import SuiteConfig
 

@@ -7,26 +7,52 @@ methods exists because the shared code used to contain application-specific
 logic at that point; the shared modules (enumeration, session, runtimes,
 stats, plots, comparison, reporting) import only this module, never an
 adapter. Adapters import the shared modules freely, so this module imports
-them for typing only.
+them for typing only — and never a `cli` module: the stage enum and the
+view of the run config that an adapter may read are declared here, so the
+`cli` package depends on this module and not the other way round.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from enum import StrEnum
+from enum import StrEnum, unique
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, ClassVar, Self
+from typing import TYPE_CHECKING, ClassVar, Protocol, Self
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from models.base import StrictModel
+from platforms import Runtime
 
 if TYPE_CHECKING:
-    from cli.run_config import RunConfig
-    from cli.stages import Stage
     from combos import Combo, Dimension, ParameterRow
     from models.suite_config import SuiteConfig
+
+
+@unique
+class Stage(StrEnum):
+    """The stages of `ufs-chem-assay run`, in execution order. Declared
+    here rather than in cli/stages.py because the adapter interface
+    (stage_lines) names it and this module imports nothing from cli."""
+
+    SOURCE = "source"  # clone / update the application checkout
+    BUILD = "build"  # configure + build the driver
+    DATA = "data"  # input data (the application's) + cartopy cache
+    HARNESS = "harness"  # the pytest session, on this node; driver calls per runtime
+
+
+class RunConfigView(Protocol):
+    """What an adapter may read of the run config (cli/run_config.py's
+    RunConfig satisfies it): the effective runtime and its own checkout."""
+
+    @property
+    def runtime(self) -> Runtime:
+        """The effective runtime: the harness override, else the platform's."""
+
+    def checkout_dir(self, app: Application) -> Path:
+        """The application's checkout: its section's clone_dir, else
+        <root_dir>/<the adapter's checkout_dirname>."""
 
 
 class ApplicationSettings(BaseSettings):
@@ -264,7 +290,7 @@ class Application(ABC):
 
     @abstractmethod
     def stage_lines(
-        self, stage: Stage, config: RunConfig, section: ApplicationRunSection
+        self, stage: Stage, config: RunConfigView, section: ApplicationRunSection
     ) -> list[str]:
         """The shell lines of the source, build, or data stage for this
         application (the harness stage is shared)."""

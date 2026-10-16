@@ -130,9 +130,9 @@ def test_base_config_fingerprint_dumps_the_model(tmp_path: Path) -> None:
 
 
 def test_cece_stage_lines_refuse_the_shared_stages() -> None:
+    from applications.base import Stage
     from applications.registry import get_application
     from cli.run_config import RunConfig
-    from cli.stages import Stage
     from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR
 
     config = RunConfig.from_yaml(

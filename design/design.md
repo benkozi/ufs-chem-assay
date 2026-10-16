@@ -887,7 +887,8 @@ All code under `src/`; the project is `uv`-managed with its own
   src/
     applications/
       base.py             # Application ABC (incl. data_dirname, write_config), ApplicationSettings,
-                          #   DriverConfig, SweepBase, SweepSelectorBase, ApplicationRunSection
+                          #   DriverConfig, SweepBase, SweepSelectorBase, ApplicationRunSection,
+                          #   Stage (the run's stages), RunConfigView (what an adapter reads)
       registry.py         # REGISTRY (name -> adapter), get_application, load_suite
       cece/
         application.py    # CeceApplication: the wiring, registered by name
@@ -945,16 +946,18 @@ All code under `src/`; the project is `uv`-managed with its own
 
 Import direction (2026-10-16): the shared modules import `applications/base.py`
 and never an adapter; the adapters import the shared modules freely; the
-registry imports the adapters. So `cli/run_config.py` — which every adapter
-imports through `cli/stages.py` — never imports the registry: `RunConfig.from_yaml`
-takes the registry's `get_application` as `resolve_application` (passed as
-pydantic validation context to the `applications:` dispatch) and
-`checkout_dir` takes the adapter, not its name. `test_import_graph.py` loads a
-run config in a fresh interpreter and asserts no registry or adapter module
-was imported; `base.py`'s `if TYPE_CHECKING:` imports of the shared types are
-the one import-direction exception, unevaluated at runtime (CodeQL reports
-them as cycles; dismissed as false positives — see
-`design/fix/20261016-1547-codeql-dependabot-alerts/20261016-1547-codeql-dependabot-alerts.md`).
+registry imports the adapters. Two rules follow, each guarded by a
+subprocess test in `test_import_graph.py`. `base.py` imports nothing from
+`cli`: the `Stage` enum and the `RunConfigView` protocol (the `runtime` and
+`checkout_dir` an adapter may read of the run config) are declared in
+`base.py`, and `cli/stages.py`, `cli/main.py` and the adapters import them
+from there; `base.py`'s only typing-time imports are `combos` and
+`models/suite_config`, under `if TYPE_CHECKING:`. And `cli/run_config.py` —
+which every adapter imports through `cli/stages.py` — never imports the
+registry: `RunConfig.from_yaml` takes the registry's `get_application` as
+`resolve_application` (passed as pydantic validation context to the
+`applications:` dispatch) and `checkout_dir` takes the adapter, not its name
+(see `design/fix/20261016-1547-codeql-dependabot-alerts/20261016-1547-codeql-dependabot-alerts.md`).
 
 Dependencies: `pytest`, `pytest-mock`, `pydantic>=2`, `pydantic-settings`,
 `python-ulid`, `pyyaml`, the analysis stack (`pandas`, `xarray`, `netcdf4`,
@@ -1082,12 +1085,12 @@ mechanics:
   queries, on every PR, every push to `develop`/`main`, and weekly;
   findings under Security > Code scanning, PR runs annotate the diff. Its
   own job-level `security-events: write`; gated on the bump-commit marker
-  like `release-psr`. Free on a public repository; no image, no S3. Two
-  alert classes are standing false positives, dismissed in the UI with
-  their reason rather than suppressed in code or config: the Jinja2
-  `autoescape` finding on `runner.py` (it renders a bash batch script) and
-  `py/unsafe-cyclic-import` on `applications/base.py`'s `TYPE_CHECKING`
-  imports (see
+  like `release-psr`. Free on a public repository; no image, no S3. One
+  alert is a standing false positive, dismissed in the UI with its reason
+  rather than suppressed in code or config: the Jinja2 `autoescape`
+  finding on `runner.py` (it renders a bash batch script). The
+  `py/unsafe-cyclic-import` findings were removed structurally (the
+  import-direction rules under Code layout; see
   `design/fix/20261016-1547-codeql-dependabot-alerts/20261016-1547-codeql-dependabot-alerts.md`).
 - **Releases are automatic** (full design in
   `design/feat/20261006-1250-psr-ci/20261006-1250-psr-ci.md`): the `release-psr`

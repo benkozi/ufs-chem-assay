@@ -1,9 +1,13 @@
-"""The import rule that keeps `cli.*` <- `applications.cece.*` one-directional:
-`cli.run_config` never imports the application registry (the registry imports
-the adapters, which import the `cli` modules). Loading a run config and
-resolving an application's checkout with an injected adapter must not pull
-the registry or any adapter into the interpreter. Checked in a subprocess, so
-nothing another test imported can mask it."""
+"""The import rules that keep the layers one-directional, each checked in a
+subprocess so nothing another test imported can mask it:
+
+- `applications.base` imports no `cli` module (the stage enum and the run
+  config view an adapter reads are declared in base, and the `cli` modules
+  import base);
+- `cli.run_config` never imports the application registry (the registry
+  imports the adapters, which import the `cli` modules): loading a run config
+  and resolving a checkout with an injected adapter pulls in neither.
+"""
 
 import json
 import subprocess
@@ -40,6 +44,24 @@ def test_run_config_never_loads_the_registry(tmp_path: Path) -> None:
     )
     result = subprocess.run(
         [sys.executable, "-c", _PROBE, str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=_SRC,
+        env={"PYTHONPATH": str(_SRC), "PATH": ""},
+    )
+    assert json.loads(result.stdout) == []
+
+
+def test_base_imports_nothing_from_cli() -> None:
+    probe = (
+        "import json, sys\n"
+        "import applications.base\n"
+        "print(json.dumps(sorted(m for m in sys.modules "
+        "if m == 'cli' or m.startswith(('cli.', 'applications.registry', 'applications.cece')))))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
         check=True,
         capture_output=True,
         text=True,

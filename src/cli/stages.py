@@ -15,12 +15,17 @@ suites — with an adapter hook for application-specific data lines.
 from __future__ import annotations
 
 import shlex
-from enum import StrEnum, unique
+from enum import StrEnum
 from pathlib import PurePosixPath
 
 from pydantic import ConfigDict, Field
 
-from applications.base import Application, ApplicationRunSection, ApplicationSettings
+from applications.base import (
+    Application,
+    ApplicationRunSection,
+    ApplicationSettings,
+    Stage,
+)
 from cli.run_config import HARNESS_ROOT, RunConfig, search_path_value
 from models.base import StrictModel
 from platforms import Runtime
@@ -45,16 +50,6 @@ SETTINGS_NOT_MIRRORED = frozenset(
         "job_env",  # harness.env under the slurm runtime
     }
 )
-
-
-@unique
-class Stage(StrEnum):
-    """The stages of a run, in execution order."""
-
-    SOURCE = "source"  # clone / update the application checkout
-    BUILD = "build"  # configure + build the driver
-    DATA = "data"  # input data (the application's) + cartopy cache
-    HARNESS = "harness"  # the pytest session, on this node; driver calls per runtime
 
 
 class ShellScript(StrictModel):

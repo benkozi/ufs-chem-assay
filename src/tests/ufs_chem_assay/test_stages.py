@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from applications.base import Application
+from applications.base import Application, Stage
 from applications.registry import REGISTRY, get_application
 from cli.run_config import HARNESS_ROOT, RunConfig
-from cli.stages import Stage, application_output_root, render_stage
+from cli.stages import application_output_root, render_stage
 from platforms import Platform
 from tests.ufs_chem_assay.run_configs import (
     TEMPLATES_DIR,
