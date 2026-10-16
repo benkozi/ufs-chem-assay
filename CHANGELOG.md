@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.1.0-rc.7 (2026-10-16)
+
+### Bug Fixes
+
+- **ci**: Add retry for psr pulls ([#29](https://github.com/benkozi/ufs-chem-assay/pull/29),
+  [`67c76e3`](https://github.com/benkozi/ufs-chem-assay/commit/67c76e37ec69f7ec6f75fdaede83fb8bb7587d97))
+
+
 ## v0.1.0-rc.6 (2026-10-16)
 
 ### Bug Fixes
