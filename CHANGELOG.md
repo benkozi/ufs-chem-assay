@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.1.0-rc.8 (2026-10-16)
+
+### Bug Fixes
+
+- Codeql and dependabot alerts ([#31](https://github.com/benkozi/ufs-chem-assay/pull/31),
+  [`90e364a`](https://github.com/benkozi/ufs-chem-assay/commit/90e364a996fbb55a1a6918eab878e703a4106c00))
+
+
 ## v0.1.0-rc.7 (2026-10-16)
 
 ### Bug Fixes
