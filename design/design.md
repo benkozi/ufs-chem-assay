@@ -1022,8 +1022,18 @@ mechanics:
   by CECE SHA and **skips the build step on an exact hit** — the driver is
   in the restored tree, and a hit used to recompile every CECE object
   because the fresh checkout's mtimes postdate the restored ones (2 min 41 s
-  of a 4-minute job); the save step is gated on the build succeeding so a
-  partial tree never lands under the exact key. The uv cache is keyed on
+  of a 4-minute job; the `cece-build-` prefix fallback for a new SHA still
+  does, it only spares configure and the FetchContent clones); the save
+  step is gated on the build succeeding so a partial tree never lands under
+  the exact key. Since 2026-10-16 the built tree is **re-owned to the
+  runner before the save** — the container builds as root and CECE's build
+  leaves pip's 0600 HTTP cache under `build/python`, which the runner's
+  `tar` could not read while `actions/cache/save` only warned: no cache was
+  saved from 2026-10-08 to 2026-10-16 and every run rebuilt the driver
+  (3 min 20 s) — and a verification step lists the key after saving and
+  goes red, non-fatally, when it is absent (job permission `actions: read`;
+  `design/fix/20261016-0813-integration-cache-save/20261016-0813-integration-cache-save.md`).
+  The uv cache is keyed on
   `uv.lock`. Inputs come from `ufs-chem-assay fetch`; baselines stay off
   there (the store is private and the job has no credentials — the
   download half and OIDC credentials are the follow-up). The CECE pin is
