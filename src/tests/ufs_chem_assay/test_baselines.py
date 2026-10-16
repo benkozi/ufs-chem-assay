@@ -227,7 +227,7 @@ def test_load_run_refuses_a_suite_edited_since_the_run(run: Run) -> None:
     )
     run.suite_path.write_text(text)
     edited = load_suite(run.suite_path)
-    with pytest.raises(ValueError, match="simple-maccity.*baseline_comparisons"):
+    with pytest.raises(ValueError, match=r"simple-maccity.*baseline_comparisons"):
         load_run(run.root, run.app, [(run.suite_path, edited)])
 
 
@@ -867,7 +867,7 @@ def test_load_run_refuses_a_combination_missing_from_combos_csv(run: Run) -> Non
     lines = csv.read_text().splitlines()
     first_id = run.combos[0].combo_id
     csv.write_text("\n".join(line for line in lines if first_id not in line) + "\n")
-    with pytest.raises(ValueError, match="not in combos.csv"):
+    with pytest.raises(ValueError, match=r"not in combos\.csv"):
         load_run(run.root, run.app, [(run.suite_path, run.suite)])
 
 

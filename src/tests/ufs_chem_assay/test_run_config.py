@@ -165,7 +165,8 @@ def test_templates_ship_without_a_root_and_derive_the_harness_parent() -> None:
     for name in ("ursa.yaml", "local.yaml"):
         # no top-level root_dir line (baselines.root_dir is a different key)
         assert (
-            re.search(r"^root_dir:", (TEMPLATES_DIR / name).read_text(), re.M) is None
+            re.search(r"^root_dir:", (TEMPLATES_DIR / name).read_text(), re.MULTILINE)
+            is None
         ), name
         config = RunConfig.from_yaml(TEMPLATES_DIR / name)
         assert config.root_dir == HARNESS_ROOT.parent
@@ -373,7 +374,7 @@ def test_baselines_store_defaults_and_publish_keys_default_off() -> None:
 
 def test_no_suite_update_requires_publish_baselines(tmp_path: Path) -> None:
     path = run_config_file(tmp_path, overrides={"harness.no_suite_update": True})
-    with pytest.raises(ValidationError, match="no_suite_update.*publish_baselines"):
+    with pytest.raises(ValidationError, match=r"no_suite_update.*publish_baselines"):
         RunConfig.from_yaml(path)
     path = run_config_file(
         tmp_path,

@@ -193,9 +193,11 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "export ASSAY_DASK_NWORKERS=2",
         f"export UV_CACHE_DIR={ursa.root_dir}/uv-cache",
         f"cd {HARNESS_ROOT}",
-        "uv run --no-sync pytest src/tests/test_driver_combos.py "
-        "--application=cece --suite-config=simple-maccity-suite.yaml "
-        "--combo-output-root=ufs-chem-assay-output --combo-clean-root",
+        (
+            "uv run --no-sync pytest src/tests/test_driver_combos.py "
+            "--application=cece --suite-config=simple-maccity-suite.yaml "
+            "--combo-output-root=ufs-chem-assay-output --combo-clean-root"
+        ),
     ):
         assert line in text, line
     for absent in (

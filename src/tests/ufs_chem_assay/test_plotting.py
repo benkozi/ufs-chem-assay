@@ -95,7 +95,7 @@ def test_render_spatial_plot_writes_png(
 def test_render_combo_plots_pngs_and_gif(
     combo_dirs: tuple[Path, np.ndarray, np.ndarray],
 ) -> None:
-    root, first, _ = combo_dirs
+    root, _, _ = combo_dirs
     combo_dir = root / "3f9a1c2b7d4e8a01"
     scales = {"co": VariableScale(variable="co", vmin=0.0, vmax=1.0)}
 

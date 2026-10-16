@@ -81,7 +81,7 @@ def test_merge_inputs_dedupes_identical_entries(cece_config_path: Path) -> None:
 def test_merge_inputs_rejects_a_dst_declared_two_ways(cece_config_path: Path) -> None:
     a = _suite("a", [_input()], cece_config_path)
     b = _suite("b", [_input(sha256=None)], cece_config_path)
-    with pytest.raises(ValueError, match="MACCity_4x5.nc"):
+    with pytest.raises(ValueError, match=r"MACCity_4x5\.nc"):
         merge_inputs([a, b])
     c = _suite("c", [_input(url="s3://elsewhere/MACCity_4x5.nc")], cece_config_path)
     with pytest.raises(ValueError, match="declared differently"):

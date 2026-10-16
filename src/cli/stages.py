@@ -205,8 +205,10 @@ def _data(
         *clean_python_env(section),
         *(f"export {key}={value}" for key, value in _exports(config, app, section)),
         f"cd {q(HARNESS_ROOT)}",
-        "uv run --no-sync ufs-chem-assay fetch "
-        f"--application={app.name} --suite-config={q(config.harness.suite_config)}",
+        (
+            "uv run --no-sync ufs-chem-assay fetch "
+            f"--application={app.name} --suite-config={q(config.harness.suite_config)}"
+        ),
     ]
     lines += app.stage_lines(Stage.DATA, config, section)
     if shared and config.data.warm_cartopy:

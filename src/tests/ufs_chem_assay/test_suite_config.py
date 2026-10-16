@@ -101,7 +101,7 @@ def test_missing_config_path_raises(tmp_path: Path) -> None:
     suite_file.write_text(
         f"name: broken-suite\nconfig_path: nope.yaml\ntimeout_s: 5\n{_SWEEP}"
     )
-    with pytest.raises(FileNotFoundError, match="nope.yaml"):
+    with pytest.raises(FileNotFoundError, match=r"nope\.yaml"):
         load_suite(suite_file)
 
 

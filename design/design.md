@@ -809,7 +809,16 @@ incl. `RUF100` so a `noqa` that suppresses nothing is itself a finding,
 `runner.py` are the two documented exceptions — `DTZ` aware datetimes,
 `PT` pytest style, and `ARG` unused arguments — side-effect fixtures are
 declared with `pytest.mark.usefixtures`, unused interface parameters are
-`_`-prefixed, never `noqa`), ruff format, a whole-`src/` **`mypy --strict`**
+`_`-prefixed, never `noqa`; since 2026-10-15 the linter is **ruff 0.17**
+— `ruff>=0.17,<0.18`, the 2026 formatter style and ruff's expanded default
+rule set — with two configured exceptions, `BLE001` in `plotting.py` and
+`tests/conftest.py`, deliberate boundaries that swallow any failure into
+one log line, and `TRY004` project-wide, since malformed input is a
+`ValueError` the CLI turns into a usage error; see
+`design/fix/20261015-1738-ruff-017-defaults/20261015-1738-ruff-017-defaults.md`),
+ruff format (`[format] exclude` keeps it out of `design/` — ruff formats
+Markdown code blocks, and records are not maintained code), a whole-`src/`
+**`mypy --strict`**
 pass (`disallow_untyped_calls` off: dask, xarray's dask arrays, and
 netCDF4 are untyped at the call sites the harness needs), **vulture** (dead
 code, 2026-10-08; `[tool.vulture]` ignores framework-bound names and
@@ -1013,13 +1022,28 @@ mechanics:
   by CECE SHA and **skips the build step on an exact hit** — the driver is
   in the restored tree, and a hit used to recompile every CECE object
   because the fresh checkout's mtimes postdate the restored ones (2 min 41 s
-  of a 4-minute job); the save step is gated on the build succeeding so a
-  partial tree never lands under the exact key. The uv cache is keyed on
+  of a 4-minute job; the `cece-build-` prefix fallback for a new SHA still
+  does, it only spares configure and the FetchContent clones); the save
+  step is gated on the build succeeding so a partial tree never lands under
+  the exact key. Since 2026-10-16 the built tree is **re-owned to the
+  runner before the save** — the container builds as root and CECE's build
+  leaves pip's 0600 HTTP cache under `build/python`, which the runner's
+  `tar` could not read while `actions/cache/save` only warned: no cache was
+  saved from 2026-10-08 to 2026-10-16 and every run rebuilt the driver
+  (3 min 20 s) — and a verification step lists the key after saving and
+  goes red, non-fatally, when it is absent (job permission `actions: read`;
+  `design/fix/20261016-0813-integration-cache-save/20261016-0813-integration-cache-save.md`).
+  The uv cache is keyed on
   `uv.lock`. Inputs come from `ufs-chem-assay fetch`; baselines stay off
   there (the store is private and the job has no credentials — the
   download half and OIDC credentials are the follow-up). The CECE pin is
   `ufs-community/CECE` at `develop` (ufs-community/CECE#154 merged
   2026-10-08).
+  The `release-verify` probe ref points at the PR's head commit on
+  `pull_request` events, not `github.sha` (2026-10-16: with the App's
+  installation tokens now in GitHub's stateless JWT format, a ref to the
+  synthetic test-merge commit is refused with 403; see
+  `design/fix/20261016-0936-release-verify-403/20261016-0936-release-verify-403.md`).
 - **Quality jobs** (2026-10-14): the `tests` job measures the harness
   suite's coverage of `src/` (`pytest-cov`; tests and the `python -m cli`
   shim omitted; `if TYPE_CHECKING`, `@abstractmethod`,
