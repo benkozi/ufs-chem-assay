@@ -1039,6 +1039,11 @@ mechanics:
   download half and OIDC credentials are the follow-up). The CECE pin is
   `ufs-community/CECE` at `develop` (ufs-community/CECE#154 merged
   2026-10-08).
+  The `release-verify` probe ref points at the PR's head commit on
+  `pull_request` events, not `github.sha` (2026-10-16: with the App's
+  installation tokens now in GitHub's stateless JWT format, a ref to the
+  synthetic test-merge commit is refused with 403; see
+  `design/fix/20261016-0936-release-verify-403/20261016-0936-release-verify-403.md`).
 - **Quality jobs** (2026-10-14): the `tests` job measures the harness
   suite's coverage of `src/` (`pytest-cov`; tests and the `python -m cli`
   shim omitted; `if TYPE_CHECKING`, `@abstractmethod`,
