@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.1.0-rc.6 (2026-10-16)
+
+### Bug Fixes
+
+- **deps**: Bump the python group across 1 directory with 13 updates
+  ([#26](https://github.com/benkozi/ufs-chem-assay/pull/26),
+  [`18d0a61`](https://github.com/benkozi/ufs-chem-assay/commit/18d0a61ba8471bb83dcf56ed5f3188102b0f535a))
+
+### Chores
+
+- **ci**: Bump the actions group with 2 updates
+  ([#25](https://github.com/benkozi/ufs-chem-assay/pull/25),
+  [`c796045`](https://github.com/benkozi/ufs-chem-assay/commit/c79604588050ba25337ab4cfc04a43b50a5d68db))
+
+### Continuous Integration
+
+- **fix**: Prevent integration cancellation
+  ([#27](https://github.com/benkozi/ufs-chem-assay/pull/27),
+  [`8bd414f`](https://github.com/benkozi/ufs-chem-assay/commit/8bd414fe6b6a07cd5a04b7a5a7dd1a9e73e530f1))
+
+
 ## v0.1.0-rc.5 (2026-10-15)
 
 ### Documentation
