@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from models.yaml import load_yaml
+from models.strict_yaml import load_yaml
 
 KEY_SEPARATOR = ":"
 

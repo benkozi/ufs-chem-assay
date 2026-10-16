@@ -375,7 +375,7 @@ hand-assembled dicts, string templates, or direct `yaml.dump` calls
 anywhere in the generator. This guarantees every config the driver
 receives has passed pydantic validation, and keeps serialization behavior
 (`exclude_none`, key ordering, the YAML 1.2 boolean handling in
-`models/yaml.py`, shared with command-line override parsing) in one place.
+`models/strict_yaml.py`, shared with command-line override parsing) in one place.
 If a combination needs a field the model doesn't have, the fix is to
 extend the config model — not to bypass it.
 
@@ -901,7 +901,7 @@ All code under `src/`; the project is `uv`-managed with its own
       base.py             # StrictModel: extra="forbid" base for all config models
       suite_config.py     # generic SuiteConfig, InputFile, Assertions, Analysis, Plotting,
                           #   BaselineComparison, RecordedInput, RunManifest
-      yaml.py             # the YAML-1.2-boolean loader (configs, override values)
+      strict_yaml.py      # the YAML-1.2-boolean loader (configs, override values)
     cli/                  # `ufs-chem-assay run`: run config model (applications map),
                           #   overrides, per-application stage scripts, bash execution;
                           #   `ufs-chem-assay fetch`: stage the selected suites' inputs;
@@ -942,6 +942,19 @@ All code under `src/`; the project is `uv`-managed with its own
       conftest.py         # options, session fixture (generate yamls), param fixture
       test_driver_combos.py               # integration tests (real docker)
 ```
+
+Import direction (2026-10-16): the shared modules import `applications/base.py`
+and never an adapter; the adapters import the shared modules freely; the
+registry imports the adapters. So `cli/run_config.py` — which every adapter
+imports through `cli/stages.py` — never imports the registry: `RunConfig.from_yaml`
+takes the registry's `get_application` as `resolve_application` (passed as
+pydantic validation context to the `applications:` dispatch) and
+`checkout_dir` takes the adapter, not its name. `test_import_graph.py` loads a
+run config in a fresh interpreter and asserts no registry or adapter module
+was imported; `base.py`'s `if TYPE_CHECKING:` imports of the shared types are
+the one import-direction exception, unevaluated at runtime (CodeQL reports
+them as cycles; dismissed as false positives — see
+`design/fix/20261016-1547-codeql-dependabot-alerts/20261016-1547-codeql-dependabot-alerts.md`).
 
 Dependencies: `pytest`, `pytest-mock`, `pydantic>=2`, `pydantic-settings`,
 `python-ulid`, `pyyaml`, the analysis stack (`pandas`, `xarray`, `netcdf4`,
@@ -1058,14 +1071,24 @@ mechanics:
   stale schema of `actions/create-github-app-token`, whose v3 input is
   `client-id`); `dependency-review.yaml` fails a PR whose dependency diff
   brings a known vulnerability of moderate severity or above;
-  `dependabot.yml` opens weekly grouped PRs for the action majors and the
-  uv lock, `chore`-prefixed so semantic-release ignores them.
+  `dependabot.yml` opens weekly grouped PRs for the actions and the
+  uv lock, `chore`-prefixed so semantic-release ignores them. Third-party
+  actions (`docker/*`, `astral-sh/setup-uv`, the PSR action) are pinned by
+  full commit hash with a `# vX.Y.Z` comment that Dependabot bumps with
+  the hash (2026-10-16, CodeQL `actions/unpinned-tag`); GitHub-owned
+  actions stay on major tags.
 - **`codeql.yaml`** (2026-10-14): CodeQL code scanning of the Python and
   of the workflows themselves (the `actions` language), `security-and-quality`
   queries, on every PR, every push to `develop`/`main`, and weekly;
   findings under Security > Code scanning, PR runs annotate the diff. Its
   own job-level `security-events: write`; gated on the bump-commit marker
-  like `release-psr`. Free on a public repository; no image, no S3.
+  like `release-psr`. Free on a public repository; no image, no S3. Two
+  alert classes are standing false positives, dismissed in the UI with
+  their reason rather than suppressed in code or config: the Jinja2
+  `autoescape` finding on `runner.py` (it renders a bash batch script) and
+  `py/unsafe-cyclic-import` on `applications/base.py`'s `TYPE_CHECKING`
+  imports (see
+  `design/fix/20261016-1547-codeql-dependabot-alerts/20261016-1547-codeql-dependabot-alerts.md`).
 - **Releases are automatic** (full design in
   `design/feat/20261006-1250-psr-ci/20261006-1250-psr-ci.md`): the `release-psr`
   job of `ci.yaml` runs on every push to `develop` (rc prereleases) or

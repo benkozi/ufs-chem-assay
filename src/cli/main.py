@@ -236,6 +236,7 @@ def _run(args: argparse.Namespace) -> int:
             platform=args.platform,
             root_dir=args.root_dir,
             overrides=args.override,
+            resolve_application=get_application,
         )
         applications = _selected_applications(config, args.application)
     except ValueError as exc:

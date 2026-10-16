@@ -117,7 +117,7 @@ def _exports(
     harness = config.harness
     prefix = app.env_prefix
     exports: list[tuple[str, str]] = [
-        (f"{prefix}ROOT_DIR", q(config.checkout_dir(app.name)))
+        (f"{prefix}ROOT_DIR", q(config.checkout_dir(app)))
     ]
     for field in ApplicationSettings.model_fields:
         if field == "root_dir":

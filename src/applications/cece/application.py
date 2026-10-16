@@ -85,4 +85,4 @@ class CeceApplication(Application):
         from cli.run_config import RunConfig
 
         assert isinstance(config, RunConfig), type(config)
-        return cli.stage_lines(stage, config, section)
+        return cli.stage_lines(stage, config, section, config.checkout_dir(self))

@@ -135,7 +135,9 @@ def test_cece_stage_lines_refuse_the_shared_stages() -> None:
     from cli.stages import Stage
     from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR
 
-    config = RunConfig.from_yaml(TEMPLATES_DIR / "local.yaml")
+    config = RunConfig.from_yaml(
+        TEMPLATES_DIR / "local.yaml", resolve_application=get_application
+    )
     with pytest.raises(ValueError, match="shared, not the adapter's"):
         get_application("cece").stage_lines(
             Stage.HARNESS, config, config.applications["cece"]

@@ -101,10 +101,12 @@ class DriverConfig(StrictModel, ABC):
 
     @classmethod
     @abstractmethod
-    def from_yaml(cls, path: Path) -> Self: ...
+    def from_yaml(cls, path: Path) -> Self:
+        """Parse and validate the driver's YAML at path."""
 
     @abstractmethod
-    def to_yaml(self, path: Path) -> None: ...
+    def to_yaml(self, path: Path) -> None:
+        """Write the validated config as the driver's YAML at path."""
 
 
 class SweepBase(StrictModel):

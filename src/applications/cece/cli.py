@@ -6,6 +6,8 @@ so CECE adds no data lines."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import Field
 
 from applications.base import ApplicationRunSection
@@ -34,7 +36,7 @@ def _as_cece(section: ApplicationRunSection) -> CeceRunSection:
     return section
 
 
-def _module_block(config: RunConfig, section: CeceRunSection) -> list[str]:
+def _module_block(checkout: Path, section: CeceRunSection) -> list[str]:
     """Load CECE's modulefile in this shell — only where compiled code runs
     in-process (the build stage). Non-interactive bash has no `module`
     function until the Lmod init is sourced; the guard keeps the script
@@ -43,14 +45,14 @@ def _module_block(config: RunConfig, section: CeceRunSection) -> list[str]:
     return [
         LMOD_INIT,
         "module purge",
-        f"module use {q(config.checkout_dir('cece'))}/modulefiles",
+        f"module use {q(checkout)}/modulefiles",
         f"module load {q(section.modulefile)}",
         "module list",
     ]
 
 
-def _source(config: RunConfig, section: CeceRunSection) -> list[str]:
-    clone = q(config.checkout_dir("cece"))
+def _source(checkout: Path, section: CeceRunSection) -> list[str]:
+    clone = q(checkout)
     ref = q(section.ref)
     lines = [
         f"if [ ! -d {clone}/.git ]; then",
@@ -78,8 +80,8 @@ def _source(config: RunConfig, section: CeceRunSection) -> list[str]:
     return lines
 
 
-def _build(config: RunConfig, section: CeceRunSection) -> list[str]:
-    clone = config.checkout_dir("cece")
+def _build(config: RunConfig, checkout: Path, section: CeceRunSection) -> list[str]:
+    clone = checkout
     targets = " ".join(f"--target {q(target)}" for target in section.targets)
     if config.runtime is Runtime.DOCKER:
         # CECE's own container build entrypoint owns configure + build in
@@ -92,7 +94,7 @@ def _build(config: RunConfig, section: CeceRunSection) -> list[str]:
         ]
     build = clone / "build"
     log = build / "configure.log"
-    modules = _module_block(config, section) if section.modulefile is not None else []
+    modules = _module_block(clone, section) if section.modulefile is not None else []
     configure = " ".join(
         [
             f"cmake -S {q(clone)} -B {q(build)}",
@@ -112,13 +114,15 @@ def _build(config: RunConfig, section: CeceRunSection) -> list[str]:
 
 
 def stage_lines(
-    stage: Stage, config: RunConfig, section: ApplicationRunSection
+    stage: Stage, config: RunConfig, section: ApplicationRunSection, checkout: Path
 ) -> list[str]:
+    """The adapter passes its own checkout (config.checkout_dir(self)): this
+    module never names the adapter, so the registry is not needed here."""
     cece = _as_cece(section)
     if stage is Stage.SOURCE:
-        return _source(config, cece)
+        return _source(checkout, cece)
     if stage is Stage.BUILD:
-        return _build(config, cece)
+        return _build(config, checkout, cece)
     if stage is Stage.DATA:
         # Nothing beyond the shared stage's fetch: CECE's inputs are declared
         # by its suites.

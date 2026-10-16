@@ -148,7 +148,7 @@ jobs:
       - name: Python Semantic Release (merge preview)
         if: env.PREVIEW == 'true'
         id: release-merge
-        uses: python-semantic-release/python-semantic-release@v10
+        uses: python-semantic-release/python-semantic-release@b700dbeb1f431a0fcc30a79f3f0869407fe07278  # v10.7.0
         with:
           github_token: ${{ steps.app-token.outputs.token || github.token }}
           commit: false
@@ -167,7 +167,7 @@ jobs:
       - name: Python Semantic Release (squash preview)
         if: env.PREVIEW == 'true' && inputs.pr_title != ''
         id: release-squash
-        uses: python-semantic-release/python-semantic-release@v10
+        uses: python-semantic-release/python-semantic-release@b700dbeb1f431a0fcc30a79f3f0869407fe07278  # v10.7.0
         with:
           github_token: ${{ steps.app-token.outputs.token || github.token }}
           commit: false
@@ -184,7 +184,7 @@ jobs:
         # The job's result is decided by "Release outcome" below: a failed
         # tag push right after a successful branch push is retried first.
         continue-on-error: true
-        uses: python-semantic-release/python-semantic-release@v10
+        uses: python-semantic-release/python-semantic-release@b700dbeb1f431a0fcc30a79f3f0869407fe07278  # v10.7.0
         with:
           github_token: ${{ steps.app-token.outputs.token || github.token }}
           commit: true

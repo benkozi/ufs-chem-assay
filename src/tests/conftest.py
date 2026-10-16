@@ -39,8 +39,6 @@ if TYPE_CHECKING:
 
 logger = get_logger("conftest")
 
-# <repo root>/src/tests/conftest.py -> <repo root>/src/tests/
-_TESTS_ROOT = Path(__file__).resolve().parent
 # Container-side mount point for the default (pytest tmp) output root, which
 # lives outside the application's checkout mount (docker runtime only).
 _CONTAINER_TMP_ROOT = PurePosixPath("/combo_runs")

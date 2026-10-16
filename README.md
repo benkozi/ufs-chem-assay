@@ -510,8 +510,10 @@ which fails the PR when a dependency change (the lock, an action) brings
 in a known vulnerability of moderate severity or above — it needs the
 repository's **Dependency graph** enabled (Settings → Code security), and
 reports that plainly until it is; Dependabot
-(`.github/dependabot.yml`) opens weekly grouped PRs for the pinned action
-majors and the uv lock. The `tests` job measures the harness
+(`.github/dependabot.yml`) opens weekly grouped PRs for the actions and
+the uv lock (third-party actions are pinned by commit hash with a
+`# vX.Y.Z` comment that Dependabot bumps along with the hash; GitHub-owned
+actions stay on major tags). The `tests` job measures the harness
 suite's coverage of `src/` (tests excluded) and **fails under 100%**
 (`[tool.coverage]` in `pyproject.toml`; every line is exercised or is one
 of the listed unreachable patterns), reports it in the job summary, and

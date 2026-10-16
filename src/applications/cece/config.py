@@ -9,7 +9,7 @@ from pydantic import Field, model_validator
 
 from applications.base import DriverConfig
 from models.base import StrictModel
-from models.yaml import StrictBoolLoader
+from models.strict_yaml import StrictBoolLoader
 
 # ── Enums ────────────────────────────────────────────────────────────────────
 
