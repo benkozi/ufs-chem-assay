@@ -181,6 +181,9 @@ jobs:
       - name: Python Semantic Release (production)
         if: env.PREVIEW != 'true'
         id: release-prod
+        # The job's result is decided by "Release outcome" below: a failed
+        # tag push right after a successful branch push is retried first.
+        continue-on-error: true
         uses: python-semantic-release/python-semantic-release@v10
         with:
           github_token: ${{ steps.app-token.outputs.token || github.token }}
@@ -188,6 +191,34 @@ jobs:
           tag: true
           push: true
           vcs_release: false
+      # GitHub can reject a tag pushed seconds after the commit it points at
+      # ("missing necessary objects"; 2026-10-16: v0.1.0-rc.6 — the bump
+      # commit landed on develop, the tag did not). PSR pushes branch then
+      # tag with no retry. Push the tag again, only when the bump commit is
+      # already on the remote; a failed branch push is left alone and fails
+      # below. See design/fix/20261016-1347-release-tag-push-retry/.
+      - name: Retry the tag push
+        id: retry-tag
+        if: env.PREVIEW != 'true' && steps.release-prod.outcome == 'failure' && steps.release-prod.outputs.tag != ''
+        env:
+          TAG: ${{ steps.release-prod.outputs.tag }}
+          BRANCH: ${{ inputs.target_branch || github.ref_name }}
+        run: |
+          local=$(git rev-parse "refs/tags/$TAG^{commit}")
+          remote=$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)
+          if [ "$local" != "$remote" ]; then
+            echo "::error::$TAG points at $local but origin/$BRANCH is at $remote: the branch push failed, not retrying"
+            exit 1
+          fi
+          for attempt in 1 2 3 4 5; do
+            sleep $((attempt * 5))
+            if git push origin "refs/tags/$TAG"; then
+              echo "pushed $TAG on attempt $attempt"
+              exit 0
+            fi
+          done
+          echo "::error::could not push $TAG after 5 attempts"
+          exit 1
       - name: Evaluate and report release
         id: eval
         if: always()
@@ -195,7 +226,7 @@ jobs:
           DRY_RUN: ${{ env.PREVIEW }}
           VERSION: ${{ steps.release-prod.outputs.version }}
           TAG: ${{ steps.release-prod.outputs.tag }}
-          RELEASED: ${{ steps.release-prod.outputs.released }}
+          RELEASED: ${{ steps.release-prod.outputs.released == 'true' || steps.retry-tag.outcome == 'success' }}
           VERSION_MERGE: ${{ steps.release-merge.outputs.version }}
           TAG_MERGE: ${{ steps.release-merge.outputs.tag }}
           RELEASED_MERGE: ${{ steps.release-merge.outputs.released }}
@@ -205,3 +236,8 @@ jobs:
           DIFF_MERGE_FILE: /tmp/merge_preview.diff
           DIFF_SQUASH_FILE: /tmp/squash_preview.diff
         run: python3 .github/workflows/scripts/report_release.py
+      - name: Release outcome
+        if: env.PREVIEW != 'true' && steps.release-prod.outcome == 'failure' && steps.retry-tag.outcome != 'success'
+        run: |-
+          echo "::error::python-semantic-release failed and the tag push could not be recovered; see the steps above"
+          exit 1
