@@ -283,7 +283,20 @@ def generate_report(
     lines.extend(["| Parameter | Value |", "|---|---|"])
     lines.extend(f"| {p} | `{v}` |" for p, v in single_rows)
     lines.append("")
-    lines.extend(describe_actions("", eff_released, eff_version, eff_tag, prerelease))
+    if not dry_run and eff_version and not eff_released:
+        # PSR sets a version only when a release is due: computed but not
+        # published means the commit/tag push failed (the bump may already be
+        # on the branch), not that nothing warranted a release.
+        lines.append("#### Actions on merge:")
+        lines.append(
+            f"- Release of `{eff_version}` (tag `{eff_tag}`) was computed but NOT "
+            "published: the commit/tag push failed — see the job log; the version "
+            "bump may already be on the branch."
+        )
+    else:
+        lines.extend(
+            describe_actions("", eff_released, eff_version, eff_tag, prerelease)
+        )
     diff_text = diff_merge or get_git_diff()
     if dry_run and diff_text:
         lines.extend(_diff_block("", diff_text))

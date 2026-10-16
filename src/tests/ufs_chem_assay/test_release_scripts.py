@@ -220,6 +220,22 @@ class TestGenerateReport:
         assert "Production" in report
         assert "Projected Repository Diff" not in report
 
+    def test_single_production_failed_push(self) -> None:
+        # A version was computed but the commit/tag push failed: say so, not
+        # "no release will be triggered" (the wording for nothing-to-release).
+        report = report_release.generate_report(
+            target="develop",
+            current_version="0.1.0-rc.5",
+            dry_run=False,
+            version="0.1.0-rc.6",
+            tag="v0.1.0-rc.6",
+            released=False,
+        )
+        assert "| Will Release? | `false` |" in report
+        assert "NOT published" in report
+        assert "`v0.1.0-rc.6`" in report
+        assert "No release will be triggered" not in report
+
 
 def _git(cwd: Path, *args: str) -> str:
     env = {
