@@ -75,12 +75,28 @@ jobs:
         with:
           client-id: ${{ secrets.SEMVER_APP_ID }}
           private-key: ${{ secrets.SEMVER_APP_PRIVATE_KEY }}
+      # Shape only, never the token: the stateless-token rollout (GitHub
+      # changelog 2026-05-15) changes ghs_ tokens from ~40 opaque characters
+      # to ~520-character JWTs with two dots.
+      - name: Describe the App token (length, dots, prefix)
+        if: steps.check.outputs.skip_verification != 'true'
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          dots=$(printf '%s' "$APP_TOKEN" | tr -cd '.' | wc -c | tr -d ' ')
+          echo "App token: ${#APP_TOKEN} characters, $dots dot(s), prefix ${APP_TOKEN:0:4}"
       - name: Verify repository write and ruleset bypass
         if: steps.check.outputs.skip_verification != 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
+          # The probe ref needs a commit the token can point a ref at; on
+          # pull_request events github.sha is GitHub's synthetic test-merge
+          # commit (refs/pull/<n>/merge only), so probe the PR's head commit
+          # instead (2026-10-16: the merge-commit probe began failing with
+          # 403 "Resource not accessible by integration"; see
+          # design/fix/20261016-0936-release-verify-403/).
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           RUN_ID: ${{ github.run_id }}
           APP_ID: ${{ secrets.SEMVER_APP_ID }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}

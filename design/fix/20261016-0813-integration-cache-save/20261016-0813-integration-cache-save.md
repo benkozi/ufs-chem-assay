@@ -129,6 +129,10 @@ None blocking.
 - The `jq` filter was tested locally against a two-entry list (prefix match `cece-build-abcdef` beside the exact key): 1 with the exact key present, 0 without.
 - Not verifiable locally: the save itself and the hit on the following run (Verification 1–2). What to look for on the first CI run after this lands is written there.
 
+**CI verification (2026-10-16, commit `e63d642` on PR #26, run 38914844029):** "Re-own the built tree for the cache save" and "Verify the build cache was saved" both green; the save step logs `Cache saved with key: cece-build-35f2bc41e067c291b8c6ba3bf6eefc0a84ea558c` with no `Failed to save` warning; `gh cache list` shows that key (385 MB, `ref=refs/pull/26/merge` — the tree now carries `build/python`, hence larger than the 180 MB of 2026-10-06). This run still built the driver (first run after the fix; 4 min 40 s total). Verification 2 — the exact hit with the build skipped — is the next run on this PR (a re-run of the job, or the next push); the develop-scoped cache appears with the first develop push after merge, which builds once more. The same push's `ci` run: `pre-commit` and `tests` green; `release-preview / release-verify` failed with a 403 (`Resource not accessible by integration`) creating its test tag ref — the identical step passed on this PR 20 minutes earlier with the same App and actor, GitHub reported no incident, and nothing in that workflow changed; unrelated to this fix, re-run to confirm transient.
+
+**Verification 2 met (2026-10-16, run on commit `699aae3`, an empty re-trigger push):** "Restore the CECE build directory" logged `Cache hit for: cece-build-35f2bc41e067c291b8c6ba3bf6eefc0a84ea558c` (386 MB); "Build CECE in the container", the re-own, the save, and the verify steps were all skipped; the suite ran; the job took 1 min 19 s (15:31:06 → 15:32:25 UTC) against 4 min 40 s for the run that built. The release-verify 403 turned out not to be transient; it has its own document, `design/fix/20261016-0936-release-verify-403/`.
+
 # appendix: original notes
 
 ## always do
