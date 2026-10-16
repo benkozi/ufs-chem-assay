@@ -154,6 +154,7 @@ def determine_current_version(target: str, released: bool, dry_run: bool) -> str
             if ver := extract_version_from_toml(f.read()):
                 return ver
     except OSError:
+        # No pyproject.toml in cwd (or unreadable): fall through to "None".
         pass
     return "None"
 

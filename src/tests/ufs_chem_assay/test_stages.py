@@ -6,12 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from applications.base import Application
+from applications.base import Application, Stage
 from applications.registry import REGISTRY, get_application
 from cli.run_config import HARNESS_ROOT, RunConfig
-from cli.stages import Stage, application_output_root, render_stage
+from cli.stages import application_output_root, render_stage
 from platforms import Platform
-from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR, run_config_file
+from tests.ufs_chem_assay.run_configs import (
+    TEMPLATES_DIR,
+    load_run_config,
+    run_config_file,
+)
 from tests.ufs_chem_assay.stubs import stub_application
 
 _CECE = get_application("cece")
@@ -24,19 +28,19 @@ _URSA_ROOT = Path("/scratch/ursa-run")
 
 @pytest.fixture
 def ursa(tmp_path: Path) -> RunConfig:
-    return RunConfig.from_yaml(run_config_file(tmp_path, root_dir=_URSA_ROOT))
+    return load_run_config(run_config_file(tmp_path, root_dir=_URSA_ROOT))
 
 
 @pytest.fixture
 def local(tmp_path: Path) -> RunConfig:
-    return RunConfig.from_yaml(
+    return load_run_config(
         run_config_file(tmp_path, "local.yaml", root_dir=tmp_path / "runs")
     )
 
 
 def _ursa(tmp_path: Path, overrides: dict[str, object]) -> RunConfig:
     """The Ursa template with dotted-key overrides, at the runbook root."""
-    return RunConfig.from_yaml(
+    return load_run_config(
         run_config_file(tmp_path, overrides=overrides, root_dir=_URSA_ROOT)
     )
 
@@ -68,7 +72,7 @@ def test_source_stage_clones_when_missing_and_guards_submodules(
     ursa: RunConfig,
 ) -> None:
     script = render_stage(Stage.SOURCE, ursa, _CECE)
-    clone = str(ursa.checkout_dir("cece"))
+    clone = str(ursa.checkout_dir(_CECE))
     assert (
         "git clone --recurse-submodules --branch develop "
         f"git@github.com:ufs-community/CECE.git {clone}"
@@ -90,7 +94,7 @@ def test_source_stage_update_source_fast_forwards(tmp_path: Path) -> None:
 
 def test_native_build_stage_loads_modules_and_gates_configure(ursa: RunConfig) -> None:
     script = render_stage(Stage.BUILD, ursa, _CECE)
-    clone = str(ursa.checkout_dir("cece"))
+    clone = str(ursa.checkout_dir(_CECE))
     lines = script.text.splitlines()
     assert "module purge" in lines
     assert f"module use {clone}/modulefiles" in lines
@@ -114,7 +118,7 @@ def test_local_build_stage_delegates_to_cece_container_script(local: RunConfig) 
     assert "module" not in script.text
     assert "cmake" not in script.text
     assert (
-        f"python3 {local.checkout_dir('cece')}/scripts/build-and-test-container.py "
+        f"python3 {local.checkout_dir(_CECE)}/scripts/build-and-test-container.py "
         "--no-test --target cece_standalone_driver --jobs 4"
     ) in script.text
 
@@ -132,7 +136,7 @@ def test_data_stage_exports_settings_and_fetches_the_selected_suites_inputs(
         "--suite-config=simple-maccity-suite.yaml"
     )
     assert fetch in lines
-    assert f"export CECE_ROOT_DIR={ursa.checkout_dir('cece')}" in lines
+    assert f"export CECE_ROOT_DIR={ursa.checkout_dir(_CECE)}" in lines
     assert "export ASSAY_PLATFORM=ursa" in lines
     assert f"export UV_CACHE_DIR={ursa.root_dir}/uv-cache" in lines
     assert lines.index(f"cd {HARNESS_ROOT}") < lines.index(fetch)
@@ -181,7 +185,7 @@ def test_cece_tests_is_not_a_stage_of_this_feature() -> None:
 def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) -> None:
     text = render_stage(Stage.HARNESS, ursa, _CECE).text
     for line in (
-        f"export CECE_ROOT_DIR={ursa.checkout_dir('cece')}",
+        f"export CECE_ROOT_DIR={ursa.checkout_dir(_CECE)}",
         "export CECE_MODULEFILE=cece_ursa.intelllvm",
         "export ASSAY_PLATFORM=ursa",
         "export ASSAY_RUNTIME=slurm",
@@ -274,7 +278,7 @@ def test_local_harness_stage_has_no_slurm_or_offline_bits(local: RunConfig) -> N
 
 
 def test_platform_override_changes_runtime_exports() -> None:
-    config = RunConfig.from_yaml(TEMPLATES_DIR / "ursa.yaml", platform=Platform.LOCAL)
+    config = load_run_config(TEMPLATES_DIR / "ursa.yaml", platform=Platform.LOCAL)
     text = render_stage(Stage.HARNESS, config, _CECE).text
     assert "export ASSAY_PLATFORM=local" in text
     assert "export ASSAY_RUNTIME=docker" in text
@@ -310,7 +314,7 @@ def test_regex_suite_selector_survives_quoting(tmp_path: Path) -> None:
 def test_output_root_is_suffixed_only_with_several_applications(
     tmp_path: Path, stub: Application
 ) -> None:
-    one = RunConfig.from_yaml(run_config_file(tmp_path, root_dir=_URSA_ROOT))
+    one = load_run_config(run_config_file(tmp_path, root_dir=_URSA_ROOT))
     assert application_output_root(one, _CECE) == "ufs-chem-assay-output"
     two = _ursa(tmp_path, {"applications.stub": {"git_url": "u", "ref": "main"}})
     assert application_output_root(two, _CECE) == "ufs-chem-assay-output/cece"

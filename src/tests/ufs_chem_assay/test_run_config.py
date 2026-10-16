@@ -9,24 +9,29 @@ from pydantic import ValidationError
 
 from applications.base import ApplicationRunSection, ApplicationSettings
 from applications.cece.cli import CeceRunSection
-from applications.registry import REGISTRY
+from applications.registry import REGISTRY, get_application
 from cli.run_config import HARNESS_ROOT, HarnessSection, RunConfig
 from cli.stages import SETTINGS_NOT_MIRRORED, settings_mirror_fields
 from platforms import Platform, Runtime
 from settings import Settings
-from tests.ufs_chem_assay.run_configs import REMOVE, TEMPLATES_DIR, run_config_file
+from tests.ufs_chem_assay.run_configs import (
+    REMOVE,
+    TEMPLATES_DIR,
+    load_run_config,
+    run_config_file,
+)
 from tests.ufs_chem_assay.stubs import stub_application
 
 
 def test_ursa_template_loads() -> None:
-    config = RunConfig.from_yaml(TEMPLATES_DIR / "ursa.yaml")
+    config = load_run_config(TEMPLATES_DIR / "ursa.yaml")
     assert config.platform is Platform.URSA
     assert config.runtime is Runtime.SLURM
     assert config.application_names == ["cece"]
     cece = config.applications["cece"]
     assert isinstance(cece, CeceRunSection)
     assert cece.modulefile == "cece_ursa.intelllvm"
-    assert config.checkout_dir("cece") == config.root_dir / "CECE"
+    assert config.checkout_dir(get_application("cece")) == config.root_dir / "CECE"
     assert config.slurm is not None
     assert config.slurm.account == "epic"
     assert config.slurm.sbatch_args == "-A epic -q debug -p u1-compute -N 1 -n 1 -c 8"
@@ -36,7 +41,7 @@ def test_ursa_template_loads() -> None:
 
 
 def test_local_template_loads_and_runs_directly() -> None:
-    config = RunConfig.from_yaml(TEMPLATES_DIR / "local.yaml")
+    config = load_run_config(TEMPLATES_DIR / "local.yaml")
     assert config.platform is Platform.LOCAL
     assert config.runtime is Runtime.DOCKER
     assert config.slurm is None
@@ -60,7 +65,7 @@ def test_templates_list_every_accepted_key() -> None:
 def test_unknown_key_rejected(tmp_path: Path) -> None:
     path = run_config_file(tmp_path, overrides={"harness.suite": "typo"})
     with pytest.raises(ValidationError, match="suite"):
-        RunConfig.from_yaml(path)
+        load_run_config(path)
 
 
 def test_unknown_application_section_rejected(tmp_path: Path) -> None:
@@ -68,24 +73,24 @@ def test_unknown_application_section_rejected(tmp_path: Path) -> None:
         tmp_path, overrides={"applications.catchem": {"git_url": "u", "ref": "r"}}
     )
     with pytest.raises(ValidationError, match="unknown application 'catchem'"):
-        RunConfig.from_yaml(path)
+        load_run_config(path)
 
 
 def test_empty_applications_map_rejected(tmp_path: Path) -> None:
     path = run_config_file(tmp_path, overrides={"applications": {}})
     with pytest.raises(ValidationError, match="at least one application"):
-        RunConfig.from_yaml(path)
+        load_run_config(path)
 
 
 def test_old_top_level_cece_section_rejected(tmp_path: Path) -> None:
     # The pre-map shape (`cece:` at the top level) is a removed schema.
     path = run_config_file(tmp_path, overrides={"cece": {"git_url": "u", "ref": "r"}})
     with pytest.raises(ValidationError, match="cece"):
-        RunConfig.from_yaml(path)
+        load_run_config(path)
 
 
 def test_platform_override_beats_file() -> None:
-    config = RunConfig.from_yaml(TEMPLATES_DIR / "ursa.yaml", platform=Platform.LOCAL)
+    config = load_run_config(TEMPLATES_DIR / "ursa.yaml", platform=Platform.LOCAL)
     assert config.platform is Platform.LOCAL
     assert config.runtime is Runtime.DOCKER
 
@@ -95,17 +100,36 @@ def test_platform_detected_when_absent(
 ) -> None:
     path = run_config_file(tmp_path, overrides={"platform": REMOVE})
     monkeypatch.setattr("platforms.socket.gethostname", lambda: "ufe04")
-    assert RunConfig.from_yaml(path).platform is Platform.URSA
+    assert load_run_config(path).platform is Platform.URSA
     monkeypatch.setattr("platforms.socket.gethostname", lambda: "laptop")
-    assert RunConfig.from_yaml(path).platform is Platform.LOCAL
+    assert load_run_config(path).platform is Platform.LOCAL
 
 
 def test_platform_is_required_on_direct_validation() -> None:
     # Only from_yaml resolves the platform; the model itself never guesses.
     with pytest.raises(ValidationError, match="platform"):
         RunConfig.model_validate(
-            {"root_dir": "/r", "applications": {"cece": {"git_url": "u", "ref": "r"}}}
+            {"root_dir": "/r", "applications": {"cece": {"git_url": "u", "ref": "r"}}},
+            context={"resolve_application": get_application},
         )
+
+
+def test_raw_sections_need_the_resolver() -> None:
+    # The registry is injected (from_yaml passes it as validation context):
+    # cli.run_config never imports it. Already-built sections need no resolver.
+    with pytest.raises(ValidationError, match="resolver"):
+        RunConfig.model_validate(
+            {
+                "platform": "local",
+                "root_dir": "/r",
+                "applications": {"cece": {"git_url": "u", "ref": "r"}},
+            }
+        )
+    section = CeceRunSection(git_url="u", ref="r")
+    config = RunConfig.model_validate(
+        {"platform": "local", "root_dir": "/r", "applications": {"cece": section}}
+    )
+    assert config.applications["cece"] is section
 
 
 def test_harness_env_numbers_become_strings(tmp_path: Path) -> None:
@@ -113,7 +137,7 @@ def test_harness_env_numbers_become_strings(tmp_path: Path) -> None:
         tmp_path,
         overrides={"harness.env": {"OMP_NUM_THREADS": 8, "FI_PROVIDER": "tcp"}},
     )
-    assert RunConfig.from_yaml(path).harness.env == {
+    assert load_run_config(path).harness.env == {
         "OMP_NUM_THREADS": "8",
         "FI_PROVIDER": "tcp",
     }
@@ -123,15 +147,17 @@ def test_explicit_clone_dir_is_used(tmp_path: Path) -> None:
     path = run_config_file(
         tmp_path, overrides={"applications.cece.clone_dir": "/elsewhere/CECE"}
     )
-    assert RunConfig.from_yaml(path).checkout_dir("cece") == Path("/elsewhere/CECE")
+    assert load_run_config(path).checkout_dir(get_application("cece")) == Path(
+        "/elsewhere/CECE"
+    )
 
 
 def test_run_tests_knob_is_gone_but_targets_stay(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="run_tests"):
-        RunConfig.from_yaml(
+        load_run_config(
             run_config_file(tmp_path, overrides={"applications.cece.run_tests": True})
         )
-    config = RunConfig.from_yaml(
+    config = load_run_config(
         run_config_file(tmp_path, overrides={"applications.cece.targets": ["all"]})
     )
     section = config.applications["cece"]
@@ -141,7 +167,7 @@ def test_run_tests_knob_is_gone_but_targets_stay(tmp_path: Path) -> None:
 
 def test_slurm_account_defaults_to_epic(tmp_path: Path) -> None:
     path = run_config_file(tmp_path, overrides={"slurm.account": REMOVE})
-    config = RunConfig.from_yaml(path)
+    config = load_run_config(path)
     assert config.slurm is not None
     assert config.slurm.account == "epic"
 
@@ -149,14 +175,14 @@ def test_slurm_account_defaults_to_epic(tmp_path: Path) -> None:
 def test_uv_python_is_not_a_knob(tmp_path: Path) -> None:
     path = run_config_file(tmp_path, overrides={"uv.python": "3.13"})
     with pytest.raises(ValidationError, match="python"):
-        RunConfig.from_yaml(path)
+        load_run_config(path)
 
 
 def test_slurm_section_describes_the_per_driver_job(tmp_path: Path) -> None:
     for gone in ("time", "submit"):
         path = run_config_file(tmp_path, overrides={f"slurm.{gone}": "x"})
         with pytest.raises(ValidationError, match=gone):
-            RunConfig.from_yaml(path)
+            load_run_config(path)
 
 
 def test_templates_ship_without_a_root_and_derive_the_harness_parent() -> None:
@@ -168,23 +194,25 @@ def test_templates_ship_without_a_root_and_derive_the_harness_parent() -> None:
             re.search(r"^root_dir:", (TEMPLATES_DIR / name).read_text(), re.MULTILINE)
             is None
         ), name
-        config = RunConfig.from_yaml(TEMPLATES_DIR / name)
+        config = load_run_config(TEMPLATES_DIR / name)
         assert config.root_dir == HARNESS_ROOT.parent
         assert config.root_dir.is_absolute()
         assert "<" not in str(config.root_dir)
-        assert config.checkout_dir("cece") == HARNESS_ROOT.parent / "CECE"
+        assert (
+            config.checkout_dir(get_application("cece")) == HARNESS_ROOT.parent / "CECE"
+        )
 
 
 def test_root_dir_precedence_flag_file_derived(tmp_path: Path) -> None:
     in_file = run_config_file(tmp_path, overrides={"root_dir": "/from/file"})
-    assert RunConfig.from_yaml(in_file).root_dir == Path("/from/file")
-    assert RunConfig.from_yaml(in_file, root_dir=Path("/from/flag")).root_dir == Path(
+    assert load_run_config(in_file).root_dir == Path("/from/file")
+    assert load_run_config(in_file, root_dir=Path("/from/flag")).root_dir == Path(
         "/from/flag"
     )
     absent = run_config_file(tmp_path)  # the template carries none
-    assert RunConfig.from_yaml(absent).root_dir == HARNESS_ROOT.parent
+    assert load_run_config(absent).root_dir == HARNESS_ROOT.parent
     assert (
-        RunConfig.from_yaml(absent, root_dir=Path("~/x")).root_dir
+        load_run_config(absent, root_dir=Path("~/x")).root_dir
         == Path("~/x").expanduser()
     )
 
@@ -195,12 +223,13 @@ def test_root_dir_is_required_on_direct_validation() -> None:
             {
                 "platform": "local",
                 "applications": {"cece": {"git_url": "u", "ref": "r"}},
-            }
+            },
+            context={"resolve_application": get_application},
         )
 
 
 def test_slurm_queue_wait_defaults_and_renders() -> None:
-    config = RunConfig.from_yaml(TEMPLATES_DIR / "ursa.yaml")
+    config = load_run_config(TEMPLATES_DIR / "ursa.yaml")
     assert config.slurm is not None
     assert config.slurm.queue_wait_s == 3600
 
@@ -251,7 +280,7 @@ def test_application_section_mirrors_application_settings() -> None:
 
 
 def test_null_section_keys_keep_the_settings_defaults() -> None:
-    config = RunConfig.from_yaml(TEMPLATES_DIR / "local.yaml")
+    config = load_run_config(TEMPLATES_DIR / "local.yaml")
     section = config.applications["cece"]
     assert section.docker_image is None
     assert section.driver_path is None
@@ -262,7 +291,7 @@ def test_null_section_keys_keep_the_settings_defaults() -> None:
 
 def test_overrides_merge_before_validation(tmp_path: Path) -> None:
     path = run_config_file(tmp_path)
-    config = RunConfig.from_yaml(
+    config = load_run_config(
         path,
         overrides=[
             "harness:suite_config=ex3-suite.yaml",
@@ -291,52 +320,53 @@ def test_override_precedence_beats_named_flag_beats_file_beats_detection(
 ) -> None:
     monkeypatch.setattr("platforms.socket.gethostname", lambda: "laptop")
     absent = run_config_file(tmp_path, overrides={"platform": REMOVE})
-    assert RunConfig.from_yaml(absent).platform is Platform.LOCAL  # detected
+    assert load_run_config(absent).platform is Platform.LOCAL  # detected
     in_file = run_config_file(tmp_path, overrides={"platform": "ursa"})
-    assert RunConfig.from_yaml(in_file).platform is Platform.URSA  # file
+    assert load_run_config(in_file).platform is Platform.URSA  # file
     assert (
-        RunConfig.from_yaml(in_file, platform=Platform.LOCAL).platform is Platform.LOCAL
+        load_run_config(in_file, platform=Platform.LOCAL).platform is Platform.LOCAL
     )  # flag
     assert (
-        RunConfig.from_yaml(
+        load_run_config(
             in_file, platform=Platform.LOCAL, overrides=["platform=ursa"]
         ).platform
         is Platform.URSA
     )  # override
-    assert RunConfig.from_yaml(
+    assert load_run_config(
         in_file, root_dir=Path("/flag"), overrides=["root_dir=/override"]
     ).root_dir == Path("/override")
 
 
 def test_override_typo_is_a_validation_error(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="suite"):
-        RunConfig.from_yaml(run_config_file(tmp_path), overrides=["harness:suite=x"])
+        load_run_config(run_config_file(tmp_path), overrides=["harness:suite=x"])
 
 
 def test_override_can_add_an_application_section(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setitem(REGISTRY, "stub", stub_application())
-    config = RunConfig.from_yaml(
+    stub = stub_application()
+    monkeypatch.setitem(REGISTRY, "stub", stub)
+    config = load_run_config(
         run_config_file(tmp_path),
         overrides=["applications:stub:git_url=u", "applications:stub:ref=main"],
     )
     assert config.application_names == ["cece", "stub"]
-    assert config.checkout_dir("stub") == config.root_dir / "STUB"
+    assert config.checkout_dir(stub) == config.root_dir / "STUB"
     # A required field missing on the added section fails validation.
     with pytest.raises(ValidationError, match="ref"):
-        RunConfig.from_yaml(
+        load_run_config(
             run_config_file(tmp_path), overrides=["applications:stub:git_url=u"]
         )
 
 
 def test_effective_config_round_trips(tmp_path: Path) -> None:
-    config = RunConfig.from_yaml(
+    config = load_run_config(
         run_config_file(tmp_path), overrides=["applications:cece:ref=develop"]
     )
     out = tmp_path / "run-config.yaml"
     config.to_yaml(out)
-    reloaded = RunConfig.from_yaml(out)
+    reloaded = load_run_config(out)
     assert reloaded == config
     section = reloaded.applications["cece"]
     assert isinstance(section, CeceRunSection)
@@ -358,7 +388,7 @@ def test_example_keys_are_rejected(tmp_path: Path, dotted: str) -> None:
         overrides={dotted: ["ex3"] if "examples" in dotted.split(".")[-1] else True},
     )
     with pytest.raises(ValidationError, match=dotted.split(".")[-1]):
-        RunConfig.from_yaml(path)
+        load_run_config(path)
 
 
 # ── Publishing baselines ──────────────────────────────────────────────────────
@@ -366,7 +396,7 @@ def test_example_keys_are_rejected(tmp_path: Path, dotted: str) -> None:
 
 def test_baselines_store_defaults_and_publish_keys_default_off() -> None:
     for name in ("ursa.yaml", "local.yaml"):
-        config = RunConfig.from_yaml(TEMPLATES_DIR / name)
+        config = load_run_config(TEMPLATES_DIR / name)
         assert config.baselines.store == "s3://ufs-chem/baselines", name
         assert config.harness.publish_baselines is False, name
         assert config.harness.no_suite_update is False, name
@@ -375,22 +405,20 @@ def test_baselines_store_defaults_and_publish_keys_default_off() -> None:
 def test_no_suite_update_requires_publish_baselines(tmp_path: Path) -> None:
     path = run_config_file(tmp_path, overrides={"harness.no_suite_update": True})
     with pytest.raises(ValidationError, match=r"no_suite_update.*publish_baselines"):
-        RunConfig.from_yaml(path)
+        load_run_config(path)
     path = run_config_file(
         tmp_path,
         overrides={"harness.no_suite_update": True, "harness.publish_baselines": True},
     )
-    assert RunConfig.from_yaml(path).harness.no_suite_update is True
+    assert load_run_config(path).harness.no_suite_update is True
 
 
 def test_malformed_values_fail_validation(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="root_dir"):
-        RunConfig.from_yaml(run_config_file(tmp_path, overrides={"root_dir": 7}))
+        load_run_config(run_config_file(tmp_path, overrides={"root_dir": 7}))
     with pytest.raises(ValidationError, match="applications"):
-        RunConfig.from_yaml(
-            run_config_file(tmp_path, overrides={"applications": "cece"})
-        )
+        load_run_config(run_config_file(tmp_path, overrides={"applications": "cece"}))
     not_a_mapping = tmp_path / "list.yaml"
     not_a_mapping.write_text("- a\n- b\n")
     with pytest.raises(ValueError, match="not a mapping"):
-        RunConfig.from_yaml(not_a_mapping)
+        load_run_config(not_a_mapping)

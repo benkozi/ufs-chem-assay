@@ -79,6 +79,10 @@ def render_job_script(
     exports, then `srun --ntasks=1 <command>` — MPI programs inside a batch
     job need Slurm's PMI endpoint, which only srun provides."""
     text = TEMPLATE_PATH.read_text() if template_text is None else template_text
+    # Not HTML: the template is a bash/Slurm batch script and the values are
+    # the harness's own validated config. Autoescaping would corrupt shell
+    # operators and quotes; CodeQL's py/jinja2/autoescape-false is dismissed
+    # as a false positive for this site (design/fix/20261016-1547-codeql-dependabot-alerts).
     template = Environment(
         undefined=StrictUndefined, keep_trailing_newline=True
     ).from_string(text)

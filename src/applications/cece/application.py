@@ -10,13 +10,14 @@ from applications.base import (
     Application,
     ApplicationRunSection,
     DriverConfig,
+    RunConfigView,
+    Stage,
     SweepBase,
     SweepSelectorBase,
 )
 from applications.cece import assertions, cli, combos, suite
 from applications.cece.config import CeceConfig
 from applications.cece.settings import CONTAINER_WORKDIR, ENV_PREFIX, CeceSettings
-from cli.stages import Stage
 from combos import Combo, Dimension, ParameterRow
 
 
@@ -80,9 +81,6 @@ class CeceApplication(Application):
         return suite.selector_matches(selector, combo)
 
     def stage_lines(
-        self, stage: Stage, config: object, section: ApplicationRunSection
+        self, stage: Stage, config: RunConfigView, section: ApplicationRunSection
     ) -> list[str]:
-        from cli.run_config import RunConfig
-
-        assert isinstance(config, RunConfig), type(config)
-        return cli.stage_lines(stage, config, section)
+        return cli.stage_lines(stage, config, section, config.checkout_dir(self))

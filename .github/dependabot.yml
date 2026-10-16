@@ -1,7 +1,10 @@
-# Dependabot version updates: the pinned action majors (actions/checkout@v7
-# ...) and the uv lock. Weekly, grouped, so a bump is one PR per ecosystem;
-# conventional-commit titles so the PR-title check and semantic-release
-# parse them (chore: no release).
+# Dependabot version updates: the actions and the uv lock. Weekly, grouped,
+# so a bump is one PR per ecosystem; conventional-commit titles so the
+# PR-title check and semantic-release parse them (chore: no release).
+# Third-party actions are pinned by commit with a `# vX.Y.Z` comment, which
+# Dependabot bumps together with the hash (CodeQL actions/unpinned-tag);
+# GitHub-owned actions (actions/*, github/*) stay on major tags. See
+# design/fix/20261016-1547-codeql-dependabot-alerts.
 version: 2
 updates:
   - package-ecosystem: github-actions

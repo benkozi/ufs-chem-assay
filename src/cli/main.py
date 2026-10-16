@@ -24,12 +24,12 @@ from pathlib import Path
 
 import yaml
 
-from applications.base import Application
+from applications.base import Application, Stage
 from applications.registry import get_application
 from baselines import default_selector, ensure_baselines, load_run, plan, publish
 from cli.run_config import RunConfig
 from cli.shell import run_bash, write_script
-from cli.stages import Stage, render_stage
+from cli.stages import render_stage
 from logs import configure_logging, get_logger
 from models.suite_config import RunManifest
 from platforms import Platform
@@ -236,6 +236,7 @@ def _run(args: argparse.Namespace) -> int:
             platform=args.platform,
             root_dir=args.root_dir,
             overrides=args.override,
+            resolve_application=get_application,
         )
         applications = _selected_applications(config, args.application)
     except ValueError as exc:
