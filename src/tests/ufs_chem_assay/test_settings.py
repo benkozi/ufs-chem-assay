@@ -22,6 +22,7 @@ _SCRUBBED = (
     "BASELINE_ROOT_DIR",
     "BASELINE_STORE",
     "LOG_LEVEL",
+    "SRUN_ARGS",
 )
 
 
@@ -168,6 +169,14 @@ def test_baseline_tolerance_overrides_reject_negatives() -> None:
 
 
 @pytest.mark.usefixtures("clean_env")
+def test_srun_args_defaults_to_one_task_and_reads_from_env(
+    clean_env: pytest.MonkeyPatch,
+) -> None:
+    assert Settings(platform=Platform.LOCAL).srun_args == "--ntasks=1"
+    clean_env.setenv(f"{ENV_PREFIX}SRUN_ARGS", "--ntasks=4 --cpu-bind=cores")
+    assert Settings(platform=Platform.LOCAL).srun_args == "--ntasks=4 --cpu-bind=cores"
+
+
 def test_baseline_store_defaults_to_the_ufs_chem_baselines_prefix() -> None:
     assert Settings().baseline_store == "s3://ufs-chem/baselines"
 

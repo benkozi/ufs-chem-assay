@@ -1,0 +1,55 @@
+# The global anthropogenic use case (issue #33): one configuration, no sweep —
+# the base config is the single combination. Ursa only: the inputs are not in
+# any bucket and the run takes hours; run it through config/ursa.yaml with the
+# override list in docs/gcafs-anthro-runbook.md (the batch QOS, the raised
+# timeout cap, the author's single-task single-thread geometry).
+name: gcafs-anthro
+config_path: gcafs-anthro.yaml
+timeout_s: 14400  # per combination (4 h: the author's limit was 3 h); the first run's tic/toc tightens it
+# Inputs the base config reads, expected at <CECE_ROOT_DIR>/data/gcafs-anthro/.
+# No remote source yet (url: null): the files are copied there from the
+# existing staging area on Ursa, and `uv run ufs-chem-assay fetch
+# --suite-config=gcafs-anthro-suite.yaml` verifies each by sha256 and names any
+# that is missing — it never downloads these. Filling in the url lines (after
+# a one-time upload) makes them fetchable; the digests stay.
+# The all-zero digests are placeholders: replace them with `sha256sum` of the
+# placed files (runbook step 5) before the first run — until then fetch fails
+# naming each file, which is the point.
+inputs:
+  - url: null
+    dst: gcafs-anthro/BC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+    sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+  - url: null
+    dst: gcafs-anthro/OC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+    sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+  - url: null
+    dst: gcafs-anthro/SO2-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+    sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+  - url: null
+    dst: gcafs-anthro/EDGAR_hourly_NOxScal.nc
+    sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+  - url: null
+    dst: gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_daily.nc
+    sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+  - url: null
+    dst: gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_weekly_fixtime.nc
+    sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+  - url: null
+    dst: gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_hourly_fixtime_utc.nc
+    sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+# assertions: defaults — file count derived from the config (25), filenames
+# from the pattern, every output variable on (time, lev, lat, lon). The species
+# attribute dictionaries are pinned after the first run writes them.
+analysis:
+  compute_descriptive_stats: true
+plotting:
+  enabled: true
+  gif_enabled: true
+# One entry: the empty selector matches the single combination of a sweep-less
+# suite. The all-zero ULID is the bootstrap placeholder — no baseline is in the
+# store yet; run with comparisons off, publish-baselines, and the repoint
+# replaces it. rtol as for maccity: a few float64 ULPs at any magnitude.
+baseline_comparisons:
+  - sweep_selector: {}
+    ulid: '00000000000000000000000000'
+    rtol: 1.0e-15

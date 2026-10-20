@@ -10,7 +10,12 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, InstanceOf
 
 from models.base import StrictModel
-from models.suite_config import BaselineComparison, RecordedBaseline, SuiteConfig
+from models.suite_config import (
+    BaselineComparison,
+    LaunchRecord,
+    RecordedBaseline,
+    SuiteConfig,
+)
 from platforms import Platform, Runtime
 
 Action = Literal["published", "would-publish", "skipped", "failed"]
@@ -102,6 +107,13 @@ class BaselineManifest(StrictModel):
     )
     platform: Platform = Field(description="Machine the run happened on")
     runtime: Runtime = Field(description="How the driver was spawned")
+    launch: LaunchRecord | None = Field(
+        default=None,
+        description=(
+            "The run's job launch (ranks, srun options, job environment) under "
+            "the slurm runtime; null otherwise"
+        ),
+    )
     published_at: datetime = Field(description="Publication time, UTC, timezone-aware")
     published_by: str = Field(description="<user>@<hostname> that published it")
     superseded_ulid: str | None = Field(

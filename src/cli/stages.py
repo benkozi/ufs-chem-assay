@@ -45,7 +45,8 @@ SETTINGS_NOT_MIRRORED = frozenset(
         "baseline_store",  # baselines.store
         "baseline_atol",  # baselines.atol
         "baseline_rtol",  # baselines.rtol
-        "sbatch_args",  # slurm: (account, qos, partition, cpus)
+        "sbatch_args",  # slurm: (account, qos, partition, ntasks, cpus, extra_args)
+        "srun_args",  # slurm: (ntasks, srun_args)
         "slurm_queue_wait_s",  # slurm.queue_wait_s
         "job_env",  # harness.env under the slurm runtime
     }
@@ -133,6 +134,7 @@ def _exports(
     if config.runtime is Runtime.SLURM:
         assert config.slurm is not None, "slurm runtime needs a slurm: section"
         exports.append((f"{ENV_PREFIX}SBATCH_ARGS", q(config.slurm.sbatch_args)))
+        exports.append((f"{ENV_PREFIX}SRUN_ARGS", q(config.slurm.srun_args_value)))
         exports.append(
             (f"{ENV_PREFIX}SLURM_QUEUE_WAIT_S", str(config.slurm.queue_wait_s))
         )

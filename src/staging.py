@@ -41,7 +41,9 @@ class StagedInput(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    url: str = Field(description="The input's S3 object URI")
+    url: str | None = Field(
+        description="The input's S3 object URI; null for one with no remote source"
+    )
     path: Path = Field(description="Host path the input is staged at")
     action: Action = Field(
         description=(
@@ -177,9 +179,11 @@ def stage_inputs(
 ) -> list[StagedInput]:
     """Stage every input into data_dir: present-and-verified files are
     skipped without touching the network; the rest are fetched one by one
-    (every input attempted even after a failure). A dry run classifies and
-    passes the wrapper's own dry run through for the files it would fetch;
-    it writes nothing."""
+    (every input attempted even after a failure). An input with no remote
+    source (url null) is only ever verified: absent or wrong, it fails
+    naming the path to place the file at — nothing can fetch it. A dry run
+    classifies and passes the wrapper's own dry run through for the files
+    it would fetch; it writes nothing."""
     staging_root = data_dir / STAGING_DIRNAME
     if staging_root.exists():
         logger.info("removing stale staging directory %s", staging_root)
@@ -200,6 +204,19 @@ def stage_inputs(
                     action="skipped",
                     detail=detail,
                     sha256=digest,
+                )
+            )
+            continue
+        if entry.url is None:
+            reason = (
+                f"{detail}; no source to re-fetch from — replace the file at {target}"
+                if target.is_file()
+                else f"absent and no source declared — place the file at {target}"
+            )
+            logger.error("%s: %s", target, reason)
+            results.append(
+                StagedInput(
+                    url=None, path=target, action="failed", detail=reason, sha256=digest
                 )
             )
             continue

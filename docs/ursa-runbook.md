@@ -3,7 +3,9 @@
 Manual steps to build the target driver (CECE's `cece_standalone_driver`,
 the application this runbook is written for) against the application's
 own Ursa modulefiles and run `simple-maccity-suite.yaml` through the
-harness from a login node, one Slurm job per driver call.
+harness from a login node, one Slurm job per driver call. The
+gcafs-anthro configuration has its own runbook on top of this one:
+[gcafs-anthro-runbook.md](gcafs-anthro-runbook.md).
 `ufs-chem-assay run --config-file=config/ursa.yaml` automates the same
 sequence (each stage renders to a script under `<root_dir>/scripts/`, so
 the two are the same commands).
@@ -156,10 +158,13 @@ The dry run renders every stage to `$ROOT/scripts/<NN>-<stage>-<application>.sh`
 `05-harness-cece.sh` before running it. It runs pytest
 **on the login node**, and pytest submits **one Slurm job per driver
 call**: each combo gets a rendered `<combo_id>.sbatch` beside its
-`.yaml` and `.out` under the output root, with the `#SBATCH` directives,
-the module load, and the `srun --ntasks=1` launch spelled out. The job's
-time limit is the suite's `timeout_s` rounded up to whole minutes; queue
-time does not count.
+`.yaml` and `.out` under the output root, with the `#SBATCH` directives
+(`-N 1 -n <slurm.ntasks> -c <slurm.cpus>` plus `slurm.extra_args`), the
+module load, and the `srun` launch (`--ntasks=<slurm.ntasks>` plus
+`slurm.srun_args`) spelled out, bracketed by `tic`/`toc` timestamps and
+followed by `report-mem`, so the `.out` records the job's wall time and
+memory. The job's time limit is the suite's `timeout_s` rounded up to
+whole minutes; queue time does not count.
 
 Two environments, kept apart: the harness venv must never see the
 modulefile (spack-stack sets `PYTHONPATH` to `python3.11` packages that
@@ -183,7 +188,8 @@ runs. In another window, `squeue -u $USER` shows the per-combo jobs
 (`ufs-chem-assay-<combo_id>`) come and go. Results land in
 `$ROOT/CECE/ufs-chem-assay-output/`: `run.yaml` (with `application:
 cece`, `application_commit`, the harness's own `harness_version` and
-`harness_commit`, `platform: ursa`, `runtime: slurm`, `modulefile`),
+`harness_commit`, `platform: ursa`, `runtime: slurm`, `modulefile`,
+`launch`: the directives, srun options and job environment),
 `combos.csv`,
 `test-report.csv`, and per combo the generated config, the job script,
 the job's `.out`, `cece.log`, NetCDF, stats, and plots. The login node

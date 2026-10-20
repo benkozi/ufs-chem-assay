@@ -20,7 +20,13 @@ specific configurations of an application: a suite names a base
 configuration, the inputs it reads, and how it is swept, asserted, and
 analysed. The configurations the harness carries live under
 `src/tests/config/<application>/<configuration>/`, each beside the suites
-that sweep it (`cece/maccity/`: `maccity.yaml` and its three suites). The
+that sweep it (`cece/maccity/`: `maccity.yaml` and its three suites;
+`cece/gcafs-anthro/` since 2026-10-19: the global anthropogenic use case of
+issue #33, one sweep-less suite over seven placed inputs, Ursa only — see
+`design/feat/20261019-1447-global-anthro-use-case/20261019-1447-global-anthro-use-case.md`,
+which also brought `grid.nz`, the driver-level AMIO input knobs, stream
+`time_label`, and the full cadence set into the CECE model, source-less
+inputs, and the job geometry below). The
 earlier notion of an application's shipped "examples" — run verbatim
 through its own tooling, or wrapped as suites — is retired entirely; see
 `design/feat/20261007-1555-retire-examples/20261007-1555-retire-examples.md`.
@@ -255,7 +261,9 @@ configs always point `driver.log_file` into the combo's output directory,
 so no base config can write a log into the checkout.
 
 **Inputs (2026-10-08).** A suite declares the files its base configuration
-reads: `inputs:` is a list of `{url, public, dst, sha256}` — an
+reads: `inputs:` is a list of `{url, public, dst, sha256}` (`url: null`,
+2026-10-19: an input with no remote source yet, placed by hand and only
+ever verified — `sha256` required, `public` refused) — an
 `s3://bucket/key` object, whether the bucket allows anonymous reads
 (`--no-sign-request`; CECE's sources are all public), the destination
 relative to the checkout's data directory (the adapter's `data_dirname`),
@@ -447,8 +455,15 @@ default on every other platform (RDHPC machines have no docker) — pytest
 runs on a login node and each driver call is one `sbatch --wait` job
 from a rendered `<combo_id>.sbatch` (Jinja2 template) kept beside the
 combo's artifacts — directives, `CECE_MODULEFILE` load, `ASSAY_JOB_ENV`,
-and the driver behind `srun --ntasks=1` — so the harness venv never sees
-the module environment and a failed job is reproducible by hand; and
+and the driver behind `srun ${ASSAY_SRUN_ARGS}` (`--ntasks=<slurm.ntasks>`
+plus `slurm.srun_args`; `sbatch -n` renders from the same `ntasks`, and
+`slurm.extra_args` appends directives such as `--mem=0`), bracketed by
+`tic`/`toc` timestamps and a guarded `report-mem` so the `.out` carries
+wall time and memory (2026-10-19) — so the harness venv never sees
+the module environment and a failed job is reproducible by hand; the
+launch (`sbatch_args`, `srun_args`, `job_env`) is recorded in `run.yaml`
+as `launch`, null outside slurm, because the driver's rank count is a
+property of the run, not of the configuration under test; and
 `native` — the driver as a host process, `cwd` = the application checkout,
 prefixed by the `launcher` setting, for a session inside an allocation. The platform is detected from the
 hostname (`ASSAY_PLATFORM` overrides; `local` when nothing matches) and
@@ -686,7 +701,8 @@ Publishing (2026-10-08, `baselines.py`; full design in
 - **`baseline.yaml`** (`BaselineManifest`) is written into the directory
   before the sync and uploaded with it: the ULID and store, application
   and `application_commit`, suite, combination, `run_id`, harness version
-  and commit, platform and runtime, publication time (UTC) and
+  and commit, platform and runtime, the run's `launch` (2026-10-19; null
+  outside slurm), publication time (UTC) and
   `user@host`, the ULID the suite entry pinned (`superseded_ulid`), the
   combination's `combos.csv` rows, and every file with size and digest. Its
   presence in a combination directory records that the combination was
@@ -937,6 +953,8 @@ All code under `src/`; the project is `uv`-managed with its own
         cece/maccity/exhaustive-maccity-asserted-suite.yaml
         cece/maccity/exhaustive-maccity-run-only-suite.yaml  # every enum value via ".*"
                                           #   regex sweeps; on-demand, run-only
+        cece/gcafs-anthro/gcafs-anthro.yaml           # the global anthropogenic use case (issue #33)
+        cece/gcafs-anthro/gcafs-anthro-suite.yaml     # sweep-less; seven placed inputs; Ursa only
       ufs_chem_assay/     # the harness's own tests: mocked process call, no docker
         applications/cece/  # the CECE adapter's tests (test_cece_*.py)
         stubs.py          # an inert second adapter for several-application tests

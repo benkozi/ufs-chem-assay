@@ -124,6 +124,52 @@ def test_empty_present_file_is_refetched(tmp_path: Path, mocker: MockerFixture) 
     assert (tmp_path / "MACCity_4x5.nc").read_bytes() == _PAYLOAD
 
 
+def test_source_less_input_present_and_verified_is_skipped(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    (tmp_path / "placed.nc").write_bytes(_PAYLOAD)
+    sync = mocker.patch("staging.sync")
+    probe = mocker.patch("staging.check_reachable")
+    (result,) = stage_inputs([_input(url=None, dst="placed.nc")], tmp_path)
+    assert result.action == "skipped"
+    assert "verified" in result.detail
+    sync.assert_not_called()
+    probe.assert_not_called()
+
+
+def test_source_less_input_present_but_wrong_fails_without_a_fetch(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    (tmp_path / "placed.nc").write_bytes(b"stale")
+    sync = mocker.patch("staging.sync")
+    (result,) = stage_inputs([_input(url=None, dst="placed.nc")], tmp_path)
+    assert result.action == "failed"
+    assert _DIGEST in result.detail
+    assert "no source" in result.detail
+    assert str(tmp_path / "placed.nc") in result.detail
+    assert (tmp_path / "placed.nc").read_bytes() == b"stale"  # never touched
+    sync.assert_not_called()
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_source_less_input_absent_fails_naming_the_destination(
+    tmp_path: Path, mocker: MockerFixture, dry_run: bool
+) -> None:
+    # A dry run cannot plan a fetch for it either: the outcome is the same.
+    sync = mocker.patch("staging.sync")
+    probe = mocker.patch("staging.check_reachable")
+    (result,) = stage_inputs(
+        [_input(url=None, dst="sub/placed.nc")], tmp_path, dry_run=dry_run
+    )
+    assert result.action == "failed"
+    assert "no source" in result.detail
+    assert "place the file at" in result.detail
+    assert str(tmp_path / "sub" / "placed.nc") in result.detail
+    assert not (tmp_path / "sub").exists()
+    sync.assert_not_called()
+    probe.assert_not_called()
+
+
 def test_fetch_is_one_filtered_sync_of_the_parent_prefix(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:

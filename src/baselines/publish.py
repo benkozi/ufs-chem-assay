@@ -72,6 +72,7 @@ def _manifest(
         harness_commit=run.harness_commit,
         platform=run.platform,
         runtime=run.runtime,
+        launch=run.launch,
         published_at=datetime.now(UTC),
         published_by=f"{getpass.getuser()}@{socket.gethostname()}",
         superseded_ulid=record.previous_ulid,

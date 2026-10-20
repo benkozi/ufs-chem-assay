@@ -85,6 +85,15 @@ class Settings(BaseSettings):
             "the time limit comes from the suite timeout"
         ),
     )
+    srun_args: str = Field(
+        default="--ntasks=1",
+        description=(
+            "slurm runtime: options for the srun that launches the driver inside "
+            "each job, word-split like a shell (e.g. '--ntasks=4 --cpu-bind=cores'); "
+            "the task count is never derived from sbatch_args — the run config "
+            "renders both from its slurm.ntasks"
+        ),
+    )
     slurm_queue_wait_s: int = Field(
         default=3600,
         gt=0,

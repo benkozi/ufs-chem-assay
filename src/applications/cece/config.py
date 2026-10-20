@@ -72,13 +72,30 @@ class VdistMethod(StrEnum):
     pbl = "pbl"
 
 
-# The driver's cadence_record_bracket matches these case-insensitively (an
-# empty/absent cadence disables the mechanism); canonical lowercase only.
+# How a stream's file records are addressed, as the driver validates them
+# (case-insensitively; canonical lowercase only here, and not its `step`
+# alias). hourly/weekly are profiles selected by hour-of-day / day-of-week
+# and ignore the year fields; series/daily/monthly decode the file's time
+# axis (daily/monthly fall back to arithmetic when it cannot be decoded);
+# stepwise walks record indices and ignores time. Absent means series.
 @unique
 class Cadence(StrEnum):
     hourly = "hourly"
+    daily = "daily"
     weekly = "weekly"
     monthly = "monthly"
+    series = "series"
+    stepwise = "stepwise"
+
+
+# Where a decoded time coordinate sits in the interval its record describes;
+# the driver validates these four (case-insensitively), canonical lowercase.
+@unique
+class TimeLabel(StrEnum):
+    auto = "auto"
+    start = "start"
+    center = "center"  # type: ignore[assignment]  # shadows str.center
+    end = "end"
 
 
 # AMIO data-model selection per stream; unknown values warn and silently fall
@@ -108,6 +125,14 @@ class Grid(StrictModel):
     )
     nx: int | None = Field(None, description="Number of longitude grid cells")
     ny: int | None = Field(None, description="Number of latitude grid cells")
+    nz: int | None = Field(
+        None,
+        ge=1,
+        description=(
+            "Number of vertical levels (every export field spans 1:nz); None "
+            "means the driver default (1)"
+        ),
+    )
     lon_min: float = Field(description="Western boundary of the domain (degrees east)")
     lon_max: float = Field(description="Eastern boundary of the domain (degrees east)")
     lat_min: float = Field(
@@ -151,6 +176,37 @@ class Driver(StrictModel):
             "AMIO worker-pool size for async I/O; None means the driver "
             "default (1). Values < 1 are rejected here — the driver would "
             "silently correct them to 1."
+        ),
+    )
+    # The three driver-level AMIO input knobs the driver reads (it rejects
+    # values < 1 for each, as the model does). Deliberately absent:
+    # amio_read_timeout_s and amio_staging_timeout_ms — CECE develop reads
+    # neither at the driver level (its AMIO manifest hard-codes 120 s and
+    # 30000 ms; amio_staging_timeout_ms is an `output:` key), so a config
+    # carrying them would document settings with no effect. Revisited at
+    # pull-request time (design/feat/20261019-1447-global-anthro-use-case).
+    amio_staging_buffer_count: int | None = Field(
+        None,
+        ge=1,
+        description=(
+            "AMIO input staging buffers per stream read; None means the driver "
+            "default (8)"
+        ),
+    )
+    amio_staging_buffer_capacity_bytes: int | None = Field(
+        None,
+        ge=1,
+        description=(
+            "Minimum bytes per AMIO input staging buffer; None means the driver "
+            "default (33554432, 32 MiB)"
+        ),
+    )
+    amio_prefetch_depth: int | None = Field(
+        None,
+        ge=1,
+        description=(
+            "AMIO read look-ahead depth (in-flight slabs); None means the driver "
+            "default (2)"
         ),
     )
     grid: Grid = Field(description="Spatial grid definition")
@@ -249,8 +305,16 @@ class Stream(StrictModel):
     cadence: Cadence | None = Field(
         None,
         description=(
-            "Temporal cadence of the file's records (hour-of-day, day-of-week, "
-            "or monthly profiles); None disables the cadence mechanism"
+            "How the file's records are addressed: hourly/weekly profiles, "
+            "series/daily/monthly on the decoded time axis, or stepwise record "
+            "walking; None means the driver's series"
+        ),
+    )
+    time_label: TimeLabel | None = Field(
+        None,
+        description=(
+            "Where each time coordinate sits in the interval its record "
+            "describes (auto, start, center, end); None means the driver's auto"
         ),
     )
     data_model: DataModel | None = Field(

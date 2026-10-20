@@ -190,6 +190,7 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "export ASSAY_PLATFORM=ursa",
         "export ASSAY_RUNTIME=slurm",
         "export ASSAY_SBATCH_ARGS='-A epic -q debug -p u1-compute -N 1 -n 1 -c 8'",
+        "export ASSAY_SRUN_ARGS=--ntasks=1",  # the srun inside each job
         "export ASSAY_JOB_ENV='I_MPI_FABRICS=shm FI_PROVIDER=tcp'",  # the driver jobs' env
         "export ASSAY_ENABLE_BASELINE_COMPARISONS=false",
         "export ASSAY_BASELINE_STORE=s3://ufs-chem/baselines",
@@ -282,6 +283,26 @@ def test_platform_override_changes_runtime_exports() -> None:
     text = render_stage(Stage.HARNESS, config, _CECE).text
     assert "export ASSAY_PLATFORM=local" in text
     assert "export ASSAY_RUNTIME=docker" in text
+
+
+def test_harness_stage_exports_the_srun_geometry_under_slurm_only(
+    tmp_path: Path, local: RunConfig
+) -> None:
+    geometry = _ursa(
+        tmp_path,
+        {
+            "slurm.ntasks": 4,
+            "slurm.srun_args": "--cpu-bind=cores",
+            "slurm.extra_args": "--mem=0",
+        },
+    )
+    text = render_stage(Stage.HARNESS, geometry, _CECE).text
+    assert "export ASSAY_SRUN_ARGS='--ntasks=4 --cpu-bind=cores'" in text
+    assert (
+        "export ASSAY_SBATCH_ARGS='-A epic -q debug -p u1-compute -N 1 -n 4 -c 8 --mem=0'"
+        in text
+    )
+    assert "ASSAY_SRUN_ARGS" not in render_stage(Stage.HARNESS, local, _CECE).text
 
 
 def test_harness_stage_exports_the_queue_allowance_under_slurm_only(

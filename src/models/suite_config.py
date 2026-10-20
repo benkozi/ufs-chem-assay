@@ -28,15 +28,20 @@ SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
 
 class InputFile(StrictModel):
-    """One input the suite's base configuration reads, staged into the
-    application checkout's data directory by `ufs-chem-assay fetch`: an S3
-    object, fetched with one filtered `aws s3 sync` of its parent prefix."""
+    """One input the suite's base configuration reads, expected in the
+    application checkout's data directory: an S3 object, fetched by
+    `ufs-chem-assay fetch` with one filtered `aws s3 sync` of its parent
+    prefix — or, with no url, a file placed there by hand (not in any
+    bucket yet) that `fetch` only ever verifies by digest."""
 
-    url: str = Field(
+    url: str | None = Field(
+        None,
         pattern=S3_OBJECT_URI_PATTERN,
         description=(
-            "S3 object URI of the file (s3://bucket/key); fetched with one "
-            "filtered `aws s3 sync` of the key's parent prefix"
+            "S3 object URI of the file (s3://bucket/key), fetched with one "
+            "filtered `aws s3 sync` of the key's parent prefix; null declares an "
+            "input with no remote source yet — placed at dst by hand, verified "
+            "by sha256, never downloaded"
         ),
     )
     public: bool = Field(
@@ -77,15 +82,34 @@ class InputFile(StrictModel):
             )
         return value
 
+    @model_validator(mode="after")
+    def _source_less_needs_a_digest(self) -> InputFile:
+        if self.url is None:
+            if self.sha256 is None:
+                raise ValueError(
+                    f"inputs: {str(self.dst)!r} has no url (no remote source) and "
+                    "must declare sha256 — without both, any non-empty file would pass"
+                )
+            if self.public:
+                raise ValueError(
+                    f"inputs: {str(self.dst)!r} has no url, so public has no meaning"
+                )
+        return self
+
+    def _url(self) -> str:
+        if self.url is None:
+            raise ValueError(f"input {str(self.dst)!r} has no remote source")
+        return self.url
+
     @property
     def parent_prefix(self) -> str:
         """`s3://bucket/a/b/file.nc` -> `s3://bucket/a/b/` (the sync source)."""
-        return self.url.rsplit("/", 1)[0] + "/"
+        return self._url().rsplit("/", 1)[0] + "/"
 
     @property
     def filename(self) -> str:
         """The key's last component (the sync's include filter)."""
-        return self.url.rsplit("/", 1)[1]
+        return self._url().rsplit("/", 1)[1]
 
 
 class AttributesAssertion(StrictModel):
@@ -342,7 +366,9 @@ class RecordedInput(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     suite: str = Field(description="Suite that declares the input")
-    url: str = Field(description="The input's S3 object URI")
+    url: str | None = Field(
+        description="The input's S3 object URI; null for one with no remote source"
+    )
     path: Path = Field(description="Host path the input is staged at")
     sha256: str | None = Field(description="The declared digest; null when none")
     bytes: int | None = Field(
@@ -363,6 +389,21 @@ class RecordedBaseline(StrictModel):
     path: Path = Field(description="Where the session reads it: <baseline root>/<ulid>")
     state: str = Field(description="local, synced, would-sync, or failed")
     detail: str = Field(description="Why: present, synced, or the error")
+
+
+class LaunchRecord(StrictModel):
+    """How the driver jobs were launched (run.yaml, slurm runtime): the
+    sbatch directives, the srun options, and the environment exported inside
+    each job — the rank count, binding, and thread settings that produced
+    the output. Copied into a published baseline's manifest."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    sbatch_args: str = Field(description="The ASSAY_SBATCH_ARGS directives, verbatim")
+    srun_args: str = Field(description="The ASSAY_SRUN_ARGS options, verbatim")
+    job_env: dict[str, str] = Field(
+        description="NAME -> VALUE exported inside every driver job (ASSAY_JOB_ENV)"
+    )
 
 
 class RunManifest(StrictModel):
@@ -405,6 +446,13 @@ class RunManifest(StrictModel):
     )
     modulefile: str | None = Field(
         description="Modulefile the driver jobs loaded (slurm runtime); null otherwise"
+    )
+    launch: LaunchRecord | None = Field(
+        default=None,
+        description=(
+            "How the driver jobs were launched (slurm runtime: directives, srun "
+            "options, job environment); null under docker and native"
+        ),
     )
     # SerializeAsAny: each suite dumps with its adapter's schema (the sweep).
     suites: list[SerializeAsAny[SuiteConfig]]

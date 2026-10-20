@@ -178,6 +178,38 @@ def test_uv_python_is_not_a_knob(tmp_path: Path) -> None:
         load_run_config(path)
 
 
+def test_slurm_geometry_defaults_and_renders() -> None:
+    # The template: one task, eight cores, no extra directives, no srun
+    # options beyond the task count — maccity's jobs as they were.
+    config = load_run_config(TEMPLATES_DIR / "ursa.yaml")
+    assert config.slurm is not None
+    assert (config.slurm.ntasks, config.slurm.srun_args, config.slurm.extra_args) == (
+        1,
+        "",
+        "",
+    )
+    assert config.slurm.sbatch_args == "-A epic -q debug -p u1-compute -N 1 -n 1 -c 8"
+    assert config.slurm.srun_args_value == "--ntasks=1"
+    # The gcafs-anthro geometry, by override: sbatch -n and srun --ntasks
+    # render from the one ntasks value; extra_args is appended verbatim.
+    config = load_run_config(
+        TEMPLATES_DIR / "ursa.yaml",
+        overrides=[
+            "slurm:ntasks=4",
+            "slurm:cpus=1",
+            "slurm:srun_args=--cpu-bind=cores",
+            "slurm:extra_args=--mem=0",
+        ],
+    )
+    assert config.slurm is not None
+    assert config.slurm.sbatch_args == (
+        "-A epic -q debug -p u1-compute -N 1 -n 4 -c 1 --mem=0"
+    )
+    assert config.slurm.srun_args_value == "--ntasks=4 --cpu-bind=cores"
+    with pytest.raises(ValidationError, match="ntasks"):
+        load_run_config(TEMPLATES_DIR / "ursa.yaml", overrides=["slurm:ntasks=0"])
+
+
 def test_slurm_section_describes_the_per_driver_job(tmp_path: Path) -> None:
     for gone in ("time", "submit"):
         path = run_config_file(tmp_path, overrides={f"slurm.{gone}": "x"})
@@ -253,6 +285,7 @@ def test_harness_section_mirrors_every_setting() -> None:
         "baseline_rtol",
         "sbatch_args",
         "slurm_queue_wait_s",
+        "srun_args",  # slurm: ntasks + srun_args
         "job_env",
     } == SETTINGS_NOT_MIRRORED
 

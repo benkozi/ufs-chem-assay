@@ -379,13 +379,16 @@ def test_fetch_stages_the_merged_inputs_of_the_selected_suites(
             _staged(i.url, data_dir / i.dst, "skipped") for i in inputs
         ],
     )
-    code = main(["fetch", "--application=cece", r"--suite-config=.*-suite\.yaml"])
+    code = main(
+        ["fetch", "--application=cece", r"--suite-config=(one|two)-suite\.yaml"]
+    )
     assert code == 0
     stage.assert_called_once()
     inputs, data_dir = stage.call_args.args
     assert data_dir == fetch_env / "data"
     assert stage.call_args.kwargs == {"dry_run": False}
-    # The shared file once, the private extra once: merged across both suites.
+    # The shared file once, the private extra once: merged across both suites
+    # (the selector names the two fixtures; the built-in suites declare more).
     assert [(str(i.dst), i.public) for i in inputs] == [
         ("MACCity_4x5.nc", True),
         ("extra.nc", False),

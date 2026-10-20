@@ -20,6 +20,7 @@ from models.suite_config import (
     Analysis,
     Assertions,
     BaselineComparison,
+    LaunchRecord,
     RecordedInput,
     RunManifest,
     SuiteConfig,
@@ -701,6 +702,15 @@ def combo_roots(
         platform=settings.platform,
         runtime=settings.runtime,
         modulefile=request.config.stash[_APP_SETTINGS].modulefile,
+        launch=(
+            LaunchRecord(
+                sbatch_args=settings.sbatch_args,
+                srun_args=settings.srun_args,
+                job_env=settings.job_env_pairs,
+            )
+            if settings.runtime is Runtime.SLURM
+            else None
+        ),
         suites=[context.suite for context in request.config.stash[_SUITE_CONTEXTS]],
         inputs=inputs,
         baselines=[

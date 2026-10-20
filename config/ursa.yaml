@@ -52,6 +52,9 @@ slurm:  # the per-driver job (ASSAY_SBATCH_ARGS); time limit = the suite timeout
   qos: debug  # 30 min cap per job; `batch` (8 h) for long drivers
   queue_wait_s: 3600  # queue allowance per job before the harness cancels it; hours on `batch`
   partition: u1-compute
-  cpus: 8
+  ntasks: 1  # sbatch -n and srun --ntasks: MPI tasks per driver job (the driver splits latitude bands across them)
+  cpus: 8  # sbatch -c: cores per task; the driver uses them all as threads unless env says otherwise
+  srun_args: ''  # extra srun options for the driver launch, e.g. --cpu-bind=cores
+  extra_args: ''  # extra sbatch directives, verbatim, e.g. --mem=0
 uv:
   cache_dir:  # UV_CACHE_DIR; default <root_dir>/uv-cache

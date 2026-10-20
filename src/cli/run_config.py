@@ -174,7 +174,27 @@ class SlurmSection(StrictModel):
     )
     qos: str = Field(default="batch", description="sbatch -q")
     partition: str = Field(default="u1-compute", description="sbatch -p")
-    cpus: int = Field(default=8, gt=0, description="sbatch -c for each driver job")
+    ntasks: int = Field(
+        default=1,
+        gt=0,
+        description=(
+            "sbatch -n and srun --ntasks: MPI tasks per driver job (the driver "
+            "decomposes latitude bands across them)"
+        ),
+    )
+    cpus: int = Field(
+        default=8, gt=0, description="sbatch -c for each driver job (cores per task)"
+    )
+    srun_args: str = Field(
+        default="",
+        description="Extra srun options for the driver launch, e.g. --cpu-bind=cores",
+    )
+    extra_args: str = Field(
+        default="",
+        description=(
+            "Extra sbatch directives appended verbatim, e.g. --mem=0 or --exclusive"
+        ),
+    )
     queue_wait_s: int = Field(
         default=3600,
         gt=0,
@@ -188,8 +208,19 @@ class SlurmSection(StrictModel):
 
     @property
     def sbatch_args(self) -> str:
-        """ASSAY_SBATCH_ARGS: one node, one task, the configured cpus."""
-        return f"-A {self.account} -q {self.qos} -p {self.partition} -N 1 -n 1 -c {self.cpus}"
+        """ASSAY_SBATCH_ARGS: one node, the configured tasks and cpus per
+        task, then the extra directives verbatim."""
+        base = (
+            f"-A {self.account} -q {self.qos} -p {self.partition} "
+            f"-N 1 -n {self.ntasks} -c {self.cpus}"
+        )
+        return f"{base} {self.extra_args}".strip()
+
+    @property
+    def srun_args_value(self) -> str:
+        """ASSAY_SRUN_ARGS: the task count (always, so sbatch -n and srun
+        --ntasks agree) then the extra srun options."""
+        return f"--ntasks={self.ntasks} {self.srun_args}".strip()
 
 
 class UvSection(StrictModel):

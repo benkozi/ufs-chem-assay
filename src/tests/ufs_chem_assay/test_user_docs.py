@@ -10,11 +10,12 @@ from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _RUNBOOK = _REPO_ROOT / "docs" / "ursa-runbook.md"
+_GCAFS_RUNBOOK = _REPO_ROOT / "docs" / "gcafs-anthro-runbook.md"
 _README = _REPO_ROOT / "README.md"
 
 
 def _user_facing_files() -> list[Path]:
-    files = [_RUNBOOK]
+    files = [_RUNBOOK, _GCAFS_RUNBOOK]
     files += sorted((_REPO_ROOT / "config").glob("*.yaml"))
     return files
 
@@ -45,9 +46,40 @@ def test_nothing_user_specific(path: Path) -> None:
         assert needle not in text, f"{path.name} contains {needle!r}"
 
 
-def test_runbook_never_mentions_the_design() -> None:
-    assert "design/" not in _RUNBOOK.read_text()
-    assert "design doc" not in _RUNBOOK.read_text().lower()
+@pytest.mark.parametrize("path", [_RUNBOOK, _GCAFS_RUNBOOK], ids=lambda p: p.name)
+def test_runbook_never_mentions_the_design(path: Path) -> None:
+    assert "design/" not in path.read_text()
+    assert "design doc" not in path.read_text().lower()
+
+
+def test_gcafs_anthro_runbook_covers_the_use_case() -> None:
+    # The dedicated runbook: placed inputs, the override list, the run, the
+    # publish, the cold start, the four-rank check — and it names the
+    # suite and run config the CLI resolves. No scratch paths, no users.
+    text = _GCAFS_RUNBOOK.read_text()
+    for needle in (
+        "ursa-runbook.md",
+        "data/gcafs-anthro",
+        "sha256sum",
+        "fetch --suite-config=gcafs-anthro-suite.yaml",
+        "GCAFS=(",
+        "harness:suite_config=gcafs-anthro-suite.yaml",
+        "slurm:qos=batch",
+        "harness:run_timeout_s=28800",
+        "slurm:srun_args=--cpu-bind=cores",
+        "slurm:extra_args=--mem=0",
+        "harness:env:OMP_NUM_THREADS=1",
+        "harness:env:OPENBLAS_DEFAULT_NUM_THREADS=1",
+        'config/ursa.yaml --dry-run --override "${GCAFS[@]}"',
+        "publish-baselines",
+        "baselines:enabled=true",
+        "slurm:ntasks=4",
+        "report-mem",
+    ):
+        assert needle in text, needle
+    assert "ROOT=" not in text  # inherits $ROOT from the Ursa runbook
+    for scratch in ("/scratch3", "/scratch4", "RUNDIRS"):
+        assert scratch not in text, scratch
 
 
 def test_runbook_uses_placeholders_and_ref_variables() -> None:

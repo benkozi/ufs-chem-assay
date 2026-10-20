@@ -71,13 +71,16 @@ def render_job_script(
     modulefile: str | None,
     env: dict[str, str],
     command: str,
+    srun_args: str,
     template_text: str | None = None,
     extra: dict[str, object] | None = None,
 ) -> str:
     """The job script text for one command: every per-job setting as a
     #SBATCH directive, the module block when a modulefile is given, the
-    exports, then `srun --ntasks=1 <command>` — MPI programs inside a batch
-    job need Slurm's PMI endpoint, which only srun provides."""
+    exports, then `srun <srun_args> <command>` — MPI programs inside a batch
+    job need Slurm's PMI endpoint, which only srun provides — bracketed by
+    tic/toc timestamps and followed by RDHPCS's report-mem when present, so
+    the job's output records its own wall time and memory."""
     text = TEMPLATE_PATH.read_text() if template_text is None else template_text
     # Not HTML: the template is a bash/Slurm batch script and the values are
     # the harness's own validated config. Autoescaping would corrupt shell
@@ -95,6 +98,7 @@ def render_job_script(
         modulefile=modulefile,
         env=env,
         command=command,
+        srun_args=srun_args,
         **(extra or {}),
     )
 
@@ -136,6 +140,7 @@ def write_job_script(
             command=" ".join(
                 shlex.quote(part) for part in driver_command(app_settings, driver_yaml)
             ),
+            srun_args=settings.srun_args,
         )
     )
     return script

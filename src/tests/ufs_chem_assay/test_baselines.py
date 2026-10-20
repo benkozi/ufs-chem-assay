@@ -293,6 +293,7 @@ def test_publish_probes_writes_the_manifest_syncs_and_repoints(
     assert manifest.harness_commit == HARNESS_COMMIT
     assert manifest.platform is Platform.LOCAL
     assert manifest.runtime is Runtime.DOCKER
+    assert manifest.launch is None  # docker: no job geometry to record
     assert manifest.published_at.tzinfo is not None
     assert manifest.published_at >= before
     assert "@" in manifest.published_by

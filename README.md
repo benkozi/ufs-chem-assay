@@ -15,8 +15,12 @@ checkout, data directory — lives in an application adapter; CECE is the
 shipped one (`application: cece`, the default in every suite and run
 config), and a session runs one application. Configurations the harness
 carries live under `src/tests/config/<application>/<configuration>/`, each
-beside the suites that sweep it. Design rationale lives in
-[design/design.md](design/design.md).
+beside the suites that sweep it: `cece/maccity/` (a 4x5 CO configuration
+over one public input; the default suite and the CI integration run) and
+`cece/gcafs-anthro/` (the global anthropogenic use case — 0.25°, 25 hourly
+steps, 32 streams over seven placed inputs; Ursa only, see
+[docs/gcafs-anthro-runbook.md](docs/gcafs-anthro-runbook.md)). Design
+rationale lives in [design/design.md](design/design.md).
 
 ## Prerequisites
 
@@ -207,7 +211,10 @@ Options:
   `s3://bucket/key` object, whether the bucket allows anonymous reads,
   the destination relative to the checkout's `data/`, and the expected
   digest; `ufs-chem-assay fetch` stages them, verifying the digest before
-  a download replaces anything), the per-combination timeout
+  a download replaces anything. `url: null` declares an input with no
+  remote source yet — placed at `dst` by hand, verified by its required
+  `sha256`, never downloaded: `fetch` names the file to place when it is
+  absent or wrong), the per-combination timeout
   (`timeout_s`), and the sweep — which, for CECE,
   mirrors the driver-config structure, attaching swept
   values to named streams (or positional species entries). A sweep value
@@ -481,10 +488,18 @@ default once `ASSAY_PLATFORM` is anything but `local`; the platform is
 detected from the hostname and overridable). Each job is
 a rendered script, `<combo_id>.sbatch`, kept beside the combo's `.yaml`
 and `.out` so a failed job is reproducible by hand: `#SBATCH` directives
-from `ASSAY_SBATCH_ARGS` (account, QOS, partition, cpus) and the suite's
+from `ASSAY_SBATCH_ARGS` (account, QOS, partition, `-N 1 -n <ntasks> -c
+<cpus>`, then `slurm.extra_args` verbatim) and the suite's
 `timeout_s` rounded up to whole minutes, the `CECE_MODULEFILE` load,
-the `ASSAY_JOB_ENV` exports, and the driver behind `srun --ntasks=1`
-(MPI inside a batch job needs Slurm's PMI endpoint). Two environments stay apart on
+the `ASSAY_JOB_ENV` exports, and the driver behind `srun` with
+`ASSAY_SRUN_ARGS` (`--ntasks=<ntasks>` plus `slurm.srun_args`, e.g.
+`--cpu-bind=cores`; MPI inside a batch job needs Slurm's PMI endpoint),
+bracketed by `tic`/`toc` timestamps and followed by RDHPCS's `report-mem`
+when present, so the job's `.out` records its own wall time and memory.
+The task count is a run-config choice, not a configuration one: the driver
+splits latitude bands across the ranks it is given, and `run.yaml` (and a
+published `baseline.yaml`) records the launch — `sbatch_args`,
+`srun_args`, `job_env` — under `launch`. Two environments stay apart on
 purpose: the harness venv never sees the modulefile (spack-stack's
 `PYTHONPATH` would shadow its numpy), the driver always does. Analysis
 runs in the pytest process, so cap `ASSAY_DASK_NWORKERS` on a login node.
@@ -494,7 +509,11 @@ shell already suits both the harness and the driver; not Ursa, where the
 two environments conflict.
 
 The run config above assembles all of that; the same steps by hand are
-in [docs/ursa-runbook.md](docs/ursa-runbook.md).
+in [docs/ursa-runbook.md](docs/ursa-runbook.md). The gcafs-anthro
+configuration runs through the same template plus one override list
+(the batch QOS, a raised timeout cap, one task on one bound core with the
+single-thread exports, `--mem=0`):
+[docs/gcafs-anthro-runbook.md](docs/gcafs-anthro-runbook.md).
 
 ## CI and releases
 
@@ -719,6 +738,7 @@ Harness-wide:
 | `ASSAY_RUNTIME`                 | how the driver is spawned (`docker`, `native`, `slurm`) | `docker` on `local`, `slurm` elsewhere |
 | `ASSAY_LAUNCHER`                | command prefix for native driver runs (e.g. `srun --ntasks=1`) | empty (run directly) |
 | `ASSAY_SBATCH_ARGS`             | slurm runtime: sbatch options per driver job (`-A … -q … -p … -N 1 -n 1 -c …`) | empty |
+| `ASSAY_SRUN_ARGS`               | slurm runtime: options of the `srun` that launches the driver inside each job (the run config renders `--ntasks=<slurm.ntasks> <slurm.srun_args>`) | `--ntasks=1` |
 | `ASSAY_SLURM_QUEUE_WAIT_S`      | slurm runtime: seconds a driver job may wait in the queue before the harness cancels it (the run config's `slurm.queue_wait_s`) | `3600` |
 | `ASSAY_JOB_ENV`                 | slurm runtime: `NAME=VALUE` pairs exported inside each driver job | empty |
 | `ASSAY_RUN_TIMEOUT_S`           | caps the suite `timeout_s` when smaller        | `300`                            |
