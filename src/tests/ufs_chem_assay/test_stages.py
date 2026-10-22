@@ -299,6 +299,37 @@ def test_data_and_harness_stages_export_the_input_search_path_when_set(
         assert f"export ASSAY_INPUT_SEARCH_PATH={os.pathsep.join(dirs)}" in text
 
 
+def test_gcafs_anthro_template_renders_the_use_case_as_shipped(tmp_path: Path) -> None:
+    config = load_run_config(
+        run_config_file(tmp_path, "ursa-gcafs-anthro.yaml", root_dir=_URSA_ROOT)
+    )
+    text = render_stage(Stage.HARNESS, config, _CECE).text
+    for line in (
+        "export ASSAY_SBATCH_ARGS='-A epic -q batch -p u1-compute -N 1 -n 1 -c 1 --mem=0'",
+        "export ASSAY_SRUN_ARGS='--ntasks=1 --cpu-bind=cores'",
+        "export ASSAY_RUN_TIMEOUT_S=28800",
+        "export ASSAY_SLURM_QUEUE_WAIT_S=14400",
+        "--suite-config=gcafs-anthro-suite.yaml",
+    ):
+        assert line in text, line
+    job_env = next(
+        l for l in text.splitlines() if l.startswith("export ASSAY_JOB_ENV=")
+    )
+    for pair in (
+        "I_MPI_FABRICS=shm",
+        "FI_PROVIDER=tcp",
+        "OMP_NUM_THREADS=1",
+        "OMP_PROC_BIND=spread",
+        "OMP_PLACES=threads",
+        "KOKKOS_NUM_THREADS=1",
+        "MKL_NUM_THREADS=1",
+        "OPENBLAS_NUM_THREADS=1",
+        "OPENBLAS_DEFAULT_NUM_THREADS=1",
+    ):
+        assert pair in job_env, pair
+    assert "ASSAY_INPUT_SEARCH_PATH" not in text
+
+
 def test_harness_stage_exports_the_srun_geometry_under_slurm_only(
     tmp_path: Path, local: RunConfig
 ) -> None:

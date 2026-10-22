@@ -24,12 +24,13 @@ def test_templates_live_in_config() -> None:
     assert TEMPLATES_DIR == _REPO_ROOT / "config"
     assert sorted(p.name for p in TEMPLATES_DIR.glob("*.yaml")) == [
         "local.yaml",
+        "ursa-gcafs-anthro.yaml",
         "ursa.yaml",
     ]
     assert not (_REPO_ROOT / "scripts").exists()  # nothing hand-written ships there
 
 
-@pytest.mark.parametrize("name", ["local.yaml", "ursa.yaml"])
+@pytest.mark.parametrize("name", ["local.yaml", "ursa.yaml", "ursa-gcafs-anthro.yaml"])
 def test_templates_carry_the_applications_map(name: str) -> None:
     raw = yaml.safe_load((TEMPLATES_DIR / name).read_text())
     assert list(raw["applications"]) == ["cece"]
@@ -60,25 +61,22 @@ def test_gcafs_anthro_runbook_covers_the_use_case() -> None:
     for needle in (
         "ursa-runbook.md",
         "data/gcafs-anthro",
+        "sources",
         "ASSAY_INPUT_SEARCH_PATH",
-        "data:input_search_path=",
         "fetch --suite-config=gcafs-anthro-suite.yaml --record-digests",
         "git diff",
-        "GCAFS=(",
-        "harness:suite_config=gcafs-anthro-suite.yaml",
-        "slurm:qos=batch",
-        "harness:run_timeout_s=28800",
-        "slurm:srun_args=--cpu-bind=cores",
-        "slurm:extra_args=--mem=0",
-        "harness:env:OMP_NUM_THREADS=1",
-        "harness:env:OPENBLAS_DEFAULT_NUM_THREADS=1",
-        'config/ursa.yaml --dry-run --override "${GCAFS[@]}"',
+        "config/ursa-gcafs-anthro.yaml --dry-run",
+        "config/ursa-gcafs-anthro.yaml --stage data --stage harness",
+        "--mem=0",
         "publish-baselines",
         "baselines:enabled=true",
         "slurm:ntasks=4",
         "report-mem",
     ):
         assert needle in text, needle
+    assert (
+        "GCAFS=(" not in text
+    )  # the override list became config/ursa-gcafs-anthro.yaml
     assert "ROOT=" not in text  # inherits $ROOT from the Ursa runbook
     for scratch in ("/scratch3", "/scratch4", "RUNDIRS"):
         assert scratch not in text, scratch

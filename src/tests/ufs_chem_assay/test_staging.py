@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
 from models.suite_config import InputFile, SuiteConfig
+from platforms import Platform
 from s3_sync import S3SyncConfig, S3SyncResult
 from staging import (
     STAGING_DIRNAME,
@@ -300,6 +301,72 @@ def test_url_inputs_are_never_linked(tmp_path: Path, mocker: MockerFixture) -> N
     (result,) = stage_inputs([_input()], tmp_path / "data", search_path=[originals])
     assert result.action == "downloaded"
     assert not (tmp_path / "data" / "MACCity_4x5.nc").is_symlink()
+
+
+# ── Declared per-platform sources ────────────────────────────────────────────
+
+
+def test_declared_source_for_the_platform_is_linked_without_a_search(
+    tmp_path: Path,
+) -> None:
+    original = tmp_path / "known" / "placed.nc"
+    original.parent.mkdir()
+    original.write_bytes(_PAYLOAD)
+    decoy = _originals(
+        tmp_path, "placed.nc", payload=b"decoy"
+    )  # would be ambiguous otherwise
+    data_dir = tmp_path / "data"
+    (result,) = stage_inputs(
+        [_input(url=None, dst="placed.nc", sources={"ursa": str(original)})],
+        data_dir,
+        search_path=[decoy],
+        platform=Platform.URSA,
+    )
+    assert result.action == "linked"
+    assert str(original) in result.detail
+    assert (data_dir / "placed.nc").resolve() == original.resolve()
+    assert result.sha256 == _DIGEST
+
+
+def test_declared_source_missing_is_a_named_failure_not_a_fallback(
+    tmp_path: Path,
+) -> None:
+    originals = _originals(tmp_path, "placed.nc")  # a search-path copy exists
+    data_dir = tmp_path / "data"
+    (result,) = stage_inputs(
+        [_input(url=None, dst="placed.nc", sources={"ursa": "/gone/placed.nc"})],
+        data_dir,
+        search_path=[originals],
+        platform=Platform.URSA,
+    )
+    assert result.action == "failed"
+    assert "declared source for ursa is missing: /gone/placed.nc" in result.detail
+    assert not (data_dir / "placed.nc").exists()
+
+
+def test_other_platforms_fall_back_to_the_search_path(tmp_path: Path) -> None:
+    originals = _originals(tmp_path, "placed.nc")
+    data_dir = tmp_path / "data"
+    (result,) = stage_inputs(
+        [_input(url=None, dst="placed.nc", sources={"ursa": "/gone/placed.nc"})],
+        data_dir,
+        search_path=[originals],
+        platform=Platform.LOCAL,
+    )
+    assert result.action == "linked"
+
+
+def test_declared_source_dry_run_plans_the_link(tmp_path: Path) -> None:
+    original = tmp_path / "known.nc"
+    original.write_bytes(_PAYLOAD)
+    (result,) = stage_inputs(
+        [_input(url=None, dst="placed.nc", sources={"ursa": str(original)})],
+        tmp_path / "data",
+        platform=Platform.URSA,
+        dry_run=True,
+    )
+    assert result.action == "would-link"
+    assert str(original) in result.detail
 
 
 # ── fetch --record-digests ────────────────────────────────────────────────────

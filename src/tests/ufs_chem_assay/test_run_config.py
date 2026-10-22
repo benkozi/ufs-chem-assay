@@ -54,7 +54,7 @@ def test_templates_list_every_accepted_key() -> None:
     # section appears, null where the default applies.
     import yaml
 
-    for name in ("ursa.yaml", "local.yaml"):
+    for name in ("ursa.yaml", "local.yaml", "ursa-gcafs-anthro.yaml"):
         raw = yaml.safe_load((TEMPLATES_DIR / name).read_text())
         assert set(raw["harness"]) == set(HarnessSection.model_fields), name
         assert set(raw["applications"]["cece"]) == set(CeceRunSection.model_fields), (
@@ -191,6 +191,31 @@ def test_data_input_search_path_defaults_empty_and_parses() -> None:
     ]
 
 
+def test_gcafs_anthro_template_bakes_in_the_use_case() -> None:
+    # The static Ursa run config for the use case: no override list.
+    config = load_run_config(TEMPLATES_DIR / "ursa-gcafs-anthro.yaml")
+    assert config.platform is Platform.URSA
+    assert config.harness.suite_config == "gcafs-anthro-suite.yaml"
+    assert config.harness.run_timeout_s == 28800
+    assert config.harness.env["I_MPI_FABRICS"] == "shm"
+    assert config.harness.env["OMP_NUM_THREADS"] == "1"
+    assert config.harness.env["OPENBLAS_DEFAULT_NUM_THREADS"] == "1"
+    assert config.baselines.enabled is False
+    assert config.slurm is not None
+    assert (
+        config.slurm.sbatch_args
+        == "-A epic -q batch -p u1-compute -N 1 -n 1 -c 1 --mem=0"
+    )
+    assert config.slurm.srun_args_value == "--ntasks=1 --cpu-bind=cores"
+    assert config.slurm.queue_wait_s == 14400
+    assert config.data.input_search_path == []  # the suite's sources: cover Ursa
+    # Everything else is the Ursa template's.
+    ursa = load_run_config(TEMPLATES_DIR / "ursa.yaml")
+    assert config.applications == ursa.applications
+    assert config.harness.output_root == ursa.harness.output_root
+    assert config.slurm.account == ursa.slurm.account if ursa.slurm else False
+
+
 def test_slurm_geometry_defaults_and_renders() -> None:
     # The template: one task, eight cores, no extra directives, no srun
     # options beyond the task count — maccity's jobs as they were.
@@ -233,7 +258,7 @@ def test_slurm_section_describes_the_per_driver_job(tmp_path: Path) -> None:
 def test_templates_ship_without_a_root_and_derive_the_harness_parent() -> None:
     # The runbook layout: $ROOT/ufs-chem-assay beside $ROOT/CECE — so the
     # harness checkout's parent is the root, and no YAML edit is needed.
-    for name in ("ursa.yaml", "local.yaml"):
+    for name in ("ursa.yaml", "local.yaml", "ursa-gcafs-anthro.yaml"):
         # no top-level root_dir line (baselines.root_dir is a different key)
         assert (
             re.search(r"^root_dir:", (TEMPLATES_DIR / name).read_text(), re.MULTILINE)
@@ -442,7 +467,7 @@ def test_example_keys_are_rejected(tmp_path: Path, dotted: str) -> None:
 
 
 def test_baselines_store_defaults_and_publish_keys_default_off() -> None:
-    for name in ("ursa.yaml", "local.yaml"):
+    for name in ("ursa.yaml", "local.yaml", "ursa-gcafs-anthro.yaml"):
         config = load_run_config(TEMPLATES_DIR / name)
         assert config.baselines.store == "s3://ufs-chem/baselines", name
         assert config.harness.publish_baselines is False, name

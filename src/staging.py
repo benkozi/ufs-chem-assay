@@ -30,6 +30,7 @@ from ulid import ULID
 from logs import get_logger
 from models.base import StrictModel
 from models.suite_config import InputFile, SuiteConfig
+from platforms import Platform
 from s3_sync import S3SyncConfig, check_reachable, sync
 
 logger = get_logger("staging")
@@ -198,29 +199,44 @@ def _find_source(name: str, search_path: Sequence[Path]) -> list[Path]:
 
 
 def _link_source_less(
-    target: Path, search_path: Sequence[Path], *, dry_run: bool
+    target: Path,
+    search_path: Sequence[Path],
+    *,
+    dry_run: bool,
+    declared: PurePosixPath | None = None,
+    platform: Platform | None = None,
 ) -> tuple[str | None, str]:
-    """Link an absent source-less input from the search path. Returns
-    (error, note): error set when nothing was (or would be) linked; note
-    describes what happened for the result's detail."""
-    search = ", ".join(str(d) for d in search_path)
-    if not search_path:
-        return (
-            f"absent and no input search path is set ({ENV_INPUT_SEARCH_PATH}); "
-            f"place or link the file at {target}"
-        ), ""
-    found = _find_source(target.name, search_path)
-    if not found:
-        return (
-            f"absent and not found under the input search path ({search}); "
-            f"place or link the file at {target}"
-        ), ""
-    if len(found) > 1:
-        return (
-            f"absent and ambiguous under the input search path: "
-            f"{', '.join(str(p) for p in found)}; place or link the file at {target}"
-        ), ""
-    (source,) = found
+    """Link an absent source-less input: from its declared source for this
+    platform when the suite names one (a missing declared file is a named
+    failure, never a fallback), else from the one basename match under the
+    search path. Returns (error, note): error set when nothing was (or
+    would be) linked; note describes what happened for the result's detail."""
+    if declared is not None:
+        source = Path(declared)
+        if not source.is_file():
+            return (
+                f"declared source for {platform} is missing: {declared}; "
+                f"place or link the file at {target}"
+            ), ""
+    else:
+        search = ", ".join(str(d) for d in search_path)
+        if not search_path:
+            return (
+                f"absent and no input search path is set ({ENV_INPUT_SEARCH_PATH}); "
+                f"place or link the file at {target}"
+            ), ""
+        found = _find_source(target.name, search_path)
+        if not found:
+            return (
+                f"absent and not found under the input search path ({search}); "
+                f"place or link the file at {target}"
+            ), ""
+        if len(found) > 1:
+            return (
+                f"absent and ambiguous under the input search path: "
+                f"{', '.join(str(p) for p in found)}; place or link the file at {target}"
+            ), ""
+        (source,) = found
     if dry_run:
         return None, f"would link to {source}"
     if target.is_symlink():  # dangling: is_file() was False
@@ -237,13 +253,22 @@ def _stage_source_less(
     *,
     dry_run: bool,
     record_digests: bool,
+    platform: Platform | None,
 ) -> StagedInput:
     """The url-null path: present → verify (and record when asked); absent →
-    link from the search path, then verify. Never the network."""
+    link from the declared source for this platform or the search path,
+    then verify. Never the network."""
     assert entry.sha256 is not None  # the model requires it without a url
     note = ""
     if not target.is_file():
-        error, note = _link_source_less(target, search_path, dry_run=dry_run)
+        declared = (
+            entry.sources.get(platform)
+            if entry.sources is not None and platform is not None
+            else None
+        )
+        error, note = _link_source_less(
+            target, search_path, dry_run=dry_run, declared=declared, platform=platform
+        )
         if error is not None:
             return StagedInput(
                 url=None, path=target, action="failed", detail=error, sha256=None
@@ -286,13 +311,16 @@ def stage_inputs(
     dry_run: bool = False,
     search_path: Sequence[Path] = (),
     record_digests: bool = False,
+    platform: Platform | None = None,
 ) -> list[StagedInput]:
     """Stage every input into data_dir: present-and-verified files are
     skipped without touching the network; the rest are fetched one by one
     (every input attempted even after a failure). An input with no remote
-    source (url null) is never fetched: absent, it is symlinked from the one
-    basename match under `search_path` (none or several is a failure naming
-    the path to place the file at) and then verified like any present file;
+    source (url null) is never fetched: absent, it is symlinked from the
+    suite's declared source for `platform` when there is one, else from the
+    one basename match under `search_path` (none or several is a failure
+    naming the path to place the file at), and then verified like any
+    present file;
     with `record_digests`, a present file whose digest differs from the
     declared one is reported `recorded` with its digest instead of failed.
     A dry run classifies, plans links, and passes the wrapper's own dry run
@@ -314,6 +342,7 @@ def stage_inputs(
                 search_path,
                 dry_run=dry_run,
                 record_digests=record_digests,
+                platform=platform,
             )
             log = logger.error if result.action == "failed" else logger.info
             log("%s: %s (%s)", target, result.action, result.detail)

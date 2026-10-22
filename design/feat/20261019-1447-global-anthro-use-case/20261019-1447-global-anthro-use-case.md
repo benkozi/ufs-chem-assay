@@ -184,6 +184,18 @@ CECE_ROOT_DIR=$ROOT/CECE uv run --no-sync ufs-chem-assay fetch --suite-config=gc
 
 **Runbook step 1 becomes**: export the search path (or put it in the override list), `fetch --record-digests --suite-config=gcafs-anthro-suite.yaml`, read the seven `linked` + `recorded` lines, `git diff` the suite, commit. Re-running `fetch` afterwards is seven `skipped (sha256 verified)` through the links (one digest pass over the originals each time — a size/mtime shortcut is Future work if that cost bites).
 
+### 4b. Known locations: per-platform input sources in the suite (user, 2026-10-22)
+
+The search path answers "somewhere under these trees"; on Ursa the exact files are known (the v5 configuration names them), so the suite says so and `fetch` needs no search path there.
+
+**The model.** `InputFile.sources: dict[Platform, PurePosixPath] | None` — "on this platform the file is here", keyed by the harness's `Platform` enum (`local`, `ursa`), absolute paths, allowed only with `url: null` (a URL input has its source; the validator refuses both). The seven gcafs-anthro entries carry `sources: {ursa: <the v5 path>}`: the three CEDS files, EDGAR, and the CAMS daily and weekly files under the `prep_emissions` `INPUT` tree, the CAMS hourly file under the author's `cece-gcafs/input` directory. The suite thereby records provenance too — which file, where, on which machine — and stays usable elsewhere: another platform without an entry falls back to the search path, and a laptop with the files placed by hand needs neither.
+
+**Precedence in `fetch`** for an absent source-less input, on `Settings.platform` (detected from the hostname, `ASSAY_PLATFORM` to override): (1) `sources[platform]`, when declared — the path must be an existing file, else `failed: declared source for <platform> is missing: <path>` (a purged scratch area says exactly which file is gone; the search path is *not* consulted for it, because a declared location that is wrong is a fact to surface, not to paper over); (2) otherwise the search path as in 4a; (3) otherwise the failure naming the path to place the file at. The link, the verification, `--record-digests`, and the dry run's `would-link` are unchanged. Present files are never touched, as before.
+
+**Why in the suite and not in `config/ursa.yaml`.** The template is per machine and per run, and `test_user_docs` keeps `config/` free of anyone's scratch paths — a campaign's staging area under another user's `RUNDIRS` is exactly that. The suite is per configuration: the files *are* this configuration's inputs, and their known locations belong with their names and digests. The `test_nothing_user_specific` rule stays as it is (docs and templates); the suite tree is not user-facing documentation and is where configuration facts live.
+
+**Runbook step 1 becomes** one command on Ursa — `fetch --suite-config=gcafs-anthro-suite.yaml --record-digests` — then `git diff` and commit; the `ASSAY_INPUT_SEARCH_PATH` paragraph moves to "on another machine, or if the files have moved".
+
 ### 5. Process geometry — `settings.py`, `cli/run_config.py`, `cli/stages.py`, `templates/driver-job.sbatch.j2`, `models/suite_config.py`, `config/ursa.yaml`
 
 - **`Settings.srun_args: str = Field("--ntasks=1", description="slurm runtime: options for the srun that launches the driver inside each job, word-split like a shell (e.g. '--ntasks=4 --cpu-bind=cores'); the harness never derives the task count from sbatch_args")`**. The template line becomes `srun {{ srun_args }} {{ command }}` (rendered from the setting; StrictUndefined keeps a missing value a render failure). The default reproduces today's launch line exactly.
@@ -194,7 +206,7 @@ CECE_ROOT_DIR=$ROOT/CECE uv run --no-sync ufs-chem-assay fetch --suite-config=gc
 - **`native` runtime**: unchanged — `ASSAY_LAUNCHER` already carries an arbitrary `srun …` prefix inside an allocation.
 - Why this and not sweeping the task count as a suite dimension: the task count is not a property of the configuration under test (fact 5), a suite's combinations are configuration diffs, and the comparison against one baseline already answers "does the rank count change the output" (the four-rank TODO) without multiplying combinations.
 
-### 6. The run on Ursa — overrides, not a new template
+### 6. The run on Ursa — overrides, not a new template (superseded 2026-10-22: `config/ursa-gcafs-anthro.yaml`, see section 6a)
 
 `config/ursa.yaml` runs as shipped for maccity. The gcafs-anthro run is the same template plus one override list — the suite, the batch QOS and cap, and the author's single-thread geometry — set once in the shell (runbook step 7a):
 
@@ -210,6 +222,10 @@ uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage data --stage ha
 ```
 
 (`harness:env:<NAME>=<value>` sets one key in the template's existing `env` mapping, so `I_MPI_FABRICS`/`FI_PROVIDER` stay; `$ROOT/scripts/run-config.yaml` shows the merged result. `tmux` as before; `queue_wait_s` is an hour — add `slurm:queue_wait_s=14400` when `batch` is busy.) The job script for the combination reads `#SBATCH -A epic -q batch -p u1-compute -N 1 -n 1 -c 1 --mem=0`, `--time=240`, the module block, the nine exports, `tic`, `srun --ntasks=1 --cpu-bind=cores ./build/cece_standalone_driver <combo>.yaml`, `toc`, `report-mem` — the author's `cece_job.sh` with the harness's naming, output, and chdir, reproducible by hand with `sbatch --wait` as today. `--mem=0` is the author's answer to `-c 1` (audit fact 11: per-cpu 6–12 G were not enough); the account is the run config's `epic` (confirmed by the user 2026-10-19; the author's script charges `arl`, which is not carried over). The four-rank run (the TODO) is the same list with `slurm:ntasks=4` (and `slurm:cpus` still 1: `-c` is per task).
+
+### 6a. A static run config instead of the override list (user, 2026-10-22)
+
+With the inputs' locations in the suite (4b), nothing in the `GCAFS` list was machine-specific any more — it was the use case's own settings, which belong in a file that runs as shipped. **`config/ursa-gcafs-anthro.yaml`** is `config/ursa.yaml` with those values baked in and each difference commented at its key: `harness.suite_config: gcafs-anthro-suite.yaml`, `harness.run_timeout_s: 28800`, the seven single-thread exports beside the two MPI hints in `harness.env`, `slurm.qos: batch`, `slurm.queue_wait_s: 14400`, `slurm.ntasks: 1`, `slurm.cpus: 1`, `slurm.srun_args: --cpu-bind=cores`, `slurm.extra_args: --mem=0`; `baselines.enabled: false` and no root, as the first run needs. It names no path. `config/ursa.yaml` stays the maccity default (user decision 6 stands). The two later runs flip one key each from the command line rather than editing the shipped file: the cold start `baselines:enabled=true baselines:root_dir=<dir>`, the four-rank check `slurm:ntasks=4`. `test_user_docs` pins the three templates; `test_run_config` and `test_stages` check the baked-in values and the rendered exports; the runbook's steps 2–7 use the file.
 
 ### 7. Baselines — publish, then the cold start
 
@@ -353,6 +369,18 @@ Section 4a implemented red → green on top of the committed first pass (`288740
 
 **Remaining.** On Ursa: `export ASSAY_INPUT_SEARCH_PATH=<tree>:<tree>` (or `data:input_search_path=` in the `GCAFS` list), `fetch --suite-config=gcafs-anthro-suite.yaml --record-digests`, review and commit the seven digests, then the runbook's steps 2–7 and the pull-request TODOs.
 
+## Implementation notes, third pass (2026-10-22): declared sources and the static run config
+
+Sections 4b and 6a, red → green on top of the second pass (committed by the user in between).
+
+**Files.** `src/models/suite_config.py` (`InputFile.sources: dict[Platform, PurePosixPath] | None`, absolute paths, refused with a url), `src/staging.py` (`_link_source_less` takes the declared source for the platform first — missing → `declared source for <platform> is missing: <path>`, never the search path — then the search path; `stage_inputs(platform=…)`), `src/cli/main.py` (`platform=settings.platform`), `src/tests/config/cece/gcafs-anthro/gcafs-anthro-suite.yaml` (`sources: {ursa: <v5 path>}` on each of the seven entries, generated from the v5 file by basename; a scoped `yamllint disable rule:line-length` around `inputs:` for the long paths), **`config/ursa-gcafs-anthro.yaml`** (section 6a's values, each difference from `config/ursa.yaml` commented), `docs/gcafs-anthro-runbook.md` (step 1: one `fetch --record-digests`, the declared sources, the search path as the fallback when files move; step 2: the run config explained key by key; steps 3–7 on the file, one-key overrides for the cold start and the four-rank run), README (the three templates, `sources:` in the inputs paragraph, the pointer), `design.md`.
+
+**Tests** (708 passed, coverage 100 %, hooks green, every suite dry-runs — 2907 skipped —, simple-maccity under docker 21 passed): `test_suite_config.py` (sources parse, must be absolute, keyed by a known platform, refused with a url), `test_staging.py` (the declared source wins without a search, even beside an ambiguous search path; a missing declared source is a named failure, not a fallback; other platforms fall back; the dry run plans it), `test_cli.py` (the platform passed through; the fixture pins the hostname so the platform is `local`), `test_run_config.py` (the new template's baked-in values, and that everything else equals the Ursa template's), `test_stages.py` (the rendered exports of the new template), `test_user_docs.py` (three templates; the runbook names the run config and never the override list).
+
+**Details.** (1) `test_nothing_user_specific` still guards `docs/` and `config/`; the suite tree carries the Ursa paths deliberately (section 4b) and is not in that list. (2) The yamllint directive must stand alone on its line (a trailing comment disables nothing) — hence the two-line comment above `inputs:`. (3) `Settings.platform` is hostname-detected, so a by-hand `fetch` on an Ursa login node (`ufe0N`) picks the `ursa` sources without `ASSAY_PLATFORM`; inside an allocation (compute-node hostnames are a first-run item in the Ursa runbook) set `ASSAY_PLATFORM=ursa` — the data stage exports it from the run config anyway.
+
+**Remaining.** On Ursa: `fetch --suite-config=gcafs-anthro-suite.yaml --record-digests`, commit the seven digests, then `ufs-chem-assay run --config-file=config/ursa-gcafs-anthro.yaml` (dry run, then `--stage data --stage harness`), the publish, the cold start, the four-rank run, and the pull-request TODOs.
+
 # appendix: original notes
 
 ## always do
@@ -425,3 +453,5 @@ Issue #33 ("Integrate global anthropogenic use case", labels `enhancement`, `CEC
 - 2026-10-19 (user: implement, and add a dedicated runbook for the example): implemented as designed (see "Implementation notes"); the runbook is `docs/gcafs-anthro-runbook.md`, a file of its own on top of the Ursa runbook's first four steps, and section 8 records that. Every gate green locally; the Ursa steps are the user's.
 
 - 2026-10-22 (user: leave the data in place — no copies — and have the harness create the symlinks; record the digests automatically, committed like the baseline ULIDs): section 4a. `fetch` links source-less inputs from `ASSAY_INPUT_SEARCH_PATH` (run config `data.input_search_path`, exported by the stages) by basename, refusing ambiguity, replacing dangling links, never touching present files; `fetch --record-digests` rewrites the differing `sha256:` lines of the selected suites textually with a reload check, the ULID repoint's pattern, and the user commits the diff. Decision 4 and the runbook paragraph updated; plan step 4a added; a verification-cost shortcut noted as Future work. Implemented in the same session (Implementation notes, second entry).
+- 2026-10-22 (user: on Ursa the exact paths are known — wrap them in): section 4b. `InputFile.sources: {<platform>: <absolute path>}` on `url: null` entries; the seven gcafs-anthro entries carry their v5 Ursa paths; `fetch` links from the declared source for the session's platform first (a missing declared file is a named failure, never a silent fallback), the search path second. The suite keeps the provenance; `config/` and `docs/` stay free of scratch paths, so the existing user-docs rule is untouched. Implemented in the same session (Implementation notes, third entry).
+- 2026-10-22 (user: the override list also needs to go — a static configuration for Ursa): section 6a, `config/ursa-gcafs-anthro.yaml`, the Ursa template with the use case's values baked in and commented; the runbook's steps 2–7 use it, the cold start and four-rank runs flip one key each. Implemented in the same session (Implementation notes, third entry).

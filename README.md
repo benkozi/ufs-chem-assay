@@ -213,10 +213,13 @@ Options:
   digest; `ufs-chem-assay fetch` stages them, verifying the digest before
   a download replaces anything. `url: null` declares an input with no
   remote source yet, verified by its required `sha256` and never
-  downloaded: absent, `fetch` links it into place from the one file of
-  that name found under `ASSAY_INPUT_SEARCH_PATH` (the run config's
-  `data.input_search_path`: this machine's directories, never a suite's;
-  none or several matches fail, naming the path to place it at), and
+  downloaded: absent, `fetch` links it into place from the entry's
+  `sources:` path for the session's platform (`{ursa: /abs/path}` —
+  where the file is known to live; a missing declared file is a named
+  failure) or, without one, from the one file of that name found under
+  `ASSAY_INPUT_SEARCH_PATH` (the run config's `data.input_search_path`:
+  this machine's directories; none or several matches fail, naming the
+  path to place it at), and
   `fetch --record-digests` writes the on-disk `sha256` of every such input
   whose digest differs into the suite file — review the diff and commit,
   as with baseline ULIDs), the per-combination timeout
@@ -418,8 +421,9 @@ setting a run reads has a key in it: the `harness:` section mirrors every
 harness-wide setting (`ASSAY_*`) plus the pytest options, and each
 application's section under `applications:` mirrors its own settings
 (`CECE_*`) plus how to obtain and build it. The shipped templates
-(`config/local.yaml` for a laptop, `config/ursa.yaml` for Ursa) list every
-key and run as-is from a checkout laid out like the runbook:
+(`config/local.yaml` for a laptop, `config/ursa.yaml` for Ursa,
+`config/ursa-gcafs-anthro.yaml` for the gcafs-anthro use case on Ursa) list
+every key and run as-is from a checkout laid out like the runbook:
 
 ```yaml
 platform: ursa
@@ -515,10 +519,11 @@ two environments conflict.
 
 The run config above assembles all of that; the same steps by hand are
 in [docs/ursa-runbook.md](docs/ursa-runbook.md). The gcafs-anthro
-configuration runs through the same template plus one override list
-(the batch QOS, a raised timeout cap, one task on one bound core with the
-single-thread exports, `--mem=0`, and where its inputs live on the
-machine):
+configuration has its own run config, `config/ursa-gcafs-anthro.yaml`
+(the Ursa template with the suite, the batch QOS, a raised timeout cap,
+and one task on one bound core with the single-thread exports and
+`--mem=0` baked in; its inputs' Ursa locations are in the suite's
+`sources:`), and its own runbook:
 [docs/gcafs-anthro-runbook.md](docs/gcafs-anthro-runbook.md).
 
 ## CI and releases

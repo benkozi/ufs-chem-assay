@@ -22,7 +22,8 @@ analysed. The configurations the harness carries live under
 `src/tests/config/<application>/<configuration>/`, each beside the suites
 that sweep it (`cece/maccity/`: `maccity.yaml` and its three suites;
 `cece/gcafs-anthro/` since 2026-10-19: the global anthropogenic use case of
-issue #33, one sweep-less suite over seven placed inputs, Ursa only — see
+issue #33, one sweep-less suite over seven placed inputs with their Ursa
+locations, run as shipped by `config/ursa-gcafs-anthro.yaml`, Ursa only — see
 `design/feat/20261019-1447-global-anthro-use-case/20261019-1447-global-anthro-use-case.md`,
 which also brought `grid.nz`, the driver-level AMIO input knobs, stream
 `time_label`, and the full cadence set into the CECE model, source-less
@@ -264,8 +265,11 @@ so no base config can write a log into the checkout.
 reads: `inputs:` is a list of `{url, public, dst, sha256}` (`url: null`,
 2026-10-19: an input with no remote source yet, only ever verified —
 `sha256` required, `public` refused; 2026-10-22: absent, `fetch` symlinks
-it from the one basename match under `ASSAY_INPUT_SEARCH_PATH` /
-`data.input_search_path`, this machine's directories, and
+it from the entry's `sources: {<platform>: <absolute path>}` for the
+session's platform — where the file is known to live; a missing declared
+file is a named failure, never a fallback — else from the one basename
+match under `ASSAY_INPUT_SEARCH_PATH` / `data.input_search_path`, this
+machine's directories, and
 `fetch --record-digests` writes a differing on-disk digest into the
 suite's `sha256:` line textually with a reload check, the ULID repoint's
 pattern, for the user to commit) — an

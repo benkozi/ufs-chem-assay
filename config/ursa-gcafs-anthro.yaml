@@ -1,0 +1,68 @@
+# Run config for the gcafs-anthro configuration on Ursa (RDHPCS): config/ursa.yaml
+# with the use case's own settings baked in, so it runs as shipped — no overrides:
+#   ufs-chem-assay run --config-file=config/ursa-gcafs-anthro.yaml [--dry-run]
+# What differs from config/ursa.yaml is commented at each key: the suite; the
+# batch QOS, a longer queue allowance, and the raised timeout cap (the run takes
+# hours); one MPI task on one bound core, single-threaded, with the whole node's
+# memory (the author's known-good geometry). The inputs' Ursa locations are in
+# the suite itself (sources:), so nothing here names a path. See
+# docs/gcafs-anthro-runbook.md.
+platform: ursa
+# root_dir is derived: the parent of this harness checkout ($ROOT/ufs-chem-assay beside $ROOT/CECE).
+applications:
+  cece:
+    git_url: git@github.com:ufs-community/CECE.git
+    ref: develop
+    clone_dir:  # default <root_dir>/CECE; an existing checkout is used as-is
+    update_source: false
+    modulefile: cece_ursa.intelllvm
+    docker_image:  # unused under slurm
+    driver_path:  # null = the adapter's default (./build/cece_standalone_driver)
+    cmake_args:
+      - -DCMAKE_BUILD_TYPE=Release
+    build_jobs: 8
+    targets:
+      - cece_standalone_driver
+data:
+  warm_cartopy: true
+  input_search_path: []  # not needed here: the suite names each input's Ursa location
+baselines:
+  root_dir:  # for the cold-start run: --override baselines:root_dir=<dir> baselines:enabled=true
+  enabled: false  # the first run has no baseline to compare against; true once published
+  store: s3://ufs-chem/baselines
+harness:
+  suite_config: gcafs-anthro-suite.yaml  # the use case (config/ursa.yaml: simple-maccity)
+  output_root: ufs-chem-assay-output
+  clean_root: true
+  pytest_dry_run: false
+  pytest_args: []
+  publish_baselines: false  # publish from the login node afterwards (runbook step 5)
+  no_suite_update: false
+  runtime:  # slurm (the platform's default)
+  launcher: ''
+  env:  # exported inside the driver job: the MPI hints, then the single-thread geometry
+    I_MPI_FABRICS: shm
+    FI_PROVIDER: tcp
+    OMP_NUM_THREADS: 1
+    OMP_PROC_BIND: spread
+    OMP_PLACES: threads
+    KOKKOS_NUM_THREADS: 1
+    MKL_NUM_THREADS: 1
+    OPENBLAS_NUM_THREADS: 1
+    OPENBLAS_DEFAULT_NUM_THREADS: 1
+  dask_nworkers: 2
+  run_timeout_s: 28800  # the batch QOS cap; the suite's own timeout_s (14400 = --time=240) is the job limit
+  log_level:
+  config_search_path:
+  suite_config_search_path: []
+slurm:
+  account: epic
+  qos: batch  # 8 h cap; debug (30 min) rejects this job
+  queue_wait_s: 14400  # batch waits can be hours
+  partition: u1-compute
+  ntasks: 1  # the first run; 4 for the rank-invariance check (--override slurm:ntasks=4)
+  cpus: 1  # one core per task …
+  srun_args: --cpu-bind=cores  # … bound
+  extra_args: --mem=0  # the whole node's memory: the per-core default was not enough
+uv:
+  cache_dir:

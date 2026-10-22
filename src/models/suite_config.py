@@ -67,6 +67,15 @@ class InputFile(StrictModel):
             "replaces anything; null skips present non-empty files unverified"
         ),
     )
+    sources: dict[Platform, PurePosixPath] | None = Field(
+        None,
+        description=(
+            "Where the file is known to live, per platform (absolute paths): on "
+            "that platform `fetch` links an absent source-less input from here "
+            "before consulting the input search path, and a missing declared "
+            "file is a named failure; only with url null"
+        ),
+    )
 
     @field_validator("dst", mode="after")
     @classmethod
@@ -82,6 +91,19 @@ class InputFile(StrictModel):
             )
         return value
 
+    @field_validator("sources", mode="after")
+    @classmethod
+    def _sources_are_absolute(
+        cls, value: dict[Platform, PurePosixPath] | None
+    ) -> dict[Platform, PurePosixPath] | None:
+        if value is not None:
+            for platform, path in value.items():
+                if not path.is_absolute():
+                    raise ValueError(
+                        f"sources: the {platform.value} path must be absolute, got {str(path)!r}"
+                    )
+        return value
+
     @model_validator(mode="after")
     def _source_less_needs_a_digest(self) -> InputFile:
         if self.url is None:
@@ -94,6 +116,11 @@ class InputFile(StrictModel):
                 raise ValueError(
                     f"inputs: {str(self.dst)!r} has no url, so public has no meaning"
                 )
+        elif self.sources:
+            raise ValueError(
+                f"inputs: {str(self.dst)!r} has a url, so sources has no meaning "
+                "(a URL input is fetched, never linked)"
+            )
         return self
 
     def _url(self) -> str:

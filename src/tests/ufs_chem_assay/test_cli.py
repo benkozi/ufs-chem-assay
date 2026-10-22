@@ -19,6 +19,7 @@ from applications.registry import REGISTRY
 from baselines import BaselineState, StagedBaseline
 from cli.main import main
 from logs import LOGGER_NAME
+from platforms import Platform
 from s3_sync import S3SyncConfig
 from staging import Action, StagedInput
 from tests.ufs_chem_assay.baseline_runs import Run, fabricate_run, fake_sync
@@ -348,8 +349,10 @@ def fetch_env(
         "ASSAY_BASELINE_STORE",
         "ASSAY_ENABLE_BASELINE_COMPARISONS",
         "ASSAY_INPUT_SEARCH_PATH",
+        "ASSAY_PLATFORM",
     ):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr("socket.gethostname", lambda: "laptop")  # platform: local
     mocker.patch("cli.main.ensure_baselines", return_value=[])
     checkout = tmp_path / "checkout"
     (checkout / "data").mkdir(parents=True)
@@ -393,6 +396,7 @@ def test_fetch_stages_the_merged_inputs_of_the_selected_suites(
         "dry_run": False,
         "search_path": [],
         "record_digests": False,
+        "platform": Platform.LOCAL,
     }
     # The shared file once, the private extra once: merged across both suites
     # (the selector names the two fixtures; the built-in suites declare more).
@@ -438,6 +442,7 @@ def test_fetch_dry_run_passes_through(mocker: MockerFixture) -> None:
         "dry_run": True,
         "search_path": [],
         "record_digests": False,
+        "platform": Platform.LOCAL,
     }
 
 

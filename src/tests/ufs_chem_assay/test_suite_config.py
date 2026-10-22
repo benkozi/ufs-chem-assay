@@ -466,6 +466,60 @@ def test_input_without_source_rejects_public(
         )
 
 
+def test_input_sources_name_where_the_file_is_per_platform(
+    tmp_path: Path, cece_config_path: Path
+) -> None:
+    suite = load_suite(
+        _suite_with_inputs(
+            tmp_path,
+            cece_config_path,
+            "  - url: null\n    dst: gcafs-anthro/x.nc\n"
+            f"    sha256: {_MACCITY_SHA}\n"
+            "    sources:\n      ursa: /scratch/project/INPUT/x.nc\n",
+        )
+    )
+    (entry,) = suite.inputs
+    assert entry.sources == {
+        Platform.URSA: PurePosixPath("/scratch/project/INPUT/x.nc")
+    }
+
+
+@pytest.mark.parametrize(
+    ("sources", "needle"),
+    [
+        ("      ursa: relative/x.nc", "absolute"),
+        ("      mars: /scratch/x.nc", "mars"),
+    ],
+)
+def test_input_sources_must_be_absolute_and_keyed_by_platform(
+    tmp_path: Path, cece_config_path: Path, sources: str, needle: str
+) -> None:
+    with pytest.raises(ValidationError, match=needle):
+        load_suite(
+            _suite_with_inputs(
+                tmp_path,
+                cece_config_path,
+                "  - url: null\n    dst: x.nc\n"
+                f"    sha256: {_MACCITY_SHA}\n    sources:\n{sources}\n",
+            )
+        )
+
+
+def test_input_sources_refused_with_a_url(
+    tmp_path: Path, cece_config_path: Path
+) -> None:
+    # A URL input has its source already.
+    with pytest.raises(ValidationError, match="sources"):
+        load_suite(
+            _suite_with_inputs(
+                tmp_path,
+                cece_config_path,
+                f"  - url: {_MACCITY_URL}\n    dst: x.nc\n"
+                "    sources:\n      ursa: /scratch/x.nc\n",
+            )
+        )
+
+
 def test_input_without_source_has_no_prefix_or_filename() -> None:
     entry = InputFile(url=None, dst=PurePosixPath("x.nc"), sha256=_MACCITY_SHA)
     with pytest.raises(ValueError, match="no remote source"):

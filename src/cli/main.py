@@ -357,6 +357,7 @@ def _fetch(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         search_path=settings.input_search_path,
         record_digests=args.record_digests,
+        platform=settings.platform,
     )
     failed = [result for result in results if result.action == "failed"]
     for result in failed:

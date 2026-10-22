@@ -10,33 +10,53 @@ timeout_s: 14400  # per combination (4 h: the author's limit was 3 h); the first
 # No remote source yet (url: null): the files are copied there from the
 # existing staging area on Ursa, and `uv run ufs-chem-assay fetch
 # --suite-config=gcafs-anthro-suite.yaml` verifies each by sha256 and names any
-# that is missing — it never downloads these. Filling in the url lines (after
-# a one-time upload) makes them fetchable; the digests stay.
+# that is missing — it never downloads these. On Ursa each entry's `sources`
+# names the file's known location (the author's staging area) and fetch links
+# it from there; elsewhere ASSAY_INPUT_SEARCH_PATH is searched by basename.
+# Filling in the url lines (after a one-time upload) makes them fetchable; the
+# digests stay.
 # The all-zero digests are placeholders: replace them with `sha256sum` of the
 # placed files (runbook step 5) before the first run — until then fetch fails
 # naming each file, which is the point.
+# The Ursa source paths below exceed the line limit:
+# yamllint disable rule:line-length
 inputs:
   - url:
     dst: gcafs-anthro/BC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
     sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+    sources:
+      ursa: /scratch4/NCEPDEV/stmp/Wei.K.Li/RUNDIRS/C96_gcafs_cycled_noDA_catchem/gcdas.2021122012/prep_emissions.2816259/INPUT/CEDS/v2025-01/BC/BC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
   - url:
     dst: gcafs-anthro/OC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
     sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+    sources:
+      ursa: /scratch4/NCEPDEV/stmp/Wei.K.Li/RUNDIRS/C96_gcafs_cycled_noDA_catchem/gcdas.2021122012/prep_emissions.2816259/INPUT/CEDS/v2025-01/OC/OC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
   - url:
     dst: gcafs-anthro/SO2-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
     sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+    sources:
+      ursa: /scratch4/NCEPDEV/stmp/Wei.K.Li/RUNDIRS/C96_gcafs_cycled_noDA_catchem/gcdas.2021122012/prep_emissions.2816259/INPUT/CEDS/v2025-01/SO2/SO2-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
   - url:
     dst: gcafs-anthro/EDGAR_hourly_NOxScal.nc
     sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+    sources:
+      ursa: /scratch4/NCEPDEV/stmp/Wei.K.Li/RUNDIRS/C96_gcafs_cycled_noDA_catchem/gcdas.2021122012/prep_emissions.2816259/INPUT/EDGARv42/v2015-02/NO/EDGAR_hourly_NOxScal.nc
   - url:
     dst: gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_daily.nc
     sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+    sources:
+      ursa: /scratch4/NCEPDEV/stmp/Wei.K.Li/RUNDIRS/C96_gcafs_cycled_noDA_catchem/gcdas.2021122012/prep_emissions.2816259/INPUT/CAMS-TEMPO/v3.1-2021/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_daily.nc
   - url:
     dst: gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_weekly_fixtime.nc
     sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+    sources:
+      ursa: /scratch4/NCEPDEV/stmp/Wei.K.Li/RUNDIRS/C96_gcafs_cycled_noDA_catchem/gcdas.2021122012/prep_emissions.2816259/INPUT/CAMS-TEMPO/v3.1-2021/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_weekly_fixtime.nc
   - url:
     dst: gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_hourly_fixtime_utc.nc
     sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+    sources:
+      ursa: /scratch3/NCEPDEV/naqfc/Zachary.Moon/cece-gcafs/input/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_hourly_fixtime_utc.nc
+# yamllint enable rule:line-length
 # assertions: defaults — file count derived from the config (25), filenames
 # from the pattern, every output variable on (time, lev, lat, lon). The species
 # attribute dictionaries are pinned after the first run writes them.
