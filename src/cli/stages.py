@@ -49,6 +49,7 @@ SETTINGS_NOT_MIRRORED = frozenset(
         "srun_args",  # slurm: (ntasks, srun_args)
         "slurm_queue_wait_s",  # slurm.queue_wait_s
         "job_env",  # harness.env under the slurm runtime
+        "input_search_path",  # data.input_search_path
     }
 )
 
@@ -157,6 +158,14 @@ def _exports(
     ):
         if override is not None:
             exports.append((f"{ENV_PREFIX}BASELINE_{tolerance}", str(override)))
+    if config.data.input_search_path:
+        # Where fetch links source-less inputs from (this machine's trees).
+        exports.append(
+            (
+                f"{ENV_PREFIX}INPUT_SEARCH_PATH",
+                q(search_path_value(config.data.input_search_path)),
+            )
+        )
     exports.append(("PATH", '"$HOME/.local/bin:$PATH"'))
     exports.append(("UV_CACHE_DIR", q(config.uv_cache_dir)))
     if config.runtime is not Runtime.SLURM:

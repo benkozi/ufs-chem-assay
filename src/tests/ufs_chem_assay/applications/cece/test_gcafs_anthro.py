@@ -127,7 +127,9 @@ def test_dry_run_generates_everything_and_executes_nothing(tmp_path: Path) -> No
     assert {entry["bytes"] for entry in manifest["inputs"]} == {None}
     combos = pd.read_csv(root / "combos.csv")
     assert len(set(combos["combo_id"])) == 1
-    assert len(combos) == 32 * 3 + 25 * 3  # every stream and species-entry field, pinned
+    assert (
+        len(combos) == 32 * 3 + 25 * 3
+    )  # every stream and species-entry field, pinned
     assert not combos["swept"].any()
     report = pd.read_csv(root / "test-report.csv")
     assert set(report["result"]) == {"skipped"}

@@ -23,6 +23,7 @@ _SCRUBBED = (
     "BASELINE_STORE",
     "LOG_LEVEL",
     "SRUN_ARGS",
+    "INPUT_SEARCH_PATH",
 )
 
 
@@ -136,6 +137,18 @@ def test_search_path_single_directory_legacy_spelling(
 @pytest.mark.usefixtures("clean_env")
 def test_search_path_defaults_to_empty() -> None:
     assert Settings().suite_config_search_path == []
+
+
+def test_input_search_path_defaults_empty_and_splits_on_pathsep(
+    clean_env: pytest.MonkeyPatch,
+) -> None:
+    # Where fetch looks for source-less inputs to link from: per-machine
+    # directories, never in a suite.
+    assert Settings().input_search_path == []
+    clean_env.setenv(
+        f"{ENV_PREFIX}INPUT_SEARCH_PATH", os.pathsep.join(["/data/a", "/data/b"])
+    )
+    assert Settings().input_search_path == [Path("/data/a"), Path("/data/b")]
 
 
 def test_runtime_from_legacy_env(clean_env: pytest.MonkeyPatch) -> None:

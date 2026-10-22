@@ -262,8 +262,13 @@ so no base config can write a log into the checkout.
 
 **Inputs (2026-10-08).** A suite declares the files its base configuration
 reads: `inputs:` is a list of `{url, public, dst, sha256}` (`url: null`,
-2026-10-19: an input with no remote source yet, placed by hand and only
-ever verified — `sha256` required, `public` refused) — an
+2026-10-19: an input with no remote source yet, only ever verified —
+`sha256` required, `public` refused; 2026-10-22: absent, `fetch` symlinks
+it from the one basename match under `ASSAY_INPUT_SEARCH_PATH` /
+`data.input_search_path`, this machine's directories, and
+`fetch --record-digests` writes a differing on-disk digest into the
+suite's `sha256:` line textually with a reload check, the ULID repoint's
+pattern, for the user to commit) — an
 `s3://bucket/key` object, whether the bucket allows anonymous reads
 (`--no-sign-request`; CECE's sources are all public), the destination
 relative to the checkout's data directory (the adapter's `data_dirname`),

@@ -23,6 +23,7 @@ applications:  # one section per application in the run, keyed by adapter name
       - cece_standalone_driver
 data:
   warm_cartopy: false
+  input_search_path: []  # ASSAY_INPUT_SEARCH_PATH: dirs fetch links url-null inputs from, by basename
 baselines:
   root_dir:  # ASSAY_BASELINE_ROOT_DIR
   enabled: false  # ASSAY_ENABLE_BASELINE_COMPARISONS

@@ -3,7 +3,9 @@ overrides, dry-run, the effective-config artifact — through the CLI's
 main() in-process and through `python -m cli` once. The CLI speaks through
 the harness logger (`ufs-chem-assay.cli`), never print."""
 
+import hashlib
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -345,6 +347,7 @@ def fetch_env(
         "ASSAY_BASELINE_ROOT_DIR",
         "ASSAY_BASELINE_STORE",
         "ASSAY_ENABLE_BASELINE_COMPARISONS",
+        "ASSAY_INPUT_SEARCH_PATH",
     ):
         monkeypatch.delenv(key, raising=False)
     mocker.patch("cli.main.ensure_baselines", return_value=[])
@@ -386,7 +389,11 @@ def test_fetch_stages_the_merged_inputs_of_the_selected_suites(
     stage.assert_called_once()
     inputs, data_dir = stage.call_args.args
     assert data_dir == fetch_env / "data"
-    assert stage.call_args.kwargs == {"dry_run": False}
+    assert stage.call_args.kwargs == {
+        "dry_run": False,
+        "search_path": [],
+        "record_digests": False,
+    }
     # The shared file once, the private extra once: merged across both suites
     # (the selector names the two fixtures; the built-in suites declare more).
     assert [(str(i.dst), i.public) for i in inputs] == [
@@ -427,7 +434,103 @@ def test_fetch_exit_code_follows_the_results(
 def test_fetch_dry_run_passes_through(mocker: MockerFixture) -> None:
     stage = mocker.patch("cli.main.stage_inputs", return_value=[])
     assert main(["fetch", "--suite-config=one-suite.yaml", "--dry-run"]) == 0
-    assert stage.call_args.kwargs == {"dry_run": True}
+    assert stage.call_args.kwargs == {
+        "dry_run": True,
+        "search_path": [],
+        "record_digests": False,
+    }
+
+
+@pytest.mark.usefixtures("fetch_env")
+def test_fetch_passes_the_input_search_path_setting(
+    monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    monkeypatch.setenv(
+        "ASSAY_INPUT_SEARCH_PATH", os.pathsep.join(["/scratch/x/INPUT", "/scratch/y"])
+    )
+    stage = mocker.patch("cli.main.stage_inputs", return_value=[])
+    assert main(["fetch", "--suite-config=one-suite.yaml"]) == 0
+    assert stage.call_args.kwargs["search_path"] == [
+        Path("/scratch/x/INPUT"),
+        Path("/scratch/y"),
+    ]
+
+
+_PLACEHOLDER = "0" * 64
+
+
+def _placed_suite(fetch_env: Path, cece_config_path: Path) -> Path:
+    """A third fixture suite: one source-less input with the placeholder
+    digest, beside the two URL suites."""
+    suite_path = fetch_env.parent / "suites" / "three-suite.yaml"
+    suite_path.write_text(
+        f"name: three\nconfig_path: {cece_config_path}\ntimeout_s: 5\n"
+        "inputs:\n"
+        "  - url: null\n    dst: placed/x.nc\n"
+        f"    sha256: '{_PLACEHOLDER}'  # placeholder\n"
+    )
+    return suite_path
+
+
+def test_fetch_record_digests_rewrites_the_suite(
+    fetch_env: Path,
+    cece_config_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Real staging, no mocks: the placed file's digest lands in the suite
+    # file, every other byte kept, and the user commits the diff.
+    suite_path = _placed_suite(fetch_env, cece_config_path)
+    (fetch_env / "data" / "placed").mkdir()
+    (fetch_env / "data" / "placed" / "x.nc").write_bytes(b"placed bytes")
+    digest = hashlib.sha256(b"placed bytes").hexdigest()
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["fetch", "--suite-config=three-suite.yaml", "--record-digests"])
+    assert code == 0
+    text = suite_path.read_text()
+    assert f"    sha256: '{digest}'  # placeholder\n" in text
+    assert _PLACEHOLDER not in text
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("recorded" in m and "placed/x.nc" in m and digest in m for m in messages)
+    assert any("commit" in m for m in messages)
+    # Idempotent: the next fetch verifies and records nothing.
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert (
+            main(["fetch", "--suite-config=three-suite.yaml", "--record-digests"]) == 0
+        )
+    assert suite_path.read_text() == text
+
+
+def test_fetch_record_digests_refuses_a_dry_run(
+    fetch_env: Path, cece_config_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    _placed_suite(fetch_env, cece_config_path)
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "fetch",
+                "--suite-config=three-suite.yaml",
+                "--record-digests",
+                "--dry-run",
+            ]
+        )
+    assert code == 1
+    assert any("--dry-run" in r.getMessage() for r in caplog.records)
+
+
+def test_fetch_record_digests_reports_a_failed_rewrite(
+    fetch_env: Path,
+    cece_config_path: Path,
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _placed_suite(fetch_env, cece_config_path)
+    (fetch_env / "data" / "placed").mkdir()
+    (fetch_env / "data" / "placed" / "x.nc").write_bytes(b"placed bytes")
+    mocker.patch("cli.main.rewrite_suite_digests", side_effect=ValueError("boom"))
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(["fetch", "--suite-config=three-suite.yaml", "--record-digests"])
+    assert code == 1
+    assert any("boom" in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.usefixtures("fetch_env")

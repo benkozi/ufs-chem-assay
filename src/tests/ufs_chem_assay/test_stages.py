@@ -2,6 +2,7 @@
 per application. Golden-line assertions — the runbook (docs/ursa-runbook.md)
 and these scripts must stay recognisably the same commands."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -213,6 +214,7 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "UV_OFFLINE",
         "ASSAY_LAUNCHER",
         "ASSAY_LOG_LEVEL",  # null in the template: not exported
+        "ASSAY_INPUT_SEARCH_PATH",  # empty in the template: not exported
         "CECE_DOCKER_IMAGE",  # null in the template: the adapter's default
         "CECE_DRIVER_PATH",
         "SLURM_CPUS_PER_TASK",
@@ -283,6 +285,18 @@ def test_platform_override_changes_runtime_exports() -> None:
     text = render_stage(Stage.HARNESS, config, _CECE).text
     assert "export ASSAY_PLATFORM=local" in text
     assert "export ASSAY_RUNTIME=docker" in text
+
+
+def test_data_and_harness_stages_export_the_input_search_path_when_set(
+    tmp_path: Path,
+) -> None:
+    # Both shared stages see it: the data stage's fetch links source-less
+    # inputs from it; the harness stage inherits the same exports.
+    dirs = ["/scratch/x/INPUT", "/scratch/y/input"]
+    config = _ursa(tmp_path, {"data.input_search_path": dirs})
+    for stage in (Stage.DATA, Stage.HARNESS):
+        text = render_stage(stage, config, _CECE).text
+        assert f"export ASSAY_INPUT_SEARCH_PATH={os.pathsep.join(dirs)}" in text
 
 
 def test_harness_stage_exports_the_srun_geometry_under_slurm_only(

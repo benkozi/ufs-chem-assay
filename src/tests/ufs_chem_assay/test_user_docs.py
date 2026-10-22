@@ -60,8 +60,10 @@ def test_gcafs_anthro_runbook_covers_the_use_case() -> None:
     for needle in (
         "ursa-runbook.md",
         "data/gcafs-anthro",
-        "sha256sum",
-        "fetch --suite-config=gcafs-anthro-suite.yaml",
+        "ASSAY_INPUT_SEARCH_PATH",
+        "data:input_search_path=",
+        "fetch --suite-config=gcafs-anthro-suite.yaml --record-digests",
+        "git diff",
         "GCAFS=(",
         "harness:suite_config=gcafs-anthro-suite.yaml",
         "slurm:qos=batch",
@@ -133,6 +135,11 @@ def test_readme_documents_the_new_surfaces() -> None:
         "rtol",
         "--baseline-rtol",
         "ASSAY_BASELINE_RTOL",
+        "url: null",
+        "ASSAY_INPUT_SEARCH_PATH",
+        "--record-digests",
+        "ASSAY_SRUN_ARGS",
+        "gcafs-anthro-runbook.md",
     ):
         assert needle in text, needle
     assert "buid-test-tweaks" not in text

@@ -178,6 +178,19 @@ def test_uv_python_is_not_a_knob(tmp_path: Path) -> None:
         load_run_config(path)
 
 
+def test_data_input_search_path_defaults_empty_and_parses() -> None:
+    config = load_run_config(TEMPLATES_DIR / "ursa.yaml")
+    assert config.data.input_search_path == []
+    config = load_run_config(
+        TEMPLATES_DIR / "ursa.yaml",
+        overrides=["data:input_search_path=[/scratch/x/INPUT, /scratch/y/input]"],
+    )
+    assert config.data.input_search_path == [
+        Path("/scratch/x/INPUT"),
+        Path("/scratch/y/input"),
+    ]
+
+
 def test_slurm_geometry_defaults_and_renders() -> None:
     # The template: one task, eight cores, no extra directives, no srun
     # options beyond the task count — maccity's jobs as they were.
@@ -287,6 +300,7 @@ def test_harness_section_mirrors_every_setting() -> None:
         "slurm_queue_wait_s",
         "srun_args",  # slurm: ntasks + srun_args
         "job_env",
+        "input_search_path",  # data.input_search_path
     } == SETTINGS_NOT_MIRRORED
 
 

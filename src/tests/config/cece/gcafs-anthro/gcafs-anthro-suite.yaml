@@ -1,4 +1,4 @@
-# The global anthropogenic use case (issue #33): one configuration, no sweep —
+# The global anthropogenic use case (issue 33): one configuration, no sweep —
 # the base config is the single combination. Ursa only: the inputs are not in
 # any bucket and the run takes hours; run it through config/ursa.yaml with the
 # override list in docs/gcafs-anthro-runbook.md (the batch QOS, the raised
@@ -16,25 +16,25 @@ timeout_s: 14400  # per combination (4 h: the author's limit was 3 h); the first
 # placed files (runbook step 5) before the first run — until then fetch fails
 # naming each file, which is the point.
 inputs:
-  - url: null
+  - url:
     dst: gcafs-anthro/BC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
     sha256: '0000000000000000000000000000000000000000000000000000000000000000'
-  - url: null
+  - url:
     dst: gcafs-anthro/OC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
     sha256: '0000000000000000000000000000000000000000000000000000000000000000'
-  - url: null
+  - url:
     dst: gcafs-anthro/SO2-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
     sha256: '0000000000000000000000000000000000000000000000000000000000000000'
-  - url: null
+  - url:
     dst: gcafs-anthro/EDGAR_hourly_NOxScal.nc
     sha256: '0000000000000000000000000000000000000000000000000000000000000000'
-  - url: null
+  - url:
     dst: gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_daily.nc
     sha256: '0000000000000000000000000000000000000000000000000000000000000000'
-  - url: null
+  - url:
     dst: gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_weekly_fixtime.nc
     sha256: '0000000000000000000000000000000000000000000000000000000000000000'
-  - url: null
+  - url:
     dst: gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_hourly_fixtime_utc.nc
     sha256: '0000000000000000000000000000000000000000000000000000000000000000'
 # assertions: defaults — file count derived from the config (25), filenames

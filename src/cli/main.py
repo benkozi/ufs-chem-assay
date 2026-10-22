@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -36,7 +36,7 @@ from platforms import Platform
 from s3_sync import check_reachable
 from selection import resolve_suites
 from settings import ENV_PREFIX, LEGACY_ENV_PREFIX, Settings
-from staging import merge_inputs, stage_inputs
+from staging import merge_inputs, rewrite_suite_digests, stage_inputs
 
 logger = get_logger("cli")
 
@@ -148,6 +148,15 @@ def _parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="report what is present and what would be fetched; transfer nothing",
+    )
+    fetch.add_argument(
+        "--record-digests",
+        action="store_true",
+        help=(
+            "for every source-less input (url null) present whose digest differs "
+            "from the declared one, write the on-disk sha256 into the suite file(s) "
+            "declaring it — then review the diff and commit"
+        ),
     )
     publish_parser = subparsers.add_parser(
         "publish-baselines",
@@ -304,6 +313,9 @@ def _fetch(args: argparse.Namespace) -> int:
     and .env exactly as in a pytest session (the flag wins over
     ASSAY_APPLICATION, as there); every failure is one ERROR line and exit 1,
     and a failed transfer never hides the others' outcomes."""
+    if args.record_digests and args.dry_run:
+        logger.error("--record-digests writes the suite files; drop --dry-run")
+        return 1
     settings = (
         Settings()
         if args.application is None
@@ -339,13 +351,52 @@ def _fetch(args: argparse.Namespace) -> int:
         ", ".join(suite.name for _, suite in resolved.suites),
         data_dir,
     )
-    results = stage_inputs(inputs, data_dir, dry_run=args.dry_run)
+    results = stage_inputs(
+        inputs,
+        data_dir,
+        dry_run=args.dry_run,
+        search_path=settings.input_search_path,
+        record_digests=args.record_digests,
+    )
     failed = [result for result in results if result.action == "failed"]
     for result in failed:
         logger.error("%s: %s", result.path, result.detail)
+    # The recorded digests go into every selected suite that declares the
+    # dst (identical entries across suites); a failed rewrite is an error.
+    recorded = {
+        PurePosixPath(result.path.relative_to(data_dir)): result.sha256
+        for result in results
+        if result.action == "recorded" and result.sha256 is not None
+    }
+    rewrite_failed = False
+    for suite_path, suite in resolved.suites:
+        updates = {
+            entry.dst: recorded[entry.dst]
+            for entry in suite.inputs
+            if entry.url is None and entry.dst in recorded
+        }
+        if not updates:
+            continue
+        try:
+            rewrite_suite_digests(suite_path, updates)
+        except ValueError as exc:
+            logger.error("%s", exc)
+            rewrite_failed = True
+            continue
+        for dst, digest in updates.items():
+            logger.info("%s: recorded sha256 %s for %s", suite_path, digest, dst)
+        logger.info("%s: review the diff and commit it", suite_path)
     counts = {
         action: sum(1 for r in results if r.action == action)
-        for action in ("skipped", "downloaded", "would-fetch", "failed")
+        for action in (
+            "skipped",
+            "downloaded",
+            "would-fetch",
+            "linked",
+            "would-link",
+            "recorded",
+            "failed",
+        )
     }
     logger.info(
         "fetch summary: %s",
@@ -364,7 +415,7 @@ def _fetch(args: argparse.Namespace) -> int:
         )
         # ensure_baselines logs the states itself, grouped by state and reason.
         failed_baselines = sum(1 for r in staged if r.state == "failed")
-    return 1 if failed or failed_baselines else 0
+    return 1 if failed or rewrite_failed or failed_baselines else 0
 
 
 def _publish_baselines(args: argparse.Namespace) -> int:

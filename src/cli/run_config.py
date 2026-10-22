@@ -39,6 +39,14 @@ class DataSection(StrictModel):
         default=True,
         description="Fetch Natural Earth coastlines into cartopy's cache (login node)",
     )
+    input_search_path: list[Path] = Field(
+        default_factory=list,
+        description=(
+            "ASSAY_INPUT_SEARCH_PATH: directories fetch searches recursively, by "
+            "basename, for source-less inputs (url null) to link into the data "
+            "directory; per-machine (this run's), never a suite's"
+        ),
+    )
 
 
 class BaselinesSection(StrictModel):

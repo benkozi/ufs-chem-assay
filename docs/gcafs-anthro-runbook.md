@@ -12,10 +12,10 @@ the same `$ROOT`.
 
 Two things differ from the maccity runs:
 
-- **The inputs are placed, not fetched.** The suite declares its seven
-  files with `url: null` and their digests; `ufs-chem-assay fetch`
-  verifies each by `sha256` and never downloads one. Copy them in once
-  (step 1).
+- **The inputs are linked in place, not fetched.** The suite declares
+  its seven files with `url: null` and their digests; `ufs-chem-assay
+  fetch` links them from this machine's trees, verifies each by `sha256`,
+  and never downloads one. Record the digests once (step 1).
 - **The run geometry is an override list.** The shipped
   `config/ursa.yaml` keeps its defaults (the debug QOS, eight cores per
   task, a 300 s timeout cap); this configuration needs the batch QOS, a
@@ -23,20 +23,28 @@ Two things differ from the maccity runs:
   bound, single-threaded, with the whole node's memory. Set the list once
   per shell (step 2) and pass it to every `run`.
 
-## 1. Place the inputs and record their digests
+## 1. Link the inputs in place and record their digests
 
-Copy (do not link — the staging areas they come from are scratch, subject
-to purge, and a baseline's inputs must outlive them) the seven files into
-the checkout's data directory, under the configuration's own
-subdirectory:
+The seven files stay where they are. Tell the harness which directory
+trees hold them — `ASSAY_INPUT_SEARCH_PATH` is searched recursively, by
+basename, and must find each file exactly once — and `fetch` links every
+absent input into `$ROOT/CECE/data/gcafs-anthro/` and, with
+`--record-digests`, writes each file's real `sha256` into the suite in
+place of the shipped all-zero placeholders:
 
 ```bash
-mkdir -p $ROOT/CECE/data/gcafs-anthro
-cp <the seven source files> $ROOT/CECE/data/gcafs-anthro/
-ls $ROOT/CECE/data/gcafs-anthro/
+export ASSAY_INPUT_SEARCH_PATH=<tree holding the CEDS, EDGAR and CAMS files>:<tree holding the CAMS hourly file>
+cd $ROOT/ufs-chem-assay
+CECE_ROOT_DIR=$ROOT/CECE uv run --no-sync ufs-chem-assay fetch --suite-config=gcafs-anthro-suite.yaml --record-digests
+git diff src/tests/config/cece/gcafs-anthro/gcafs-anthro-suite.yaml   # seven sha256 lines
 ```
 
-The seven basenames the suite expects:
+Each input reports `recorded` with `linked to <original>` and the digest
+it wrote; the summary line counts them. Review the diff and commit it —
+the digests are the contract every later `fetch` verifies against, the
+same way the baseline ULIDs are. A file found twice or not at all is
+`failed`, naming what was found; fix the search path (or place the file
+yourself) and re-run. The seven basenames the suite expects:
 
 - `BC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc`
 - `OC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc`
@@ -46,26 +54,15 @@ The seven basenames the suite expects:
 - `CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_weekly_fixtime.nc`
 - `CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_hourly_fixtime_utc.nc`
 
-The suite ships with all-zero placeholder digests. Record the real ones
-and put them into the suite file (`sha256:` per `dst`), then commit that
-change — the digests are the contract every later `fetch` verifies
-against:
-
-```bash
-cd $ROOT/CECE/data/gcafs-anthro && sha256sum *.nc
-```
-
-Then verify (no network, no credentials; one digest pass over the files):
-
-```bash
-cd $ROOT/ufs-chem-assay
-CECE_ROOT_DIR=$ROOT/CECE uv run --no-sync ufs-chem-assay fetch --suite-config=gcafs-anthro-suite.yaml
-```
-
-Every file reports `skipped (sha256 verified)`. A mismatch names the file
-and says there is no source to re-fetch from; an absent file names the
-path to place it at. The pytest session itself only checks presence and
-fails at collection naming this command.
+From then on a plain `fetch` (and the run's data stage) reports seven
+`skipped (sha256 verified)` through the links — one digest pass over the
+originals each time, no network, no credentials. The links are to another
+project's scratch: if a file is purged, the link dangles, `fetch` treats
+it as absent and says so, and the recorded digest tells whether a
+replacement is the same file. For the run config, the same directories go
+in the override list as `data:input_search_path='[<tree>, <tree>]'` (the
+data stage exports them to `fetch`); the shell export above covers a
+by-hand `fetch`.
 
 ## 2. The override list
 
@@ -185,7 +182,7 @@ loosen `rtol`.
 - `tic`→`toc` wall time and the `report-mem` table from the `.out`
   (`sacct -j <id> -o Elapsed,MaxRSS` agrees); whether `--mem=0` can
   become a `--mem=<n>g`.
-- The seven input sizes (`ls -l $ROOT/CECE/data/gcafs-anthro/`).
+- The seven input sizes (`ls -lL $ROOT/CECE/data/gcafs-anthro/` — through the links).
 - The species attributes the driver wrote (`ncdump -h` of one file).
 - The driver's warnings in `cece.log` about year fields on profile and
   series streams — expected, from the configuration's own settings.

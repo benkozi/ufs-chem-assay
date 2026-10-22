@@ -212,9 +212,14 @@ Options:
   the destination relative to the checkout's `data/`, and the expected
   digest; `ufs-chem-assay fetch` stages them, verifying the digest before
   a download replaces anything. `url: null` declares an input with no
-  remote source yet — placed at `dst` by hand, verified by its required
-  `sha256`, never downloaded: `fetch` names the file to place when it is
-  absent or wrong), the per-combination timeout
+  remote source yet, verified by its required `sha256` and never
+  downloaded: absent, `fetch` links it into place from the one file of
+  that name found under `ASSAY_INPUT_SEARCH_PATH` (the run config's
+  `data.input_search_path`: this machine's directories, never a suite's;
+  none or several matches fail, naming the path to place it at), and
+  `fetch --record-digests` writes the on-disk `sha256` of every such input
+  whose digest differs into the suite file — review the diff and commit,
+  as with baseline ULIDs), the per-combination timeout
   (`timeout_s`), and the sweep — which, for CECE,
   mirrors the driver-config structure, attaching swept
   values to named streams (or positional species entries). A sweep value
@@ -512,7 +517,8 @@ The run config above assembles all of that; the same steps by hand are
 in [docs/ursa-runbook.md](docs/ursa-runbook.md). The gcafs-anthro
 configuration runs through the same template plus one override list
 (the batch QOS, a raised timeout cap, one task on one bound core with the
-single-thread exports, `--mem=0`):
+single-thread exports, `--mem=0`, and where its inputs live on the
+machine):
 [docs/gcafs-anthro-runbook.md](docs/gcafs-anthro-runbook.md).
 
 ## CI and releases
@@ -749,6 +755,7 @@ Harness-wide:
 | `ASSAY_BASELINE_STORE`          | where `publish-baselines` writes `<store>/<ulid>/` (append-only): an `s3://bucket/prefix` (never a bucket root) or a local directory | `s3://ufs-chem/baselines` |
 | `ASSAY_BASELINE_ATOL`           | absolute data tolerance over every comparison's own `atol` (`--baseline-atol` wins) | unset → the entries' values |
 | `ASSAY_BASELINE_RTOL`           | relative data tolerance (× \|baseline\|) over every comparison's own `rtol` (`--baseline-rtol` wins) | unset → the entries' values |
+| `ASSAY_INPUT_SEARCH_PATH`       | colon-separated dirs `fetch` searches recursively, by basename, to link source-less (`url: null`) inputs into the data directory | unset → absent ones fail |
 | `ASSAY_CONFIG_SEARCH_PATH`      | prepended to relative `config_path` values     | unset                            |
 | `ASSAY_SUITE_CONFIG_SEARCH_PATH` | colon-separated dirs searched recursively for `--suite-config` selection | unset → built-in suite dir only |
 

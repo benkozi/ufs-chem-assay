@@ -171,6 +171,15 @@ class Settings(BaseSettings):
             "directory is always searched last"
         ),
     )
+    input_search_path: Annotated[list[Path], NoDecode] = Field(
+        default_factory=list,
+        description=(
+            "Directories `fetch` searches recursively, by basename, for a "
+            "source-less input (url null) absent from the data directory, "
+            "linking the one match into place; os.pathsep-separated in the "
+            "environment; per-machine, never in a suite"
+        ),
+    )
 
     @classmethod
     def settings_customise_sources(
@@ -249,7 +258,7 @@ class Settings(BaseSettings):
             )
         return str(Path(value).expanduser().resolve())
 
-    @field_validator("suite_config_search_path", mode="before")
+    @field_validator("suite_config_search_path", "input_search_path", mode="before")
     @classmethod
     def _split_search_path(cls, value: object) -> object:
         if isinstance(value, str):
