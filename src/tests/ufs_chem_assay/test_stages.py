@@ -305,10 +305,10 @@ def test_gcafs_anthro_template_renders_the_use_case_as_shipped(tmp_path: Path) -
     )
     text = render_stage(Stage.HARNESS, config, _CECE).text
     for line in (
-        "export ASSAY_SBATCH_ARGS='-A epic -q batch -p u1-compute -N 1 -n 1 -c 1 --mem=0'",
+        "export ASSAY_SBATCH_ARGS='-A epic -q debug -p u1-compute -N 1 -n 1 -c 1 --mem=0'",
         "export ASSAY_SRUN_ARGS='--ntasks=1 --cpu-bind=cores'",
         "export ASSAY_RUN_TIMEOUT_S=28800",
-        "export ASSAY_SLURM_QUEUE_WAIT_S=14400",
+        "export ASSAY_SLURM_QUEUE_WAIT_S=3600",
         "--suite-config=gcafs-anthro-suite.yaml",
     ):
         assert line in text, line

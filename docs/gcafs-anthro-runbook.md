@@ -18,10 +18,15 @@ Two things differ from the maccity runs:
   them from there, verifies each by `sha256`, and never downloads one.
   Record the digests once (step 1).
 - **The run has its own run config.** `config/ursa-gcafs-anthro.yaml`
-  is `config/ursa.yaml` with the use case baked in — the suite, the
-  batch QOS, a raised timeout cap, and the author's known-good geometry
-  (one task on one bound core, single-threaded, the whole node's memory).
-  It runs as shipped; the two later runs flip one key each.
+  is `config/ursa.yaml` with the use case baked in — the suite, a raised
+  timeout cap, and the author's known-good geometry (one task on one
+  bound core, single-threaded, the whole node's memory). It runs as
+  shipped; the two later runs flip one key each.
+- **The first job is meant to time out.** The suite's `timeout_s` is 30
+  minutes, deliberately short of the author's up-to-3 h runs, so the
+  first attempt shows what the time limit does before a long window is
+  requested; raising it is one line in the suite (and the QOS follows,
+  see step 2).
 
 ## 1. Link the inputs in place and record their digests
 
@@ -68,17 +73,18 @@ file. The seven basenames:
 
 `config/ursa-gcafs-anthro.yaml` is the Ursa template with these values
 changed, each commented in the file: `harness.suite_config:
-gcafs-anthro-suite.yaml`; `slurm.qos: batch` (8 h cap — `debug` rejects a
-4 h job) and `harness.run_timeout_s: 28800` to match (the suite's own
-`timeout_s`, 14400, is the job's time limit; the Ursa template's 300 s cap
-would kill the job at six minutes); `slurm.queue_wait_s: 14400` (batch
-waits can be hours); one MPI task on one core (`ntasks: 1`, `cpus: 1`),
-bound with `srun_args: --cpu-bind=cores`, and `extra_args: --mem=0` (the
-whole node's memory — the per-core default was not enough); the seven
-single-thread exports added to `harness.env` beside `I_MPI_FABRICS` and
-`FI_PROVIDER`. The account is `epic`; `--override slurm:account=<yours>`
-if it differs. Nothing in the file names a path: the inputs' locations
-are the suite's.
+gcafs-anthro-suite.yaml`; `harness.run_timeout_s: 28800` (the Ursa
+template's 300 s cap would otherwise cut every suite to five minutes — the
+suite's own `timeout_s` is the job's time limit, 1800 s = `--time=30` for
+now); `slurm.qos: debug`, which fits a 30-minute job and schedules fast
+(when `timeout_s` grows past 30 minutes, set `qos: batch` and
+`queue_wait_s: 14400`, since batch waits can be hours); one MPI task on
+one core (`ntasks: 1`, `cpus: 1`), bound with `srun_args:
+--cpu-bind=cores`, and `extra_args: --mem=0` (the whole node's memory —
+the per-core default was not enough); the seven single-thread exports
+added to `harness.env` beside `I_MPI_FABRICS` and `FI_PROVIDER`. The
+account is `epic`; `--override slurm:account=<yours>` if it differs.
+Nothing in the file names a path: the inputs' locations are the suite's.
 
 ## 3. Render and read
 
@@ -89,11 +95,11 @@ uv run ufs-chem-assay run --config-file=config/ursa-gcafs-anthro.yaml --dry-run
 
 `$ROOT/scripts/run-config.yaml` shows the effective configuration;
 `05-harness-cece.sh` exports
-`ASSAY_SBATCH_ARGS='-A epic -q batch -p u1-compute -N 1 -n 1 -c 1 --mem=0'`,
+`ASSAY_SBATCH_ARGS='-A epic -q debug -p u1-compute -N 1 -n 1 -c 1 --mem=0'`,
 `ASSAY_SRUN_ARGS='--ntasks=1 --cpu-bind=cores'`, `ASSAY_RUN_TIMEOUT_S=28800`
 and the nine `ASSAY_JOB_ENV` pairs. The rendered job script
 (`<combo_id>.sbatch` under the output root after the harness stage starts)
-carries those directives, `--time=240`, the module block, the exports,
+carries those directives, `--time=30`, the module block, the exports,
 then `tic`, the `srun`, `toc`, and `report-mem`.
 
 ## 4. Run (one rank)
@@ -106,6 +112,11 @@ uv run ufs-chem-assay run --config-file=config/ursa-gcafs-anthro.yaml --stage da
 
 The data stage re-verifies the inputs (and, with comparisons enabled,
 pre-warms the baseline); the harness stage submits the one job and waits.
+With the 30-minute `timeout_s`, expect the first job to be killed by
+Slurm at `--time=30`: `test_driver_execution` fails with the job's
+nonzero exit, the `.out` ends without `toc`, and `sacct -j <id> -o
+Elapsed,State` says `TIMEOUT`. That is the measurement; then raise
+`timeout_s` in the suite (and the QOS, step 2) and run again.
 `squeue -u $USER` shows `ufs-chem-assay-<combo_id>`. Results land in
 `$ROOT/CECE/ufs-chem-assay-output/<combo_id>/`: the generated
 configuration, the job script, the `.out` (ending with `toc` and the

@@ -520,10 +520,10 @@ two environments conflict.
 The run config above assembles all of that; the same steps by hand are
 in [docs/ursa-runbook.md](docs/ursa-runbook.md). The gcafs-anthro
 configuration has its own run config, `config/ursa-gcafs-anthro.yaml`
-(the Ursa template with the suite, the batch QOS, a raised timeout cap,
-and one task on one bound core with the single-thread exports and
-`--mem=0` baked in; its inputs' Ursa locations are in the suite's
-`sources:`), and its own runbook:
+(the Ursa template with the suite, a raised timeout cap, and one task on
+one bound core with the single-thread exports and `--mem=0` baked in; its
+inputs' Ursa locations are in the suite's `sources:`), and its own
+runbook:
 [docs/gcafs-anthro-runbook.md](docs/gcafs-anthro-runbook.md).
 
 ## CI and releases

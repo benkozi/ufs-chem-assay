@@ -59,7 +59,7 @@ def test_carried_configuration_is_the_v5_shape() -> None:
 def test_suite_is_one_sweepless_combination_with_placed_inputs() -> None:
     suite = load_suite(_SUITE)
     assert suite.name == "gcafs-anthro"
-    assert suite.timeout_s == 14400
+    assert suite.timeout_s == 1800  # deliberately short: see it time out first
     base = CeceConfig.from_yaml(suite.config_path)
     combos = enumerate_combos(_APP.dimensions(suite.sweep, base))
     assert [combo.name for combo in combos] == ["base"]

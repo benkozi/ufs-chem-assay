@@ -204,10 +204,10 @@ def test_gcafs_anthro_template_bakes_in_the_use_case() -> None:
     assert config.slurm is not None
     assert (
         config.slurm.sbatch_args
-        == "-A epic -q batch -p u1-compute -N 1 -n 1 -c 1 --mem=0"
+        == "-A epic -q debug -p u1-compute -N 1 -n 1 -c 1 --mem=0"
     )
     assert config.slurm.srun_args_value == "--ntasks=1 --cpu-bind=cores"
-    assert config.slurm.queue_wait_s == 14400
+    assert config.slurm.queue_wait_s == 3600
     assert config.data.input_search_path == []  # the suite's sources: cover Ursa
     # Everything else is the Ursa template's.
     ursa = load_run_config(TEMPLATES_DIR / "ursa.yaml")

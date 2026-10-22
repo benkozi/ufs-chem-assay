@@ -2,9 +2,10 @@
 # with the use case's own settings baked in, so it runs as shipped — no overrides:
 #   ufs-chem-assay run --config-file=config/ursa-gcafs-anthro.yaml [--dry-run]
 # What differs from config/ursa.yaml is commented at each key: the suite; the
-# batch QOS, a longer queue allowance, and the raised timeout cap (the run takes
-# hours); one MPI task on one bound core, single-threaded, with the whole node's
-# memory (the author's known-good geometry). The inputs' Ursa locations are in
+# raised timeout cap (the suite's timeout_s is the job limit — 30 min for now, to
+# see the job time out before a long window is requested; the QOS follows it);
+# one MPI task on one bound core, single-threaded, with the whole node's memory
+# (the author's known-good geometry). The inputs' Ursa locations are in
 # the suite itself (sources:), so nothing here names a path. See
 # docs/gcafs-anthro-runbook.md.
 platform: ursa
@@ -51,14 +52,14 @@ harness:
     OPENBLAS_NUM_THREADS: 1
     OPENBLAS_DEFAULT_NUM_THREADS: 1
   dask_nworkers: 2
-  run_timeout_s: 28800  # the batch QOS cap; the suite's own timeout_s (14400 = --time=240) is the job limit
+  run_timeout_s: 28800  # the batch QOS cap, so the suite's own timeout_s (1800 = --time=30 for now) is the job limit
   log_level:
   config_search_path:
   suite_config_search_path: []
 slurm:
   account: epic
-  qos: batch  # 8 h cap; debug (30 min) rejects this job
-  queue_wait_s: 14400  # batch waits can be hours
+  qos: debug  # fits the 30 min timeout_s and schedules fast; batch (8 h) once timeout_s grows past 30 min
+  queue_wait_s: 3600  # raise to 14400 with batch: its waits can be hours
   partition: u1-compute
   ntasks: 1  # the first run; 4 for the rank-invariance check (--override slurm:ntasks=4)
   cpus: 1  # one core per task …
