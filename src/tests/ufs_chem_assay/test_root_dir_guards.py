@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 _RUNNER_ROOT = Path(__file__).resolve().parents[3]  # <repo root>/
 _INTEGRATION_TESTS = _RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"
 _USAGE_ERROR = 4  # pytest.ExitCode.USAGE_ERROR
@@ -110,9 +112,47 @@ def test_env_root_dir_satisfies_requirement(tmp_path: Path) -> None:
     assert (tmp_path / "combo_runs" / "run.yaml").is_file()
 
 
+@pytest.mark.parametrize("root", ["missing", "not-a-checkout"])
+def test_harness_only_session_never_touches_the_checkout(
+    tmp_path: Path, root: str
+) -> None:
+    # The harness suite shares the session conftest with the driver tests,
+    # but collects none of them: a set-but-missing (or non-git) CECE_ROOT_DIR
+    # must not fail it — the setup script exports the root before CECE is
+    # cloned, and the harness suite is the first thing it runs.
+    root_dir = tmp_path / root
+    if root == "not-a-checkout":
+        root_dir.mkdir()
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CECE_", "ASSAY_"))}
+    env["ASSAY_PLATFORM"] = "local"
+    env["CECE_ROOT_DIR"] = str(root_dir)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(
+                _RUNNER_ROOT / "src" / "tests" / "ufs_chem_assay" / "test_platforms.py"
+            ),
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        check=False,
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "cannot determine the application commit" not in result.stderr
+
+
 def test_non_git_root_dir_is_usage_error(tmp_path: Path) -> None:
-    # A configured root that is not a git checkout is fatal at sessionstart:
-    # the run must record the application commit it ran against.
+    # A configured root that is not a git checkout is fatal at collection
+    # (driver tests collected, dry run included): the run must record the
+    # application commit it ran against.
     plain = tmp_path / "not-a-checkout"
     plain.mkdir()
     result = _run_pytest(["--dry-run"], tmp_path, {"CECE_ROOT_DIR": str(plain)})

@@ -250,13 +250,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         raise pytest.UsageError(str(exc)) from exc
     app, app_settings = resolved.application, resolved.app_settings
 
-    # Sessions always run against a checked-out application when a root is
-    # configured: an unresolvable commit SHA is a fatal misconfiguration,
-    # surfaced here before any work. No configured root records null.
-    try:
-        config.stash[_APPLICATION_COMMIT] = app_settings.commit_sha()
-    except ValueError as exc:
-        raise pytest.UsageError(str(exc)) from exc
+    # The application commit is resolved at collection time, only when the
+    # session collects driver tests (pytest_collection_modifyitems): a
+    # harness-only session never touches the checkout, whatever the
+    # environment names. Null until then.
+    config.stash[_APPLICATION_COMMIT] = None
     config.stash[_HARNESS_VERSION] = harness_version()
     config.stash[_HARNESS_COMMIT] = harness_commit()
 
@@ -357,19 +355,28 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """Fail fast when driver execution is coming but no application root is
-    configured. Collection time (not sessionstart) so harness-only runs —
-    which collect no driver-executing tests — need no environment; still
+    """Resolve the application commit and fail fast when driver execution is
+    coming but no application root is configured. Collection time (not
+    sessionstart) so harness-only runs — which collect no driver-executing
+    tests — never touch the checkout, whatever CECE_ROOT_DIR names; still
     before any test executes."""
-    if config.getoption("--dry-run"):
-        return
-    needs_root = any(
+    needs_driver = any(
         "driver_run" in getattr(item, "fixturenames", ()) for item in items
     )
-    if not needs_root:
+    if not needs_driver:
         return
     app = config.stash[_APPLICATION]
     app_settings = config.stash[_APP_SETTINGS]
+    # Sessions always run against a checked-out application when a root is
+    # configured (dry runs included: run.yaml records the SHA): an
+    # unresolvable commit SHA is a fatal misconfiguration. No configured
+    # root records null.
+    try:
+        config.stash[_APPLICATION_COMMIT] = app_settings.commit_sha()
+    except ValueError as exc:
+        raise pytest.UsageError(str(exc)) from exc
+    if config.getoption("--dry-run"):
+        return
     if app_settings.root_dir is None:
         raise pytest.UsageError(
             f"driver execution requires the {app.name} checkout root; "
