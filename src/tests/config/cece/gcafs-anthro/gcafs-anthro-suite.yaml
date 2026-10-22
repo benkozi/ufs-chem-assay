@@ -66,9 +66,10 @@ plotting:
   enabled: true
   gif_enabled: true
 # One entry: the empty selector matches the single combination of a sweep-less
-# suite. The all-zero ULID is the bootstrap placeholder — no baseline is in the
-# store yet; run with comparisons off, publish-baselines, and the repoint
-# replaces it. rtol as for maccity: a few float64 ULPs at any magnitude.
+# suite. The all-zero ULID means "not published yet": the harness never looks
+# for it, the comparison test skips, and publish-baselines replaces it (keeping
+# the quotes, which YAML needs for 26 zeros). rtol as for maccity: a few
+# float64 ULPs at any magnitude.
 baseline_comparisons:
   - sweep_selector: {}
     ulid: '00000000000000000000000000'

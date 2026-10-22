@@ -240,6 +240,19 @@ With the inputs' locations in the suite (4b), nothing in the `GCAFS` list was ma
 
    The data stage's `fetch` pre-warms the baseline (`synced from s3://ufs-chem/baselines`, ~0.7 GB) and the session finds it `local`; to prove the *session's* download half instead, skip the data stage (`--stage harness` only) and let `pytest_sessionstart` sync it. `run.yaml` records `state: synced`; `test_baseline_comparison` passes (same machine, same build: bit-for-bit, `rtol` idle).
 
+### 7a. "Not published yet": the placeholder ULID is a recognised state (user, 2026-10-22)
+
+**The problem.** A suite ships its `baseline_comparisons` entry before any baseline exists (the entries are the publish contract — decision 6), pinning the all-zero placeholder. With comparisons enabled, `ensure_baselines` asked the bucket for `baselines/00000000000000000000000000/`, recorded `failed`, and `fetch` exited 1 after staging every input correctly; a session would have failed the comparison test for the same non-reason. The first Ursa `fetch --record-digests` hit exactly this through the user's `.env` defaults.
+
+**The rule.** The all-zero ULID (`BaselineConventions.unpublished_ulid`, 26 zeros) means *no baseline has been published for this entry yet*:
+
+- `ensure_baselines` never looks for it: the entry's record has the new state **`unpublished`** (`detail: "the entry pins the placeholder ULID; publish-baselines fills it in"`), logged once at INFO with the others, recorded in `run.yaml` like any state; no probe, no sync, no `failed`. `fetch` exits 0.
+- `test_baseline_comparison` **skips** for such an entry, with that reason — the first run is clean with comparisons left on; the gate still allows skips, so the publish proceeds.
+- `publish-baselines` records **`superseded_ulid: null`** when the entry pinned the placeholder (there was nothing to supersede) and repoints the suite as before. The repoint's one-line substitution (`baselines/suite.py`) learns to keep the entry's quoting: the placeholder has to be quoted in YAML (unquoted, 26 zeros load as the integer 0) and the new ULID is written inside the same quotes.
+- A real ULID that is simply absent from the store stays `failed`: the state says "not published yet" only for the placeholder.
+
+**Where.** `baselines/models.py` (the convention, `BaselineState` + `unpublished`), `baselines/stage.py` (`_stage_one` short-circuits before the root/dry-run/probe checks), `baselines/publish.py` (`superseded_ulid`), `baselines/suite.py` (quotes), `src/tests/test_driver_combos.py` (the skip), `models/suite_config.py` (`RecordedBaseline.state` description), the gcafs suite comment, the runbook (step 4: the comparison test skips as "not published yet" whether comparisons are on or off), README and `design.md` baselines notes.
+
 ### 8. Documentation
 
 - **README**: the configurations the harness carries (`maccity`, `gcafs-anthro` — what each is, where it runs); `inputs` entries with `url: null` (placed by hand, verified, never fetched) beside the fetched kind; the slurm section's `ntasks` / `srun_args` / `extra_args`; `ASSAY_SRUN_ARGS` in the harness-wide env table; `run.yaml`'s `launch`; the "Running on RDHPC" paragraph says `srun` with the configured task count instead of `--ntasks=1`.
@@ -399,6 +412,16 @@ Two changes to `src/tests/conftest.py`, surfaced by the first Ursa setup run of 
 
 **Gates.** Harness suite 712 passed, coverage 100 %, hooks green, every suite dry-runs (2907 skipped); simple-maccity under docker rerun after the conftest change: 21 passed in 9.95s.
 
+## Implementation notes, fifth pass (2026-10-22): the placeholder ULID is "not published yet"
+
+Section 7a, red → green.
+
+**Files.** `src/baselines/models.py` (`BaselineConventions.unpublished_ulid`, 26 zeros; `BaselineState` + `unpublished`; the `StagedBaseline.state` description), `src/baselines/stage.py` (`_stage_one` returns `unpublished` for the placeholder before any root, dry-run, or probe logic — never looked for, logged at INFO with the others), `src/baselines/publish.py` (`superseded_ulid: null` when the entry pinned the placeholder), `src/baselines/suite.py` (the repoint regex captures the line's quoting and writes the new ULID inside it — the placeholder must be quoted in YAML), `src/tests/test_driver_combos.py` (`test_baseline_comparison` skips on `unpublished` with the reason), `src/models/suite_config.py` (`RecordedBaseline.state` description), the gcafs suite comment, the gcafs runbook (step 4), README (the baseline-root row), `design.md` (the download-half bullet).
+
+**Tests** (716 passed, coverage 100 %, hooks green, every suite dry-runs — 2907 skipped —, simple-maccity under docker 21 passed in 9.75s): `test_baselines.py` — a fabricated suite with its first entry pinning the quoted placeholder: `ensure_baselines` records `unpublished` naming publish-baselines and syncs only the two real ULIDs; a publish of that entry succeeds with `superseded_ulid: null` and the repointed line keeps its quotes; `rewrite_suite_ulid` keeps quoting on its own. `test_cli.py` — `fetch` exits 0 for an `unpublished` baseline (needed the `fetch_env` fixture, as the other exit-code tests do).
+
+**Effect on Ursa.** The by-hand `fetch --record-digests` that exited 1 now exits 0 with one INFO line, `1 baseline unpublished (000…): the entry pins the placeholder ULID; publish-baselines fills it in`, comparisons on or off; the first run's `run.yaml` records `state: unpublished` and the comparison test skips with that reason.
+
 # appendix: original notes
 
 ## always do
@@ -475,3 +498,4 @@ Issue #33 ("Integrate global anthropogenic use case", labels `enhancement`, `CEC
 - 2026-10-22 (user: the override list also needs to go — a static configuration for Ursa): section 6a, `config/ursa-gcafs-anthro.yaml`, the Ursa template with the use case's values baked in and commented; the runbook's steps 2–7 use it, the cold start and four-rank runs flip one key each. Implemented in the same session (Implementation notes, third entry).
 - 2026-10-22 (user, from the first Ursa setup run: `uv run pytest src/tests/ufs_chem_assay` failed with "cannot determine the application commit for …/CECE: … No such file or directory" — is there suddenly a CECE dependency? then: harness-only tests should never touch a checkout): no new dependency. `src/tests/conftest.py` is the parent conftest of both test trees, and since 2026-10-08 its `pytest_sessionstart` resolved the application commit whenever a root was configured; the user's setup script exports `CECE_ROOT_DIR=$ROOT/CECE` before cloning CECE and runs the harness suite first. Fixed: the commit is resolved in `pytest_collection_modifyitems`, only when the session collected driver tests (dry runs included, since `run.yaml` records the SHA), ahead of the existing root checks; `_APPLICATION_COMMIT` is null until then. A parametrized subprocess test runs a harness-only module with `CECE_ROOT_DIR` missing and non-git and expects a clean pass; the Ursa runbook's step 2 says a set root must be a checkout only for the dry run. Recorded here rather than in a fix design because it surfaced from this feature's rollout.
 - 2026-10-22 (user: why is CECE needed for the dry-run tests? then: should a dry run require dependent application checkouts? — my view, no; user: sounds good, refine and include in the design docs): section 9a — under `--dry-run` an unresolvable application commit records null with a warning, real runs stay fatal, harness-only sessions never resolve it, suites anchored on the checkout fail at resolution as before. `design.md` updated in the same pass (the session-start/dry-run notes and the layout comment). Implemented in the same session (Implementation notes, fourth entry).
+- 2026-10-22 (user, from the first Ursa `fetch --record-digests`: should this error? — the inputs verified, then the baseline pre-warm failed on the placeholder ULID and `fetch` exited 1; then: refine and implement): section 7a — the all-zero ULID is a recognised "not published yet" state: `unpublished` in `ensure_baselines`/`run.yaml`, a skip in the comparison test, `superseded_ulid: null` at publish, and the repoint keeps the placeholder's quotes. Implemented in the same session (Implementation notes, fifth entry).

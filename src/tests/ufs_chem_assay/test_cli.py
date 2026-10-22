@@ -851,6 +851,22 @@ def test_fetch_exit_code_covers_failed_baselines(
     assert not [r for r in caplog.records if "baseline" in r.getMessage()]
 
 
+@pytest.mark.usefixtures("fetch_env")
+def test_fetch_exit_code_ignores_unpublished_baselines(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A suite shipped before its first publish pins the placeholder ULID:
+    # not a failure — there is nothing to fetch yet.
+    mocker.patch("cli.main.stage_inputs", return_value=[])
+    mocker.patch(
+        "cli.main.ensure_baselines",
+        return_value=[_staged_baseline("0" * 26, "unpublished")],
+    )
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["fetch", "--suite-config=one-suite.yaml"])
+    assert code == 0
+
+
 # ── the remaining error branches ─────────────────────────────────────────────
 
 

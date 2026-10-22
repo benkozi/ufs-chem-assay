@@ -755,7 +755,7 @@ Harness-wide:
 | `ASSAY_RUN_TIMEOUT_S`           | caps the suite `timeout_s` when smaller        | `300`                            |
 | `ASSAY_LOG_LEVEL`               | runner log level (`DEBUG`, `INFO`, ...)        | `INFO`                           |
 | `ASSAY_DASK_NWORKERS`           | dask workers for the stats cluster (int > 0)   | unset → all available cores      |
-| `ASSAY_BASELINE_ROOT_DIR`       | baselines live at `<root>/<ulid>/`; absent ones are synced there from the store at session start (and by `fetch`); unset means read-only from the cwd, nothing is synced | unset → current working directory |
+| `ASSAY_BASELINE_ROOT_DIR`       | baselines live at `<root>/<ulid>/`; absent ones are synced there from the store at session start (and by `fetch`); unset means read-only from the cwd, nothing is synced. An entry pinning the all-zero placeholder ULID is "not published yet": never synced, the comparison test skips, `publish-baselines` fills it in | unset → current working directory |
 | `ASSAY_ENABLE_BASELINE_COMPARISONS` | global switch; `false` skips comparison tests | `true`                          |
 | `ASSAY_BASELINE_STORE`          | where `publish-baselines` writes `<store>/<ulid>/` (append-only): an `s3://bucket/prefix` (never a bucket root) or a local directory | `s3://ufs-chem/baselines` |
 | `ASSAY_BASELINE_ATOL`           | absolute data tolerance over every comparison's own `atol` (`--baseline-atol` wins) | unset → the entries' values |

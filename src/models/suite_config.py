@@ -414,7 +414,9 @@ class RecordedBaseline(StrictModel):
     ulid: str = Field(description="The baseline's ULID")
     source: str = Field(description="Where it is synced from: <store>/<ulid>")
     path: Path = Field(description="Where the session reads it: <baseline root>/<ulid>")
-    state: str = Field(description="local, synced, would-sync, or failed")
+    state: str = Field(
+        description="local, synced, would-sync, unpublished (placeholder ULID), or failed"
+    )
     detail: str = Field(description="Why: present, synced, or the error")
 
 

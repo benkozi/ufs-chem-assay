@@ -554,7 +554,69 @@ def test_directory_store_must_exist_and_dry_run_writes_nothing(
     assert run.suite_path.read_text() == original
 
 
+# ── the placeholder ULID: "not published yet" ─────────────────────────────────
+
+_PLACEHOLDER = CONVENTIONS.unpublished_ulid
+
+
+def _pin_placeholder(run: Run) -> Run:
+    """The fabricated suite with its first entry pinning the (quoted)
+    placeholder — a suite shipped before any baseline exists."""
+    text = run.suite_path.read_text().replace(
+        f"ulid: {PREVIOUS_ULIDS[0]}", f"ulid: '{_PLACEHOLDER}'"
+    )
+    run.suite_path.write_text(text)
+    return run.model_copy(update={"suite": load_suite(run.suite_path)})
+
+
+def test_placeholder_ulid_is_unpublished_not_failed(
+    run: Run, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    run = _pin_placeholder(run)
+    sync = mocker.patch("baselines.stage.sync")
+    mocker.patch("baselines.stage.check_reachable")
+    root = tmp_path / "baselines"
+    results = ensure_baselines([run.suite], _STORE, root)
+    by_ulid = {r.ulid: r for r in results}
+    placeholder = by_ulid[_PLACEHOLDER]
+    assert placeholder.state == "unpublished"
+    assert "publish-baselines" in placeholder.detail
+    assert "placeholder" in placeholder.detail
+    # Never looked for in the store; the real ULIDs are synced as usual.
+    synced = [call.args[0].source for call in sync.call_args_list]
+    assert not any(_PLACEHOLDER in str(source) for source in synced)
+    assert len(synced) == 2
+    # run.yaml carries the state like any other.
+    assert placeholder.recorded().state == "unpublished"
+
+
+def test_publish_of_a_placeholder_entry_supersedes_nothing_and_keeps_the_quotes(
+    run: Run, mocker: MockerFixture
+) -> None:
+    run = _pin_placeholder(run)
+    mocker.patch("baselines.publish.sync", side_effect=fake_sync())
+    records = _publish(run, _plan(run))
+    first = next(r for r in records if r.previous_ulid == _PLACEHOLDER)
+    assert first.action == "published"
+    manifest = BaselineManifest.model_validate(
+        yaml.safe_load((first.source_dir / CONVENTIONS.manifest).read_text())
+    )
+    assert manifest.superseded_ulid is None
+    text = run.suite_path.read_text()
+    assert f"ulid: '{first.ulid}'" in text  # the placeholder's quotes are kept
+    assert _PLACEHOLDER not in text
+
+
 # ── rewrite_suite_ulid ────────────────────────────────────────────────────────
+
+
+def test_rewrite_keeps_the_lines_quoting(run: Run) -> None:
+    old = PREVIOUS_ULIDS[1]
+    new = "01JNEWNEWNEWNEWNEWNEWNEWNE"
+    quoted = run.suite_path.read_text().replace(f"ulid: {old}", f"ulid: '{old}'")
+    run.suite_path.write_text(quoted)
+    rewrite_suite_ulid(run.suite_path, old, new)
+    assert run.suite_path.read_text() == quoted.replace(f"'{old}'", f"'{new}'")
 
 
 def test_rewrite_keeps_every_other_byte(run: Run) -> None:

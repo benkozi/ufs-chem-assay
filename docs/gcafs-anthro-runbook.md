@@ -111,9 +111,10 @@ pre-warms the baseline); the harness stage submits the one job and waits.
 configuration, the job script, the `.out` (ending with `toc` and the
 `report-mem` table), `cece.log`, 25 NetCDF files, stats, plots and GIFs.
 `run.yaml` records `launch` (the directives, the srun options, the job
-environment) beside the usual provenance. Baseline comparisons are off in
-the template, so `test_baseline_comparison` skips on the first run;
-everything else must pass.
+environment) beside the usual provenance. `test_baseline_comparison`
+skips on the first run — comparisons are off in the run config, and even
+with them on the suite's all-zero placeholder ULID means "not published
+yet" (`run.yaml`: `state: unpublished`); everything else must pass.
 
 ## 5. Publish the baseline
 

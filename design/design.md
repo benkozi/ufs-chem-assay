@@ -786,8 +786,12 @@ Publishing (2026-10-08, `baselines.py`; full design in
   when a sync is needed; no baseline root means nothing is written and an
   absent baseline fails naming the setting; a dry run classifies only.
   `run.yaml` records each pinned baseline's state (`local`, `synced`,
-  `would-sync`, `failed` with the reason) and `test_baseline_comparison`
-  fails on `failed` with that reason. `fetch` skips baselines when
+  `would-sync`, `failed` with the reason; `unpublished` since 2026-10-22
+  for the all-zero placeholder ULID a suite pins before its first publish
+  — never looked for, the comparison test skips, `superseded_ulid: null`
+  when it is first published, and the repoint keeps the placeholder's
+  quotes) and `test_baseline_comparison` fails on `failed` with that
+  reason. `fetch` skips baselines when
   comparisons are off (CI has no credentials for the private store).
   The states are logged once, by `ensure_baselines`, one line per
   (state, reason) naming the ULIDs in it (`3 baselines failed (A, B, C):
