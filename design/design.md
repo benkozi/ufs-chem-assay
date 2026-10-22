@@ -417,9 +417,9 @@ Layout under the output root is the same either way:
   run.yaml                     # RunManifest (incl. inputs as found, baselines as
                                #   found or synced): session ULID, application,
                                #   application_commit (the checkout's HEAD SHA; null
-                               #   only when no checkout is configured — an
-                               #   unresolvable SHA for a configured root fails the
-                               #   session at start), harness_version, harness_commit,
+                               #   when no checkout is configured, or under --dry-run
+                               #   when the configured root yields none — a real run
+                               #   fails at collection), harness_version, harness_commit,
                                #   platform, runtime, modulefile, and every resolved
                                #   suite in selection order
   combos.csv                   # effective-parameter table: run_id, combo_id,
@@ -603,7 +603,17 @@ exit is the failure condition. The environment variables mirror `setup.sh`
     `root_dir` raises `UsageError` in `pytest_collection_modifyitems` —
     collection time rather than sessionstart, so harness-only runs (which
     collect no `driver_run` tests) stay green with no environment, while
-    the failure still lands before any test executes.
+    the failure still lands before any test executes. The application
+    commit is resolved there too (2026-10-22), only when driver tests are
+    collected: a harness-only session never touches the checkout whatever
+    `CECE_ROOT_DIR` names; a real run with a configured root that yields no
+    HEAD (absent, not a git checkout) is a `UsageError`; **a dry run never
+    requires a checkout** — it reads nothing from the application, so an
+    unresolvable commit records `application_commit: null` with one
+    WARNING, which is the setup order's normal state (harness suite, dry
+    run, then clone and build). A suite whose `config_path` anchors on the
+    checkout still needs it, at suite resolution, as before. See
+    `design/feat/20261019-1447-global-anthro-use-case/`, section 9a.
 - **Test report.** A `pytest_runtest_makereport` hookwrapper collects every
   combo-parameterized test's outcome (phases combine failed > skipped >
   passed via `report.worst_result`); `pytest_sessionfinish` writes

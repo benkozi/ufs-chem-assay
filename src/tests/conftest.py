@@ -367,15 +367,21 @@ def pytest_collection_modifyitems(
         return
     app = config.stash[_APPLICATION]
     app_settings = config.stash[_APP_SETTINGS]
-    # Sessions always run against a checked-out application when a root is
-    # configured (dry runs included: run.yaml records the SHA): an
-    # unresolvable commit SHA is a fatal misconfiguration. No configured
-    # root records null.
+    # A real run always runs against a checked-out application when a root
+    # is configured: an unresolvable commit SHA is a fatal misconfiguration.
+    # A dry run reads nothing from the application (the root is only the
+    # job scripts' --chdir), so there it records null and says why — the
+    # setup order is harness suite, dry run, then clone and build. No
+    # configured root records null either way.
+    dry_run = bool(config.getoption("--dry-run"))
     try:
         config.stash[_APPLICATION_COMMIT] = app_settings.commit_sha()
     except ValueError as exc:
-        raise pytest.UsageError(str(exc)) from exc
-    if config.getoption("--dry-run"):
+        if not dry_run:
+            raise pytest.UsageError(str(exc)) from exc
+        logger.warning("%s; --dry-run records application_commit: null", exc)
+        config.stash[_APPLICATION_COMMIT] = None
+    if dry_run:
         return
     if app_settings.root_dir is None:
         raise pytest.UsageError(

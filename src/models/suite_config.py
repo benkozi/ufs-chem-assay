@@ -451,8 +451,9 @@ class RunManifest(StrictModel):
     application_commit: str | None = Field(
         description=(
             "HEAD commit SHA of the application checkout the session ran "
-            "against; null only when no checkout is configured (a configured "
-            "root without a resolvable SHA fails the session at start)"
+            "against; null when no checkout is configured, or under --dry-run "
+            "when the configured root yields none (a real run fails at "
+            "collection instead)"
         ),
     )
     harness_version: str = Field(

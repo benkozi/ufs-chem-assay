@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 _RUNNER_ROOT = Path(__file__).resolve().parents[3]  # <repo root>/
 _INTEGRATION_TESTS = _RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"
@@ -149,16 +150,39 @@ def test_harness_only_session_never_touches_the_checkout(
     assert "cannot determine the application commit" not in result.stderr
 
 
-def test_non_git_root_dir_is_usage_error(tmp_path: Path) -> None:
+def test_non_git_root_dir_is_usage_error_for_a_real_run(tmp_path: Path) -> None:
     # A configured root that is not a git checkout is fatal at collection
-    # (driver tests collected, dry run included): the run must record the
-    # application commit it ran against.
+    # when the driver is going to run: the run must record the application
+    # commit it ran against. (Before any input or root-dir check.)
     plain = tmp_path / "not-a-checkout"
     plain.mkdir()
-    result = _run_pytest(["--dry-run"], tmp_path, {"CECE_ROOT_DIR": str(plain)})
+    result = _run_pytest([], tmp_path, {"CECE_ROOT_DIR": str(plain)})
     assert result.returncode == _USAGE_ERROR, result.stdout + result.stderr
     assert str(plain) in result.stderr
     assert "git" in result.stderr
+
+
+@pytest.mark.parametrize("root", ["missing", "not-a-checkout"])
+def test_dry_run_never_requires_a_checkout(tmp_path: Path, root: str) -> None:
+    # A dry run reads nothing from the application: a configured root that
+    # yields no commit (not cloned yet, not a git checkout) records null with
+    # a warning instead of failing — the setup order is harness suite, dry
+    # run, then clone and build.
+    root_dir = tmp_path / root
+    if root == "not-a-checkout":
+        root_dir.mkdir()
+    result = _run_pytest(
+        ["--dry-run", "--basetemp", str(tmp_path / "bt")],
+        tmp_path,
+        {"CECE_ROOT_DIR": str(root_dir)},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = result.stdout + result.stderr
+    assert "WARNING" in output
+    assert str(root_dir) in output
+    assert "application_commit: null" in output
+    manifest = yaml.safe_load(next((tmp_path / "bt").rglob("run.yaml")).read_text())
+    assert manifest["application_commit"] is None
 
 
 def test_clean_root_refuses_a_directory_that_is_not_a_harness_root(

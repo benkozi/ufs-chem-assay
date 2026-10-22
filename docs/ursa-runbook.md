@@ -82,11 +82,11 @@ uv run pytest src/tests/ufs_chem_assay # harness suite: hermetic, login-node saf
 uv run pytest src/tests/test_driver_combos.py --dry-run   # no CECE needed
 ```
 
-Both commands run before CECE exists, and neither looks at a checkout:
-the harness suite never does, and a dry run without `CECE_ROOT_DIR` records
-no application commit. Exporting `CECE_ROOT_DIR` this early is fine, but
-once it is set, a dry run expects it to be a git checkout (`run.yaml`
-records its HEAD), so run the dry run after step 3 if you export it first.
+Both commands run before CECE exists, and neither needs a checkout: the
+harness suite never looks at one, and a dry run records
+`application_commit: null` (with a warning when `CECE_ROOT_DIR` is already
+exported but not yet cloned) — only a real run requires the configured
+root to be a git checkout.
 
 Python 3.13 rather than 3.14: every dependency has Linux wheels for
 3.13 (cartopy included), so nothing compiles during the sync.
