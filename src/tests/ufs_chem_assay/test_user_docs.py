@@ -72,6 +72,8 @@ def test_gcafs_anthro_runbook_covers_the_use_case() -> None:
         "baselines:enabled=true",
         "slurm:ntasks=4",
         "report-mem",
+        "record-benchmarks --output-root=",
+        "gcafs-anthro/benchmarks.csv",
     ):
         assert needle in text, needle
     assert (
@@ -100,6 +102,7 @@ def test_runbook_uses_placeholders_and_ref_variables() -> None:
     assert (
         ".sbatch" in text
     )  # the per-combo job script, and the resubmit-by-hand triage step
+    assert "record-benchmarks --output-root=" in text  # the committed rows
     assert not (_REPO_ROOT / "scripts" / "ursa-harness.sh").exists()
 
 
@@ -138,6 +141,11 @@ def test_readme_documents_the_new_surfaces() -> None:
         "--record-digests",
         "ASSAY_SRUN_ARGS",
         "gcafs-anthro-runbook.md",
+        "## Benchmarks",
+        "--record-benchmarks",
+        "record-benchmarks --output-root=",
+        "harness.record_benchmarks",
+        "config_sha256",
     ):
         assert needle in text, needle
     assert "buid-test-tweaks" not in text

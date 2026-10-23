@@ -8,6 +8,7 @@ import logging
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,13 @@ from pytest_mock import MockerFixture
 from applications.base import Application
 from applications.registry import REGISTRY
 from baselines import BaselineState, StagedBaseline
+from benchmarks import (
+    BENCHMARK_FILENAME,
+    BenchmarkRow,
+    collect_row,
+    read_benchmarks_csv,
+    write_benchmarks_csv,
+)
 from cli.main import main
 from logs import LOGGER_NAME
 from platforms import Platform
@@ -865,6 +873,142 @@ def test_fetch_exit_code_ignores_unpublished_baselines(
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(["fetch", "--suite-config=one-suite.yaml"])
     assert code == 0
+
+
+# ── record-benchmarks ────────────────────────────────────────────────────────
+
+
+def _benchmark_rows_for(run: Run) -> list[BenchmarkRow]:
+    recorded = datetime(2026, 10, 23, 15, 0, tzinfo=UTC)
+    return [
+        collect_row(
+            recorded_at=recorded,
+            run=run.manifest,
+            suite=run.suite.name,
+            combo=combo.name,
+            combo_id=combo.combo_id,
+            config_sha256="c" * 64,
+            timeout_s=10,
+            duration_s=1.5,
+            error=None,
+            combo_dir=run.combo_dir(combo.name),
+            accounting=None,
+            test_results={"test_driver_execution": "passed"},
+            baseline=None,
+        )
+        for combo in run.combos
+    ]
+
+
+@pytest.fixture
+def recorded_run(
+    tmp_path: Path, suite_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> Run:
+    """A fabricated finished run with its per-run benchmarks.csv, selectable
+    by name from its own suite directory (the committed file lands there)."""
+    monkeypatch.chdir(tmp_path)
+    for key in ("CECE_ROOT_DIR", "ASSAY_APPLICATION", "ASSAY_PLATFORM"):
+        monkeypatch.delenv(key, raising=False)
+    run = fabricate_run(tmp_path, suite_dir, name="recorded")
+    monkeypatch.setenv("ASSAY_SUITE_CONFIG_SEARCH_PATH", str(run.suite_path.parent))
+    write_benchmarks_csv(_benchmark_rows_for(run), run.root / BENCHMARK_FILENAME)
+    return run
+
+
+def test_record_benchmarks_appends_to_the_suites_configuration_file(
+    recorded_run: Run, caplog: pytest.LogCaptureFixture
+) -> None:
+    target = recorded_run.suite_path.parent / BENCHMARK_FILENAME
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["record-benchmarks", f"--output-root={recorded_run.root}"])
+    assert code == 0
+    rows = read_benchmarks_csv(target)
+    assert {row.combo_id for row in rows} == {c.combo_id for c in recorded_run.combos}
+    assert all(row.published is False for row in rows)
+    assert any("review the diff and commit" in r.getMessage() for r in caplog.records)
+    # Published since the session: the second recording flips the cell, appends nothing.
+    first = recorded_run.combos[0]
+    (recorded_run.combo_dir(first.name) / "baseline.yaml").write_text("ulid: x\n")
+    assert main(["record-benchmarks", f"--output-root={recorded_run.root}"]) == 0
+    by_id = {row.combo_id: row for row in read_benchmarks_csv(target)}
+    assert by_id[first.combo_id].published is True
+    assert len(by_id) == len(recorded_run.combos)
+
+
+def test_record_benchmarks_dry_run_writes_nothing(recorded_run: Run) -> None:
+    target = recorded_run.suite_path.parent / BENCHMARK_FILENAME
+    assert (
+        main(["record-benchmarks", f"--output-root={recorded_run.root}", "--dry-run"])
+        == 0
+    )
+    assert not target.exists()
+
+
+def test_record_benchmarks_clean_errors(
+    recorded_run: Run, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        assert main(["record-benchmarks", f"--output-root={tmp_path / 'nope'}"]) == 1
+        (recorded_run.root / BENCHMARK_FILENAME).unlink()
+        assert main(["record-benchmarks", f"--output-root={recorded_run.root}"]) == 1
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("no run.yaml" in m for m in messages)
+    assert any("benchmarks.csv" in m and "re-run" in m for m in messages)
+
+
+def test_record_benchmarks_empty_run_and_unselected_suite(
+    recorded_run: Run, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A suite the selection does not include: its rows are reported, exit 1.
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "record-benchmarks",
+                f"--output-root={recorded_run.root}",
+                "--suite-config=simple-maccity-suite.yaml",
+            ]
+        )
+    assert code == 1
+    assert any("not in the selection" in r.getMessage() for r in caplog.records)
+    # Nothing executed (a dry run's header-only file): nothing to record, exit 0.
+    write_benchmarks_csv([], recorded_run.root / BENCHMARK_FILENAME)
+    assert main(["record-benchmarks", f"--output-root={recorded_run.root}"]) == 0
+
+
+def test_record_benchmarks_selection_and_append_errors(
+    recorded_run: Run, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A selector matching nothing is the usual selection error, exit 1.
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "record-benchmarks",
+                f"--output-root={recorded_run.root}",
+                "--suite-config=absent-suite.yaml",
+            ]
+        )
+    assert code == 1
+    # A committed file with a foreign header refuses the append, exit 1.
+    target = recorded_run.suite_path.parent / BENCHMARK_FILENAME
+    target.write_text("run_id,combo_id\nx,y\n")
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(["record-benchmarks", f"--output-root={recorded_run.root}"])
+    assert code == 1
+    assert any("header" in r.getMessage() for r in caplog.records)
+    assert target.read_text() == "run_id,combo_id\nx,y\n"
+
+
+def test_record_benchmarks_refuses_a_run_of_another_application(
+    recorded_run: Run, caplog: pytest.LogCaptureFixture
+) -> None:
+    run_yaml = recorded_run.root / "run.yaml"
+    run_yaml.write_text(
+        run_yaml.read_text().replace("application: cece", "application: other", 1)
+    )
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(["record-benchmarks", f"--output-root={recorded_run.root}"])
+    assert code == 1
+    assert any("other run" in r.getMessage() for r in caplog.records)
 
 
 # ── the remaining error branches ─────────────────────────────────────────────

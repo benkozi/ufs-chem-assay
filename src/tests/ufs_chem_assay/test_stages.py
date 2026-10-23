@@ -226,6 +226,7 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "--no-suite-update",
     ):
         assert absent not in text, absent
+    assert "--record-benchmarks" in text  # the Ursa template keeps every run
 
 
 def test_harness_stage_exports_are_field_driven(tmp_path: Path) -> None:
@@ -271,6 +272,7 @@ def test_native_harness_stage_keeps_the_launcher(tmp_path: Path) -> None:
 
 
 def test_local_harness_stage_has_no_slurm_or_offline_bits(local: RunConfig) -> None:
+    assert "--record-benchmarks" not in render_stage(Stage.HARNESS, local, _CECE).text
     text = render_stage(Stage.HARNESS, local, _CECE).text
     assert "export ASSAY_PLATFORM=local" in text
     assert "export ASSAY_RUNTIME=docker" in text
@@ -310,6 +312,7 @@ def test_gcafs_anthro_template_renders_the_use_case_as_shipped(tmp_path: Path) -
         "export ASSAY_RUN_TIMEOUT_S=28800",
         "export ASSAY_SLURM_QUEUE_WAIT_S=3600",
         "--suite-config=gcafs-anthro-suite.yaml",
+        "--record-benchmarks",
     ):
         assert line in text, line
     job_env = next(

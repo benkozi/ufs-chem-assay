@@ -728,6 +728,39 @@ columns `year`/`month`/`day`/`hour`/`minute`/`second` for easy time
 summaries (null if the file has no time coordinate), and the nan-aware
 statistics (`count`, `sum`, `mean`, `std`, `min`, `max`, `median`).
 
+## Benchmarks
+
+Every session writes **`<output root>/benchmarks.csv`**: one row per
+executed combination (dry runs write the header alone), and the same row
+again as `<combo_id>/benchmarks.csv` inside the combination directory, so
+a published baseline carries its own benchmark. A row is a `BenchmarkRow`
+(`src/benchmarks.py`; the model's fields are the columns): identity
+(`run_id`, `combo_id`, `suite`, `combo`, `config_sha256` — equal across
+runs of the same generated configuration), provenance
+(`application_commit`, `harness_version`, `harness_commit`, `platform`,
+`runtime`, `modulefile`, the launch: `sbatch_args`, `srun_args`,
+`job_env`), timings (`duration_s`: the harness's clock around the driver
+call, queue included under slurm; `wall_s`: the job's own `tic`→`toc`
+lines, empty when the job was killed; `queue_s`, `elapsed_s`,
+`max_rss_kb`, `slurm_job_id`, `slurm_state`: Slurm accounting via `sacct`,
+on platforms that have it — Ursa today — and empty elsewhere), outcome
+(`driver_result`: passed/failed/timeout, `exit_code`, `nc_files`,
+`output_bytes`), and the baseline links (`baseline_ulid`,
+`baseline_state`, `comparison_result`, `published`).
+
+The committed copy lives beside each configuration's suites,
+`src/tests/config/<application>/<configuration>/benchmarks.csv`, and grows
+by rows: `pytest --record-benchmarks` (the run config's
+`harness.record_benchmarks`, **true in the Ursa templates**, false in
+`local.yaml`) appends the run's rows at session end, and
+`ufs-chem-assay record-benchmarks --output-root=<root>` does the same for a
+finished run (`--dry-run` lists what it would append). A row already
+present — same `run_id` and `combo_id` — is skipped, except that its
+`published` cell flips to true once the combination has been published;
+nothing is ever re-sorted or rewritten, and a header that is not the
+model's columns is refused. Review the diff and commit it, as with
+baseline ULIDs and input digests.
+
 ## Environment variables
 
 Every variable can also be set (lowercase works) in a gitignored `.env`

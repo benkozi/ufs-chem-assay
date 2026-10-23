@@ -414,6 +414,8 @@ Layout under the output root is the same either way:
 
 ```
 <output-root>/                 # default: pytest tmp dir; else /work-relative
+  benchmarks.csv               # one BenchmarkRow per executed combination (header
+                               #   only after a dry run); see Benchmarks
   run.yaml                     # RunManifest (incl. inputs as found, baselines as
                                #   found or synced): session ULID, application,
                                #   application_commit (the checkout's HEAD SHA; null
@@ -820,6 +822,55 @@ Publishing (2026-10-08, `baselines.py`; full design in
 - **CI** keeps comparisons off (no credentials for the private store);
   the CECE pin is `ufs-community/CECE` at `develop` since 2026-10-08.
 
+## Benchmarks
+
+Persistent benchmarking (2026-10-23, `src/benchmarks.py`; full design in
+`design/feat/20261019-1447-global-anthro-use-case/20261023-0847-add-benchmarking.md`):
+
+- **One row per executed combination per run** — `BenchmarkRow`, a strict
+  model whose fields are the CSV columns: identity (`run_id`, `combo_id`,
+  `suite`, `combo`, `config_sha256` — the SHA-256 of the adapter's
+  `config_fingerprint`, equal across runs of the same generated
+  configuration), provenance (`application_commit`, harness version and
+  commit, platform, runtime, modulefile, the launch as `run.yaml` records
+  it), timings (`duration_s`: the harness clock around `run_driver`, queue
+  included under slurm; `wall_s`: the job's `tic`→`toc` lines — every
+  runtime writes them now, the runner around docker/native output, the
+  job template in the batch script; empty when the job was killed),
+  Slurm accounting (`queue_s`, `elapsed_s`, `max_rss_kb`, `slurm_job_id`,
+  `slurm_state` from one `sacct -P -n` query per job, retried once, on
+  platforms whose `platforms.ACCOUNTING` entry says so — Ursa; null
+  elsewhere, never a failure), outcome (`driver_result`
+  passed/failed/timeout — timeout from the harness's `TimeoutExpired` or
+  Slurm's `TIMEOUT`; `exit_code`; `nc_files`; `output_bytes`), and the
+  baseline links (`baseline_ulid` — null for the placeholder,
+  `baseline_state`, `comparison_result`, `published`). Dry runs produce
+  no rows.
+- **Three files, one writer**: `<output root>/benchmarks.csv` (every row;
+  header only after a dry run) and `<combo_id>/benchmarks.csv` (that row;
+  it travels with a published baseline, so it is written before the
+  publish and refreshed after it, when `published` may have flipped) —
+  always; and the committed per-configuration
+  `src/tests/config/<application>/<configuration>/benchmarks.csv`, appended
+  at session end under `--record-benchmarks` (`harness.record_benchmarks`,
+  true in the Ursa templates so every expensive run is kept, false in
+  `local.yaml`) and by `ufs-chem-assay record-benchmarks --output-root`
+  for a finished run (its `published` cells refreshed from the
+  combination directories). `append_benchmarks` creates the file with the
+  header, refuses a foreign header, skips a present `(run_id, combo_id)`
+  except to flip its `published` cell to true, appends the rest as lines,
+  and restores the original text when the reload fails — the ULID
+  repoint's pattern; the user reviews the diff and commits.
+- **The runner surfaces the job**: `run_driver` returns `DriverExecution`
+  (the Slurm job id, None elsewhere); a failed or cancelled job raises
+  `SlurmJobError`/`SlurmJobTimeout` (subclasses of the standard
+  exceptions) carrying the id, since accounting matters most then;
+  `DriverRunResult` keeps `execution`, `duration_s`, `timeout_s`.
+- **Session-end order**: report → benchmarks (per-run and per-combination
+  files) → publish → benchmarks (refresh, committed file) → stats → plots;
+  each benchmark pass is wrapped so it never fails the session and names
+  the post-hoc command on failure.
+
 ## Type checking
 
 mypy runs over everything under `src/` (config in `pyproject.toml`
@@ -967,6 +1018,7 @@ All code under `src/`; the project is `uv`-managed with its own
                           #   launcher / sbatch), check_output, .out writing
     s3_sync.py            # stand-alone `aws s3 sync` wrapper; credentials are
                           #   the CLI's own; one harness import (the logger)
+    benchmarks.py         # BenchmarkRow, tic/toc and sacct parsing, the three benchmarks.csv writers
     settings.py           # harness-wide pydantic-settings (ASSAY_*, CECE_* fallback)
     tests/
       config/             # <application>/<configuration>/: the configuration's files
@@ -978,6 +1030,8 @@ All code under `src/`; the project is `uv`-managed with its own
                                           #   regex sweeps; on-demand, run-only
         cece/gcafs-anthro/gcafs-anthro.yaml           # the global anthropogenic use case (issue #33)
         cece/gcafs-anthro/gcafs-anthro-suite.yaml     # sweep-less; seven placed inputs; Ursa only
+        <application>/<configuration>/benchmarks.csv  # the committed benchmark rows (append-only,
+                                          #   written by --record-benchmarks / record-benchmarks)
       ufs_chem_assay/     # the harness's own tests: mocked process call, no docker
         applications/cece/  # the CECE adapter's tests (test_cece_*.py)
         stubs.py          # an inert second adapter for several-application tests

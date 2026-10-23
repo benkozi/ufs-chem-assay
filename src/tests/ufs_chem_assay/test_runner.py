@@ -70,7 +70,7 @@ def test_run_driver_success_writes_out(mocker: MockerFixture, tmp_path: Path) ->
     )
     out_path = tmp_path / "x.out"
 
-    run_driver(
+    execution = run_driver(
         _settings(),
         _APP,
         _app_settings(),
@@ -79,7 +79,15 @@ def test_run_driver_success_writes_out(mocker: MockerFixture, tmp_path: Path) ->
         timeout_s=7,
     )
 
-    assert out_path.read_bytes() == b"driver ok\n"
+    # The driver's output bracketed by the clock lines every runtime writes
+    # (the slurm job echoes its own); docker knows no job id.
+    tic, body, toc = out_path.read_text().splitlines()
+    assert tic.startswith("tic: ")
+    assert tic.endswith("Z")
+    assert body == "driver ok"
+    assert toc.startswith("toc: ")
+    assert toc.endswith("Z")
+    assert execution.job_id is None
     check_output.assert_called_once()
     assert check_output.call_args.kwargs["timeout"] == 7
     assert check_output.call_args.kwargs["stderr"] == subprocess.STDOUT
@@ -102,7 +110,9 @@ def test_run_driver_nonzero_exit_writes_out_and_reraises(
             timeout_s=7,
         )
 
-    assert out_path.read_bytes() == b"boom\n"
+    lines = out_path.read_text().splitlines()
+    assert lines[0].startswith("tic: ")
+    assert lines[1:] == ["boom"]
 
 
 def test_run_driver_timeout_writes_out_and_reraises(
@@ -122,7 +132,9 @@ def test_run_driver_timeout_writes_out_and_reraises(
             timeout_s=7,
         )
 
-    assert out_path.read_bytes() == b"partial\n"
+    lines = out_path.read_text().splitlines()
+    assert lines[0].startswith("tic: ")
+    assert lines[1:] == ["partial"]
 
 
 def test_output_banner_names_no_application(

@@ -15,6 +15,8 @@ import pandas as pd
 import pytest
 import yaml
 
+from benchmarks import BENCHMARK_COLUMNS
+
 _RUNNER_ROOT = Path(__file__).resolve().parents[3]  # <repo root>/
 
 
@@ -106,9 +108,13 @@ def test_dry_run_generates_everything_but_never_executes(tmp_path: Path) -> None
         assert len(combo_id) == 26  # runtime ULID directory names
         assert (root / combo_id / f"{combo_id}.yaml").is_file()
 
-    # The driver never ran: no captured output, no NetCDF, anywhere.
+    # The driver never ran: no captured output, no NetCDF, anywhere; the
+    # per-run benchmarks file exists and says so (header only).
     assert not list(root.rglob("*.out"))
     assert not list(root.rglob("*.nc"))
+    benchmarks = (root / "benchmarks.csv").read_text().splitlines()
+    assert benchmarks == [",".join(BENCHMARK_COLUMNS)]
+    assert not list(root.glob("*/benchmarks.csv"))
 
     report = pd.read_csv(root / "test-report.csv")
     assert list(report.columns) == [

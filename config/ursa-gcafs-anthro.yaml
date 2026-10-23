@@ -39,6 +39,7 @@ harness:
   pytest_args: []
   publish_baselines: false  # publish from the login node afterwards (runbook step 5)
   no_suite_update: false
+  record_benchmarks: true  # every run is kept: rows appended to cece/gcafs-anthro/benchmarks.csv; commit them
   runtime:  # slurm (the platform's default)
   launcher: ''
   env:  # exported inside the driver job: the MPI hints, then the single-thread geometry

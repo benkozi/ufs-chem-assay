@@ -239,6 +239,18 @@ or data-transfer node as above. `--store=/path/to/dir` (or `baselines.store`)
 publishes into a local directory instead of the bucket — no credentials,
 but only reachable on this machine.
 
+**Benchmarks.** The session appended one row per combination to
+`src/tests/config/cece/maccity/benchmarks.csv` in your harness checkout
+(`config/ursa.yaml` sets `harness.record_benchmarks: true`): timings, Slurm's
+elapsed, queue wait and peak memory (`sacct`), the verdicts, and the
+baseline links. Review and commit it with the repoint. For a run that was
+not recorded, or after publishing (the `published` column flips):
+
+```bash
+cd $ROOT/ufs-chem-assay
+uv run --no-sync ufs-chem-assay record-benchmarks --output-root=$ROOT/CECE/ufs-chem-assay-output
+```
+
 The `native` runtime (the driver as a direct host process) is not a
 supported path on Ursa: the harness venv and the driver need conflicting
 environments, and only a per-job script reconciles them.

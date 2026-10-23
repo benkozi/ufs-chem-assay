@@ -191,6 +191,8 @@ def _harness(
         pytest_args.append("--publish-baselines")
     if harness.no_suite_update:
         pytest_args.append("--no-suite-update")
+    if harness.record_benchmarks:
+        pytest_args.append("--record-benchmarks")
     pytest_args += harness.pytest_args
     return [
         *clean_python_env(section),

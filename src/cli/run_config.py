@@ -124,6 +124,14 @@ class HarnessSection(StrictModel):
         default=False,
         description="Pass --no-suite-update (publish, but leave the suite files alone)",
     )
+    record_benchmarks: bool = Field(
+        default=False,
+        description=(
+            "Pass --record-benchmarks: at session end, append the run's benchmark "
+            "rows to each suite's committed configuration benchmarks.csv (the "
+            "per-run <output root>/benchmarks.csv is always written)"
+        ),
+    )
     runtime: Runtime | None = Field(
         default=None,
         description=(

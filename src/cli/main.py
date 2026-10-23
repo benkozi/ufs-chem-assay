@@ -27,6 +27,8 @@ import yaml
 from applications.base import Application, Stage
 from applications.registry import get_application
 from baselines import default_selector, ensure_baselines, load_run, plan, publish
+from baselines.models import CONVENTIONS
+from benchmarks import BENCHMARK_FILENAME, append_benchmarks, read_benchmarks_csv
 from cli.run_config import RunConfig
 from cli.shell import run_bash, write_script
 from cli.stages import render_stage
@@ -208,6 +210,40 @@ def _parser() -> argparse.ArgumentParser:
         "--no-suite-update",
         action="store_true",
         help="publish, but leave the suite files alone (the ULIDs are logged)",
+    )
+    record = subparsers.add_parser(
+        "record-benchmarks",
+        help=(
+            "append a finished run's benchmark rows (<output root>/benchmarks.csv, "
+            "one per executed combination) to each suite's committed configuration "
+            "benchmarks.csv; review the diff and commit"
+        ),
+    )
+    record.add_argument(
+        "--output-root",
+        required=True,
+        type=Path,
+        help="the run's output root (the directory holding run.yaml and benchmarks.csv)",
+    )
+    record.add_argument(
+        "--application",
+        default=None,
+        metavar="NAME",
+        help="the run's application (overrides ASSAY_APPLICATION), as for pytest",
+    )
+    record.add_argument(
+        "--suite-config",
+        default=None,
+        metavar="SELECTOR",
+        help=(
+            "suite selector, exactly as pytest's --suite-config; default: the "
+            "suites run.yaml records, by the <name>-suite.yaml convention"
+        ),
+    )
+    record.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="log the rows that would be appended to which file; write nothing",
     )
     return parser
 
@@ -496,6 +532,97 @@ def _publish_baselines(args: argparse.Namespace) -> int:
     return 1 if any(r.action == "failed" for r in results) else 0
 
 
+def _record_benchmarks(args: argparse.Namespace) -> int:
+    """Append a finished run's rows to the committed per-configuration
+    files: run.yaml names the application and suites, the per-run
+    benchmarks.csv holds the rows (their `published` cell refreshed from the
+    combination directories, so a publish since the session is reflected),
+    and each suite's rows go to <suite dir>/benchmarks.csv. Every failure is
+    one ERROR line and exit 1."""
+    output_root = args.output_root.resolve()
+    run_yaml = output_root / "run.yaml"
+    per_run = output_root / BENCHMARK_FILENAME
+    if not run_yaml.is_file():
+        logger.error("%s is not a run's output root: no run.yaml", output_root)
+        return 1
+    if not per_run.is_file():
+        logger.error(
+            "%s has no %s (a run older than benchmarking, or a dry run); re-run "
+            "the session to produce one",
+            output_root,
+            BENCHMARK_FILENAME,
+        )
+        return 1
+    with open(run_yaml) as f:
+        run = RunManifest.model_validate(yaml.safe_load(f))
+    try:
+        rows = read_benchmarks_csv(per_run)
+        settings = (
+            Settings()
+            if args.application is None
+            else Settings(application=args.application)
+        )
+        resolved = resolve_suites(settings, args.suite_config or default_selector(run))
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 1
+    if resolved.application.name != run.application:
+        logger.error(
+            "run %s is a %s run, but the selected suites are %s suites",
+            run.run_id,
+            run.application,
+            resolved.application.name,
+        )
+        return 1
+    if not rows:
+        logger.info("%s holds no rows (nothing executed); nothing to record", per_run)
+        return 0
+    rows = [
+        row.model_copy(
+            update={
+                "published": (
+                    output_root / row.combo_id / CONVENTIONS.manifest
+                ).is_file()
+            }
+        )
+        for row in rows
+    ]
+    paths = {suite.name: path for path, suite in resolved.suites}
+    failed = False
+    for suite_name in sorted({row.suite for row in rows}):
+        mine = [row for row in rows if row.suite == suite_name]
+        if suite_name not in paths:
+            logger.error(
+                "suite %r of run %s is not in the selection; its %s row(s) were not recorded",
+                suite_name,
+                run.run_id,
+                len(mine),
+            )
+            failed = True
+            continue
+        target = paths[suite_name].parent / BENCHMARK_FILENAME
+        if args.dry_run:
+            for row in mine:
+                logger.info(
+                    "dry run: would append %s %s to %s", row.combo_id, row.combo, target
+                )
+            continue
+        try:
+            result = append_benchmarks(target, mine)
+        except ValueError as exc:
+            logger.error("%s", exc)
+            failed = True
+            continue
+        logger.info(
+            "%s: %s appended, %s already recorded, %s updated; review the diff and commit it",
+            target,
+            result.appended,
+            result.skipped,
+            result.updated,
+        )
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # The harness's namespace logger, level from the same variable pytest
     # honours (settings.log_level, with the legacy spelling as fallback).
@@ -506,6 +633,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "fetch":
         return _fetch(args)
+    if args.command == "record-benchmarks":
+        return _record_benchmarks(args)
     if args.command == "publish-baselines":
         return _publish_baselines(args)
     return _run(args)

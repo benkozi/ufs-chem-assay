@@ -29,6 +29,24 @@ class Runtime(StrEnum):
     SLURM = "slurm"  # one `sbatch --wait` job per driver call, from a login node
 
 
+@unique
+class Accounting(StrEnum):
+    """How a platform reports a finished job's elapsed time, queue wait,
+    peak memory, state and exit code — the benchmark columns that need the
+    scheduler's help."""
+
+    SACCT = "sacct"  # Slurm accounting, queried from the node the harness runs on
+
+
+# Platforms whose accounting the harness knows how to ask for; a platform
+# absent here (local) records the harness's own clock and null accounting
+# columns. Gaea C6/C7 join once their sacct is confirmed to answer the same
+# columns (one entry here, one hostname pattern above).
+ACCOUNTING: dict[Platform, Accounting] = {
+    Platform.URSA: Accounting.SACCT,
+}
+
+
 # Hostname patterns (fullmatch) per platform. Ursa login nodes are ufe01-04;
 # the compute-node form is a first-run item recorded in the design doc.
 _HOSTNAME_PATTERNS: dict[Platform, re.Pattern[str]] = {

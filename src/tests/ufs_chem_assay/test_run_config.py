@@ -201,6 +201,7 @@ def test_gcafs_anthro_template_bakes_in_the_use_case() -> None:
     assert config.harness.env["OMP_NUM_THREADS"] == "1"
     assert config.harness.env["OPENBLAS_DEFAULT_NUM_THREADS"] == "1"
     assert config.baselines.enabled is False
+    assert config.harness.record_benchmarks is True  # every run is kept
     assert config.slurm is not None
     assert (
         config.slurm.sbatch_args
@@ -214,6 +215,18 @@ def test_gcafs_anthro_template_bakes_in_the_use_case() -> None:
     assert config.applications == ursa.applications
     assert config.harness.output_root == ursa.harness.output_root
     assert config.slurm.account == ursa.slurm.account if ursa.slurm else False
+
+
+def test_record_benchmarks_defaults_false_and_is_set_per_template() -> None:
+    from cli.run_config import HarnessSection
+
+    assert HarnessSection().record_benchmarks is False
+    assert (
+        load_run_config(TEMPLATES_DIR / "ursa.yaml").harness.record_benchmarks is True
+    )
+    assert (
+        load_run_config(TEMPLATES_DIR / "local.yaml").harness.record_benchmarks is False
+    )
 
 
 def test_slurm_geometry_defaults_and_renders() -> None:

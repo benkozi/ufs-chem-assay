@@ -122,7 +122,9 @@ Elapsed,State` says `TIMEOUT`. That is the measurement; then raise
 configuration, the job script, the `.out` (ending with `toc` and the
 `report-mem` table), `cece.log`, 25 NetCDF files, stats, plots and GIFs.
 `run.yaml` records `launch` (the directives, the srun options, the job
-environment) beside the usual provenance. `test_baseline_comparison`
+environment) beside the usual provenance, and `benchmarks.csv` (at the
+output root and in the combination directory) the run's timings and
+Slurm's accounting (step 5a). `test_baseline_comparison`
 skips on the first run — comparisons are off in the run config, and even
 with them on the suite's all-zero placeholder ULID means "not published
 yet" (`run.yaml`: `state: unpublished`); everything else must pass.
@@ -148,6 +150,29 @@ driver wrote (into `assertions.species`, `exact: true`) and a tightened
 `timeout_s` (about twice the `tic`→`toc` wall time in the `.out`).
 Publish before editing the suite — the publish refuses a suite changed
 since the run.
+
+## 5a. Benchmarks: the rows this run left
+
+The run config records every run (`harness.record_benchmarks: true`), so
+the session appended one row to
+`src/tests/config/cece/gcafs-anthro/benchmarks.csv` in your harness
+checkout — the first rows are the point of the 30-minute experiment:
+`driver_result: timeout`, `slurm_state: TIMEOUT`, `wall_s` empty (no
+`toc`), `elapsed_s` about 1800, `queue_s` and `max_rss_kb` from `sacct`,
+and the launch columns saying one task, one bound core, the single-thread
+exports. The same row sits in the combination directory as
+`benchmarks.csv`, and the run's own copy is
+`$ROOT/CECE/ufs-chem-assay-output/benchmarks.csv`. After the publish
+(step 5) the row's `published` cell is stale until it is re-recorded:
+
+```bash
+cd $ROOT/ufs-chem-assay
+uv run --no-sync ufs-chem-assay record-benchmarks --output-root=$ROOT/CECE/ufs-chem-assay-output
+git diff src/tests/config/cece/gcafs-anthro/benchmarks.csv
+```
+
+Commit the file with the repoint. Raise `timeout_s`, run again, and the
+next row lands beside the first; that pair is the measurement.
 
 ## 6. Cold start: the baseline comes back from the store
 

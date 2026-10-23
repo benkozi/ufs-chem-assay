@@ -130,8 +130,8 @@ def test_render_job_script_golden() -> None:
     # Wall time and memory in the .out (the author's cece_job.sh): tic/toc
     # around the launch, then RDHPCS's report-mem, guarded so the script runs
     # (and exits 0) on any Slurm machine.
-    assert body[launch - 1] == 'echo "tic: $(date -u)"'
-    assert body[launch + 1] == 'echo "toc: $(date -u)"'
+    assert body[launch - 1] == 'echo "tic: $(date -u +%Y-%m-%dT%H:%M:%SZ)"'
+    assert body[launch + 1] == 'echo "toc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"'
     assert (
         body[-1]
         == "if command -v report-mem >/dev/null 2>&1; then report-mem || true; fi"
@@ -241,7 +241,7 @@ def test_slurm_run_driver_writes_the_script_and_submits_it(
     out_path = tmp_path / "x.out"
     out_path.write_bytes(b"driver ok\n")  # Slurm wrote the job's output
 
-    run_driver(
+    execution = run_driver(
         _slurm(),
         _APP,
         _CECE,
@@ -250,6 +250,7 @@ def test_slurm_run_driver_writes_the_script_and_submits_it(
         timeout_s=10,
     )
 
+    assert execution.job_id == "12345"  # from sbatch --parsable, for accounting
     script = tmp_path / "x.sbatch"
     assert script.is_file()
     assert "srun --ntasks=1" in script.read_text()

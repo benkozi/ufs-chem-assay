@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 import shlex
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
 from jinja2 import Environment, StrictUndefined
@@ -146,6 +147,45 @@ def write_job_script(
     return script
 
 
+# The two clock lines the launch writes around the driver, in every runtime:
+# the slurm template echoes them in the job; docker and native get them from
+# the runner around the subprocess. ISO-8601 UTC to the second, parseable by
+# benchmarks.parse_tic_toc.
+CLOCK_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def _clock_line(label: str) -> bytes:
+    return f"{label}: {datetime.now(UTC).strftime(CLOCK_FORMAT)}\n".encode()
+
+
+class SlurmJobError(subprocess.CalledProcessError):
+    """A Slurm driver job ended nonzero; carries the job id for accounting."""
+
+    def __init__(
+        self, returncode: int, cmd: list[str], output: bytes, job_id: str
+    ) -> None:
+        super().__init__(returncode, cmd, output=output)
+        self.job_id = job_id
+
+
+class SlurmJobTimeout(subprocess.TimeoutExpired):
+    """The harness's outer bound (timeout + queue allowance) passed and the
+    job was cancelled; carries the job id for accounting."""
+
+    def __init__(self, cmd: list[str], timeout: float, job_id: str) -> None:
+        super().__init__(cmd, timeout)
+        self.job_id = job_id
+
+
+class DriverExecution(BaseModel):
+    """What the runner knows about how one driver call was launched: the
+    Slurm job id under the slurm runtime (for accounting), None elsewhere."""
+
+    model_config = ConfigDict(frozen=True)
+
+    job_id: str | None
+
+
 class DriverRunResult(BaseModel):
     """Outcome of one driver invocation. The driver-run fixture never raises;
     execution failure is reported explicitly by test_driver_execution and
@@ -160,6 +200,9 @@ class DriverRunResult(BaseModel):
     out_path: Path
     config: InstanceOf[DriverConfig]  # the adapter's subclass, kept as-is
     error: InstanceOf[Exception] | None
+    execution: DriverExecution = DriverExecution(job_id=None)
+    duration_s: float = 0.0  # the harness's clock around the call
+    timeout_s: int = 0  # the effective per-combination timeout
 
 
 def docker_prefix(
@@ -243,35 +286,43 @@ def run_driver(
     out_path: Path,
     timeout_s: int,
     output_mount: tuple[Path, PurePosixPath] | None = None,
-) -> None:
+) -> DriverExecution:
     """Run one driver invocation (a fresh container, a host process, or a
-    Slurm job).
+    Slurm job); returns what the runner knows about the launch (the job id
+    under slurm).
 
     Combined stdout/stderr is written to out_path and printed whether the run
-    passes or fails; a nonzero exit re-raises CalledProcessError to fail the
-    test, and a hung driver fails with TimeoutExpired after timeout_s.
-    Natively the process runs in the checkout (cwd = root_dir), so the
-    relative driver path and cwd-relative data paths resolve as they do
-    under docker's -w <workdir>; the environment is inherited as-is
-    (modules, MPI hints are the caller's job). Under slurm see _run_slurm_job.
+    passes or fails, bracketed by `tic:`/`toc:` clock lines (the slurm job
+    writes its own; a failed or timed-out call has tic and no toc); a nonzero
+    exit re-raises CalledProcessError to fail the test, and a hung driver
+    fails with TimeoutExpired after timeout_s. Natively the process runs in
+    the checkout (cwd = root_dir), so the relative driver path and
+    cwd-relative data paths resolve as they do under docker's -w <workdir>;
+    the environment is inherited as-is (modules, MPI hints are the caller's
+    job). Under slurm see _run_slurm_job.
     """
     if settings.runtime is Runtime.SLURM:
-        _run_slurm_job(settings, app, app_settings, driver_yaml, out_path, timeout_s)
-        return
+        return _run_slurm_job(
+            settings, app, app_settings, driver_yaml, out_path, timeout_s
+        )
     command = build_command(
         settings, app, app_settings, driver_yaml, output_mount=output_mount
     )
     cwd = app_settings.root_dir if settings.runtime is Runtime.NATIVE else None
+    tic = _clock_line("tic")
     try:
         output = subprocess.check_output(
             command, stderr=subprocess.STDOUT, timeout=timeout_s, cwd=cwd
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        out_path.write_bytes(exc.output or b"")
-        _print_output(out_path, exc.output or b"")
+        captured = tic + (exc.output or b"")
+        out_path.write_bytes(captured)
+        _print_output(out_path, captured)
         raise
-    out_path.write_bytes(output)
-    _print_output(out_path, output)
+    captured = tic + output + _clock_line("toc")
+    out_path.write_bytes(captured)
+    _print_output(out_path, captured)
+    return DriverExecution(job_id=None)
 
 
 def _run_slurm_job(
@@ -281,11 +332,12 @@ def _run_slurm_job(
     driver_yaml: PurePosixPath,
     out_path: Path,
     timeout_s: int,
-) -> None:
+) -> DriverExecution:
     """One `sbatch --wait` job for the driver, from the combo's rendered job
     script (`<combo_id>.sbatch`, kept beside the yaml and out so the job is
-    reproducible by hand). Slurm writes the job's output to out_path itself;
-    the harness reads it back afterwards. The job's own
+    reproducible by hand); returns the job id for accounting. Slurm writes
+    the job's output to out_path itself; the harness reads it back
+    afterwards. The job's own
     time limit is timeout_s rounded up to minutes; the outer bound adds the
     queue allowance and, when hit, cancels the job (scancel) before raising
     TimeoutExpired — queue time must not count against the driver, but a
@@ -300,11 +352,11 @@ def _run_slurm_job(
     job_id = submission.decode("utf-8", errors="replace").strip().split(";")[0]
     try:
         returncode = process.wait(timeout=timeout_s + settings.slurm_queue_wait_s)
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         if job_id:
             subprocess.run(["scancel", job_id], check=False)
         process.kill()
-        raise
+        raise SlurmJobTimeout(command, exc.timeout, job_id) from exc
     if not out_path.is_file():
         # The job never wrote (rejected submission, failed before start):
         # keep whatever sbatch said so the .out exists and explains itself.
@@ -312,4 +364,5 @@ def _run_slurm_job(
     output = out_path.read_bytes()
     _print_output(out_path, output)
     if returncode != 0:
-        raise subprocess.CalledProcessError(returncode, command, output=output)
+        raise SlurmJobError(returncode, command, output, job_id)
+    return DriverExecution(job_id=job_id or None)
