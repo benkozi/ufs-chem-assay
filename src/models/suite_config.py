@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from enum import StrEnum, unique
 from pathlib import Path, PurePosixPath
 
 import yaml
@@ -242,15 +243,71 @@ class BaselineComparison(StrictModel):
     )
 
 
+@unique
+class ColorScale(StrEnum):
+    """Overview-map color scales (plotting.scale)."""
+
+    log = "log"  # LogNorm; zeros (and negatives) masked grey — the default
+    symlog = "symlog"  # SymLogNorm; zeros on the colorbar inside the linear core
+    linear = "linear"  # no transform: today's exact min/max
+
+
+@unique
+class BiasColorScale(StrEnum):
+    """Bias-map color scales (plotting.bias_scale)."""
+
+    linear = "linear"  # symmetric at the exact max |diff| — the default
+    symlog = "symlog"  # SymLogNorm, symmetric, linthresh by the decade rule
+
+
 class Plotting(StrictModel):
     """Spatial-plot rendering at session end. The shared color scale derives
-    from the descriptive statistics, so plotting requires the stats step."""
+    from the descriptive statistics, so plotting requires the stats step.
+    The maximum is always the exact suite-wide maximum; under log/symlog the
+    floor is a rule (decades below the maximum, never below the suite-wide
+    smallest positive value) or an explicit value."""
 
     enabled: bool = Field(
         True, description="Render spatial plots per NetCDF into <combo>/plots/"
     )
     gif_enabled: bool = Field(
         True, description="Assemble the per-variable plots into an animated GIF"
+    )
+    scale: ColorScale = Field(
+        ColorScale.log,
+        description=(
+            "Overview-map color scale: log (zeros masked grey, the default), "
+            "symlog (zeros on the colorbar), or linear (no transform)"
+        ),
+    )
+    decades: int | None = Field(
+        5,
+        ge=1,
+        description=(
+            "log/symlog: the floor is the suite-wide max / 10**decades, never "
+            "below the suite-wide smallest positive value; null = that smallest "
+            "positive value exactly"
+        ),
+    )
+    floor: float | None = Field(
+        None,
+        gt=0,
+        description=(
+            "log/symlog: an explicit floor in data units; overrides decades "
+            "(ignored under linear)"
+        ),
+    )
+    bias_scale: BiasColorScale = Field(
+        BiasColorScale.linear,
+        description=(
+            "Bias-map color scale: linear (symmetric at the exact max |diff|, the "
+            "default) or symlog"
+        ),
+    )
+    bias_decades: int = Field(
+        5,
+        ge=1,
+        description="bias symlog: linthresh = max |diff| / 10**bias_decades",
     )
 
 

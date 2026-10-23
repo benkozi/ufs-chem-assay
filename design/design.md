@@ -439,8 +439,9 @@ Layout under the output root is the same either way:
     <combo_id>-stats.csv       # per-NetCDF descriptive statistics
     <combo_id>-stats-comparison.csv # comparison record: one row per file x variable
     plots-overview/            # session-end spatial plots + per-variable GIF
-      co__cece_..._010000.png  #   (suite-wide exact min/max color scale,
-      co.gif                   #    derived from that suite's stats slice)
+      co__cece_..._010000.png  #   (suite-wide color scale from that suite's stats slice:
+      co.gif                   #    log by default — exact max, floor by the decade rule,
+                               #    zeros grey — or symlog/linear per plotting.scale)
     plots-baselines/           # bias maps (realization - baseline) + GIF,
                                #   RdBu_r symmetric suite-wide scale from
                                #   that suite's comparison slice; compared combos only
@@ -893,6 +894,30 @@ Persistent benchmarking (2026-10-23, `src/benchmarks.py`; full design in
   files, and the committed file under `--record-benchmarks`) → publish →
   stats → plots; the benchmark step is wrapped so it never fails the
   session and names the post-hoc command on failure.
+
+## Color scales
+
+(2026-10-23; full design in
+`design/feat/20261019-1447-global-anthro-use-case/20261023-1444-better-scales.md`.)
+Overview maps use a **logarithmic scale by default** (`Plotting.scale:
+log | symlog | linear`): the fields are non-negative and span many decades
+(the maccity CO flux: 47 % zeros, positives over ten decades), and the
+linear default inherited from the viewer showed a blank globe. The maximum
+stays the exact suite-wide maximum (the standing rule: never percentiles);
+the floor is a rule — `max / 10**decades`, default 5 (chosen by rendering
+the maccity field at 4–7 decades), never below the suite-wide smallest
+positive value, which is the new `min_positive` statistic — or an explicit
+`plotting.floor`. Under `log` zeros and negatives are masked and drawn
+light grey (`ZERO_COLOR`), named in the colorbar label; under `symlog` they
+sit in the linear core; `linear` is byte-identical to the old rendering. A
+variable with no positive value falls back to linear with a warning; an
+explicit floor at or above the maximum is refused in favour of the decade
+rule. `VariableScale` carries `scale` and `floor`; `make_norm` turns it into
+`LogNorm`/`SymLogNorm` (a norm and `vmin`/`vmax` are never both passed);
+the title carries `[log]`/`[symlog]`. Bias maps stay linear and symmetric
+at the exact max |diff| by default, with `bias_scale: symlog` and
+`bias_decades` offered. The session passes each suite's `plotting` to
+`render_all_plots`/`render_all_bias_plots`.
 
 ## Type checking
 

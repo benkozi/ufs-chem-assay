@@ -51,7 +51,10 @@ def _fake_sync(
         ):
             downloads(config.destination)
         return S3SyncResult(
-            argv=config.argv, returncode=0, output="(dryrun) upload: x\n", dry_run=config.dry_run
+            argv=config.argv,
+            returncode=0,
+            output="(dryrun) upload: x\n",
+            dry_run=config.dry_run,
         )
 
     return fake
@@ -133,7 +136,9 @@ def test_upload_to_a_directory_store_copies_and_resumes(tmp_path: Path) -> None:
     record = upload_output(root, str(store))
     copy = store / _RUN_ID
     assert (copy / "run.yaml").is_file()
-    assert (copy / "01JCOMBOCOMBOCOMBOCOMBOCOM" / "cece_20100101_010000.nc").read_bytes() == b"netcdf"
+    assert (
+        copy / "01JCOMBOCOMBOCOMBOCOMBOCOM" / "cece_20100101_010000.nc"
+    ).read_bytes() == b"netcdf"
     assert (copy / UPLOAD_RECORD).is_file()
     assert record.destination == str(copy)
     # A re-upload after a change refreshes the copy; nothing is refused.
@@ -154,10 +159,13 @@ def test_upload_to_a_directory_store_dry_run_counts_only(
     assert any("4 file(s)" in r.getMessage() for r in caplog.records)
 
 
-def test_upload_transfer_errors_propagate(tmp_path: Path, mocker: MockerFixture) -> None:
+def test_upload_transfer_errors_propagate(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
     root = _root(tmp_path)
     mocker.patch(
-        "outputs.sync", side_effect=subprocess.CalledProcessError(1, ["aws"], output="denied")
+        "outputs.sync",
+        side_effect=subprocess.CalledProcessError(1, ["aws"], output="denied"),
     )
     with pytest.raises(subprocess.CalledProcessError):
         upload_output(root, _STORE)
@@ -193,12 +201,16 @@ def test_download_syncs_into_dest_under_the_ulid(
             }
         )
     )
-    sync = mocker.patch("outputs.sync", side_effect=_fake_sync(downloads=_arrives(root)))
+    sync = mocker.patch(
+        "outputs.sync", side_effect=_fake_sync(downloads=_arrives(root))
+    )
     dest = tmp_path / "back"
     target = download_output(_RUN_ID, _STORE, dest)
     config = sync.call_args.args[0]
     assert config.source == f"{_STORE}/{_RUN_ID}/"
-    assert str(config.destination).startswith(str(dest / ".staging"))  # staged, then moved
+    assert str(config.destination).startswith(
+        str(dest / ".staging")
+    )  # staged, then moved
     assert target == dest / _RUN_ID
     assert (target / "run.yaml").is_file()
     assert (target / "01JCOMBOCOMBOCOMBOCOMBOCOM" / "cece_20100101_010000.nc").is_file()
@@ -212,7 +224,9 @@ def test_download_of_an_absent_ulid_is_refused_and_leaves_nothing(
     # aws exits 0 and downloads nothing for an absent prefix: run.yaml is the marker.
     mocker.patch("outputs.sync", side_effect=_fake_sync())
     dest = tmp_path / "back"
-    with pytest.raises(ValueError, match=rf"no output for {_RUN_ID} under {re.escape(_STORE)}"):
+    with pytest.raises(
+        ValueError, match=rf"no output for {_RUN_ID} under {re.escape(_STORE)}"
+    ):
         download_output(_RUN_ID, _STORE, dest)
     assert not (dest / _RUN_ID).exists()
     assert not (dest / ".staging").exists()

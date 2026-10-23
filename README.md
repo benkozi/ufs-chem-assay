@@ -715,11 +715,25 @@ unknown keys in suite or driver config files are rejected at load time.
 
 Spatial plots render at session end (suite `plotting.enabled`, default on;
 `gif_enabled` controls the per-variable GIF), one per spatial field — the
-same lat/lon rule as the statistics. All plots of a variable share
-one **exact suite-wide min/max color scale** derived from the descriptive
-statistics — so plotting requires `compute_descriptive_stats`. First-time
-boundary rendering downloads Natural Earth coastline/border data; offline,
-plots degrade to data-only maps with a warning.
+same lat/lon rule as the statistics. All plots of a variable share one
+**suite-wide color scale** derived from the descriptive statistics — so
+plotting requires `compute_descriptive_stats` — whose maximum is always the
+exact suite-wide maximum (an outlier that saturates a map is a finding).
+The scale is **logarithmic by default** (`plotting.scale: log`): emission
+and concentration fields are non-negative and span many decades, and a
+linear map shows a blank globe with a few bright cells. Under `log` the
+floor is `max / 10**plotting.decades` (default 5), never below the
+suite-wide smallest positive value (the `min_positive` statistic), or
+`plotting.floor` in data units when set; zeros (and negatives) have no
+logarithm and are drawn light grey with `(grey: 0)` in the colorbar label,
+so "no emission" and "small emission" read differently. `plotting.scale:
+symlog` keeps zeros on the colorbar inside a linear core of that floor;
+`linear` is the plain exact min/max. The title carries `[log]`/`[symlog]`.
+Bias maps are symmetric at the exact max |difference|, linear by default;
+`plotting.bias_scale: symlog` (with `bias_decades`) shows ULP-level
+structure beside gross differences. First-time boundary rendering
+downloads Natural Earth coastline/border data; offline, plots degrade to
+data-only maps with a warning.
 
 Stats CSV columns: `run_id`, `application`, `suite` (the suite's unique
 `name` from its yaml, e.g. `simple-maccity`), identity (`combo_id`, `combo`, `file`,
@@ -727,7 +741,8 @@ Stats CSV columns: `run_id`, `application`, `suite` (the suite's unique
 timestamp from its NetCDF time coordinate as `time` (ISO-8601) plus part
 columns `year`/`month`/`day`/`hour`/`minute`/`second` for easy time
 summaries (null if the file has no time coordinate), and the nan-aware
-statistics (`count`, `sum`, `mean`, `std`, `min`, `max`, `median`).
+statistics (`count`, `sum`, `mean`, `std`, `min`, `min_positive` — the
+smallest value above zero, empty when none —, `max`, `median`).
 
 ## Output upload
 

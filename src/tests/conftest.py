@@ -585,11 +585,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
                 continue
             suite_stats = stats[stats["suite"] == context.suite.name]
             if not suite_stats.empty:
-                render_all_plots(
-                    roots.host,
-                    suite_stats,
-                    gif_enabled=context.suite.plotting.gif_enabled,
-                )
+                render_all_plots(roots.host, suite_stats, context.suite.plotting)
 
     comparison_csvs = sorted(roots.host.glob("*/*-stats-comparison.csv"))
     if comparison_csvs:
@@ -612,7 +608,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
                 comparison_stats["suite"] == context.suite.name
             ]
             if pairs and not suite_comparisons.empty:
-                render_all_bias_plots(pairs, suite_comparisons)
+                render_all_bias_plots(pairs, suite_comparisons, context.suite.plotting)
 
     # Last: the whole root, as it now stands, to the output store under the
     # run ULID. A dry-run session has nothing worth keeping. Never raises

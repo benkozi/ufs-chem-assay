@@ -38,12 +38,18 @@ class OutputUploadRecord(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    run_id: str = Field(description="The run's session ULID (run.yaml's run_id): the store key")
-    store: str = Field(description="The output store: an s3://bucket/prefix or a local directory")
+    run_id: str = Field(
+        description="The run's session ULID (run.yaml's run_id): the store key"
+    )
+    store: str = Field(
+        description="The output store: an s3://bucket/prefix or a local directory"
+    )
     destination: str = Field(description="Where the copy lives: <store>/<run_id>/")
     uploaded_at: datetime = Field(description="When the copy was taken (UTC, aware)")
     uploaded_by: str = Field(description="<user>@<hostname> that took it")
-    files: int = Field(description="Files in the root at upload time (this record excluded)")
+    files: int = Field(
+        description="Files in the root at upload time (this record excluded)"
+    )
     bytes: int = Field(description="Their total size")
 
 
@@ -108,7 +114,10 @@ def upload_output(
         )
     elif dry_run:
         logger.info(
-            "DRY RUN would copy %s file(s) from %s to %s", files, output_root, destination
+            "DRY RUN would copy %s file(s) from %s to %s",
+            files,
+            output_root,
+            destination,
         )
     else:
         shutil.copytree(output_root, destination, dirs_exist_ok=True)
@@ -123,7 +132,9 @@ def upload_output(
     return record
 
 
-def download_output(run_id: str, store: str, dest: Path, *, dry_run: bool = False) -> Path:
+def download_output(
+    run_id: str, store: str, dest: Path, *, dry_run: bool = False
+) -> Path:
     """<store>/<run_id>/ into <dest>/<run_id>/: S3 through a staging directory
     moved into place only when run.yaml arrived (an absent prefix syncs
     nothing — a ValueError naming the ULID and the store), a directory store
@@ -154,9 +165,13 @@ def download_output(run_id: str, store: str, dest: Path, *, dry_run: bool = Fals
             shutil.rmtree(staging)
         staging.parent.mkdir(parents=True, exist_ok=True)
         try:
-            sync(S3SyncConfig(source=source, destination=staging, only_show_errors=True))
+            sync(
+                S3SyncConfig(source=source, destination=staging, only_show_errors=True)
+            )
             if not (staging / RUN_MANIFEST).is_file():
-                raise ValueError(f"no output for {run_id} under {store} (nothing downloaded)")
+                raise ValueError(
+                    f"no output for {run_id} under {store} (nothing downloaded)"
+                )
             target.mkdir(parents=True, exist_ok=True)
             for path in staging.rglob("*"):
                 if path.is_file():

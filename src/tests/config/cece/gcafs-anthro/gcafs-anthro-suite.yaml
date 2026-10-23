@@ -65,6 +65,9 @@ analysis:
 plotting:
   enabled: true
   gif_enabled: true
+  scale: log  # the default: SO2/OC/BC span many decades; zeros (ocean) grey
+  decades: 5  # the floor five decades below the suite-wide maximum
+  bias_scale: linear  # the default
 # One entry: the empty selector matches the single combination of a sweep-less
 # suite. The all-zero ULID means "not published yet": the harness never looks
 # for it, the comparison test skips, and publish-baselines replaces it (keeping
