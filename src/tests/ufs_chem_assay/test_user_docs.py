@@ -74,6 +74,9 @@ def test_gcafs_anthro_runbook_covers_the_use_case() -> None:
         "report-mem",
         "record-benchmarks --output-root=",
         "gcafs-anthro/benchmarks.csv",
+        "upload-output --output-root=",
+        "download-output --ulid",
+        "assay-output/<run ULID>",
     ):
         assert needle in text, needle
     assert (
@@ -103,6 +106,7 @@ def test_runbook_uses_placeholders_and_ref_variables() -> None:
         ".sbatch" in text
     )  # the per-combo job script, and the resubmit-by-hand triage step
     assert "record-benchmarks --output-root=" in text  # the committed rows
+    assert "upload-output --output-root=" in text  # keeping a run
     assert not (_REPO_ROOT / "scripts" / "ursa-harness.sh").exists()
 
 
@@ -146,6 +150,14 @@ def test_readme_documents_the_new_surfaces() -> None:
         "record-benchmarks --output-root=",
         "harness.record_benchmarks",
         "config_sha256",
+        "## Output upload",
+        "upload-output --output-root=",
+        "download-output --ulid=",
+        "ASSAY_OUTPUT_STORE",
+        "s3://ufs-chem/assay-output",
+        "--upload-output",
+        "harness.upload_output",
+        "upload.yaml",
     ):
         assert needle in text, needle
     assert "buid-test-tweaks" not in text

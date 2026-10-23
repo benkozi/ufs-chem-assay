@@ -37,6 +37,7 @@ from models.suite_config import (
     RunManifest,
     SuiteConfig,
 )
+from outputs import upload_output
 from platforms import ACCOUNTING, Accounting, Runtime
 from plotting import render_all_bias_plots, render_all_plots
 from report import TestReportRow, worst_result, write_test_report_csv
@@ -155,6 +156,15 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         ),
     )
     group.addoption(
+        "--upload-output",
+        action="store_true",
+        help=(
+            "At session end, after every other artifact, copy the whole output "
+            "root to ASSAY_OUTPUT_STORE under the run ULID (off by default; a "
+            "dry-run session uploads nothing)."
+        ),
+    )
+    group.addoption(
         "--combo-output-root",
         default=None,
         help=(
@@ -265,6 +275,20 @@ def pytest_sessionstart(session: pytest.Session) -> None:
                 f"--publish-baselines: {exc}; run without the flag and publish "
                 "afterwards from a node with network: ufs-chem-assay "
                 "publish-baselines --output-root=<this run's output root>"
+            ) from exc
+
+    if config.getoption("--upload-output") and settings.output_store.startswith(
+        "s3://"
+    ):
+        # Fail fast, as for --publish-baselines: a node without network must
+        # not run the whole suite only to fail the upload at the end.
+        try:
+            check_reachable(settings.output_store)
+        except ConnectionError as exc:
+            raise pytest.UsageError(
+                f"--upload-output: {exc}; run without the flag and upload "
+                "afterwards from a node with network: ufs-chem-assay "
+                "upload-output --output-root=<this run's output root>"
             ) from exc
 
     # Selection, application, suite loading: the same sequence the CLI's
@@ -589,6 +613,36 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
             ]
             if pairs and not suite_comparisons.empty:
                 render_all_bias_plots(pairs, suite_comparisons)
+
+    # Last: the whole root, as it now stands, to the output store under the
+    # run ULID. A dry-run session has nothing worth keeping. Never raises
+    # into pytest; the post-hoc command is named on failure.
+    if config.getoption("--upload-output"):
+        _upload_output(config, roots)
+
+
+def _upload_output(config: pytest.Config, roots: ComboRoots) -> None:
+    settings = config.stash[_SETTINGS]
+    if config.getoption("--dry-run"):
+        logger.info("dry run: output not uploaded (nothing executed)")
+        return
+    try:
+        record = upload_output(roots.host, settings.output_store)
+    except Exception as exc:  # the hook must not fail the session
+        logger.error(
+            "uploading output failed: %s; upload it later: ufs-chem-assay "
+            "upload-output --output-root=%s",
+            exc,
+            roots.host,
+        )
+        return
+    logger.info(
+        "uploaded run %s -> %s (%s file(s), %s bytes)",
+        record.run_id,
+        record.destination,
+        record.files,
+        record.bytes,
+    )
 
 
 def _benchmark_rows(

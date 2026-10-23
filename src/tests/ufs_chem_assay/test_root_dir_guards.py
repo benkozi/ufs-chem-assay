@@ -150,6 +150,38 @@ def test_harness_only_session_never_touches_the_checkout(
     assert "cannot determine the application commit" not in result.stderr
 
 
+def test_upload_output_is_refused_at_start_without_network(tmp_path: Path) -> None:
+    # The endpoint probe (check_reachable) follows AWS_ENDPOINT_URL: point it
+    # at a closed local port and the session must refuse the flag before any
+    # work, naming the post-hoc command.
+    result = _run_pytest(
+        ["--dry-run", "--upload-output"],
+        tmp_path,
+        {
+            "ASSAY_OUTPUT_STORE": "s3://ufs-chem/assay-output",
+            "AWS_ENDPOINT_URL": "http://127.0.0.1:9",
+        },
+    )
+    assert result.returncode == _USAGE_ERROR, result.stdout + result.stderr
+    assert "--upload-output" in result.stderr
+    assert "upload-output --output-root=" in result.stderr
+
+
+def test_dry_run_with_upload_output_uploads_nothing(tmp_path: Path) -> None:
+    # A directory store needs no network; a dry-run session still has
+    # nothing worth keeping and says so.
+    store = tmp_path / "store"
+    result = _run_pytest(
+        ["--dry-run", "--upload-output", "--basetemp", str(tmp_path / "bt")],
+        tmp_path,
+        {"ASSAY_OUTPUT_STORE": str(store)},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "output not uploaded" in result.stdout + result.stderr
+    assert not store.exists()
+    assert not list((tmp_path / "bt").rglob("upload.yaml"))
+
+
 def test_non_git_root_dir_is_usage_error_for_a_real_run(tmp_path: Path) -> None:
     # A configured root that is not a git checkout is fatal at collection
     # when the driver is going to run: the run must record the application

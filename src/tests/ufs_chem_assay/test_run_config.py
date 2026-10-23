@@ -217,6 +217,23 @@ def test_gcafs_anthro_template_bakes_in_the_use_case() -> None:
     assert config.slurm.account == ursa.slurm.account if ursa.slurm else False
 
 
+def test_outputs_section_and_upload_flag_default_off_everywhere() -> None:
+    from cli.run_config import HarnessSection, OutputsSection
+
+    assert OutputsSection().store == "s3://ufs-chem/assay-output"
+    assert HarnessSection().upload_output is False
+    for name in ("ursa.yaml", "local.yaml", "ursa-gcafs-anthro.yaml"):
+        config = load_run_config(TEMPLATES_DIR / name)
+        assert config.outputs.store == "s3://ufs-chem/assay-output", name
+        assert config.harness.upload_output is False, name  # off by default, everywhere
+    config = load_run_config(
+        TEMPLATES_DIR / "ursa.yaml",
+        overrides=["outputs:store=/scratch/outputs", "harness:upload_output=true"],
+    )
+    assert config.outputs.store == "/scratch/outputs"
+    assert config.harness.upload_output is True
+
+
 def test_record_benchmarks_defaults_false_and_is_set_per_template() -> None:
     from cli.run_config import HarnessSection
 
@@ -339,6 +356,7 @@ def test_harness_section_mirrors_every_setting() -> None:
         "srun_args",  # slurm: ntasks + srun_args
         "job_env",
         "input_search_path",  # data.input_search_path
+        "output_store",  # outputs.store
     } == SETTINGS_NOT_MIRRORED
 
 

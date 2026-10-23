@@ -24,6 +24,7 @@ _SCRUBBED = (
     "LOG_LEVEL",
     "SRUN_ARGS",
     "INPUT_SEARCH_PATH",
+    "OUTPUT_STORE",
 )
 
 
@@ -182,6 +183,19 @@ def test_baseline_tolerance_overrides_reject_negatives() -> None:
 
 
 @pytest.mark.usefixtures("clean_env")
+def test_output_store_defaults_and_shares_the_store_validator(
+    clean_env: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    assert Settings().output_store == "s3://ufs-chem/assay-output"
+    clean_env.setenv(f"{ENV_PREFIX}OUTPUT_STORE", "s3://other/outputs/")
+    assert Settings().output_store == "s3://other/outputs"
+    clean_env.setenv(f"{ENV_PREFIX}OUTPUT_STORE", str(tmp_path / "outputs"))
+    assert Settings().output_store == str(tmp_path / "outputs")
+    clean_env.setenv(f"{ENV_PREFIX}OUTPUT_STORE", "s3://bucket-root")
+    with pytest.raises(ValidationError, match="output_store"):
+        Settings()
+
+
 def test_srun_args_defaults_to_one_task_and_reads_from_env(
     clean_env: pytest.MonkeyPatch,
 ) -> None:

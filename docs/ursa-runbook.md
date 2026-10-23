@@ -251,6 +251,23 @@ cd $ROOT/ufs-chem-assay
 uv run --no-sync ufs-chem-assay record-benchmarks --output-root=$ROOT/CECE/ufs-chem-assay-output
 ```
 
+**Uploading a run.** To keep or share the whole output root (every
+combination's NetCDF, `.out`, `cece.log`, plots, job script), copy it to
+`s3://ufs-chem/assay-output/<run ULID>/` from the login node — resumable,
+re-runnable after a publish, never deleting:
+
+```bash
+cd $ROOT/ufs-chem-assay
+AWS_PROFILE=<profile> uv run --no-sync ufs-chem-assay upload-output --output-root=$ROOT/CECE/ufs-chem-assay-output --dry-run
+AWS_PROFILE=<profile> uv run --no-sync ufs-chem-assay upload-output --output-root=$ROOT/CECE/ufs-chem-assay-output
+```
+
+`harness.upload_output: true` in the run config does it at the end of the
+harness stage instead (off in every template; the login node has network).
+On any machine with the bucket credentials, `download-output --ulid <run
+ULID> --dest <dir>` brings the root back to `<dir>/<run ULID>/`; the ULID
+is `run_id` in `run.yaml` and the output root's name in the harness log.
+
 The `native` runtime (the driver as a direct host process) is not a
 supported path on Ursa: the harness venv and the driver need conflicting
 environments, and only a per-job script reconciles them.

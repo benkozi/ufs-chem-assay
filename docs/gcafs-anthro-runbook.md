@@ -181,6 +181,32 @@ uv run --no-sync ufs-chem-assay record-benchmarks --output-root=$ROOT/CECE/ufs-c
 Raise `timeout_s`, run again, and the next row lands beside the first;
 that pair is the measurement.
 
+## 5b. Upload the run
+
+The timeout run is worth inspecting away from Ursa — its `.out`, `cece.log`,
+and the partial output — so copy the whole output root to
+`s3://ufs-chem/assay-output/<run ULID>/` from the login node (dry run
+first; the ULID is `run_id` in `run.yaml`):
+
+```bash
+cd $ROOT/ufs-chem-assay
+AWS_PROFILE=<profile> uv run --no-sync ufs-chem-assay upload-output --output-root=$ROOT/CECE/ufs-chem-assay-output --dry-run
+AWS_PROFILE=<profile> uv run --no-sync ufs-chem-assay upload-output --output-root=$ROOT/CECE/ufs-chem-assay-output
+```
+
+Re-run it after the publish (step 5) and the `baseline.yaml` it wrote goes
+up too; nothing is re-transferred that did not change. Then, on a laptop
+with the bucket credentials:
+
+```bash
+AWS_PROFILE=<profile> uv run ufs-chem-assay download-output --ulid <run ULID> --dest ~/gcafs-runs
+```
+
+lands the root at `~/gcafs-runs/<run ULID>/`. To upload every run
+automatically, set `harness.upload_output: true` in
+`config/ursa-gcafs-anthro.yaml` (off as shipped); the session then refuses
+to start without network, which on Ursa means the login node.
+
 ## 6. Cold start: the baseline comes back from the store
 
 Prove the download half: with no local copy of the baseline (none exists

@@ -30,6 +30,8 @@ baselines:
   root_dir:  # ASSAY_BASELINE_ROOT_DIR
   enabled: false  # ASSAY_ENABLE_BASELINE_COMPARISONS; no public store yet
   store: s3://ufs-chem/baselines  # ASSAY_BASELINE_STORE: an s3://bucket/prefix or a local directory
+outputs:
+  store: s3://ufs-chem/assay-output  # ASSAY_OUTPUT_STORE: an s3://bucket/prefix or a local directory
 harness:
   suite_config: simple-maccity-suite.yaml  # regex over *-suite.yaml names; every match runs
   output_root: ufs-chem-assay-output  # relative: under the checkout; absolute: anywhere writable
@@ -39,6 +41,7 @@ harness:
   publish_baselines: false  # pytest --publish-baselines: publish passing compared combos at session end
   no_suite_update: false  # pytest --no-suite-update: publish without repointing the suite files
   record_benchmarks: true  # pytest --record-benchmarks: append the run's rows to the suites' benchmarks.csv; commit
+  upload_output: false  # pytest --upload-output: copy the whole output root to outputs.store/<run ULID> at session end
   runtime:  # ASSAY_RUNTIME; null = the platform's default (slurm here)
   launcher: ''  # ASSAY_LAUNCHER; ignored under slurm
   env:  # exported inside every driver job (ASSAY_JOB_ENV); the single-node MPI hints CECE's ctest uses

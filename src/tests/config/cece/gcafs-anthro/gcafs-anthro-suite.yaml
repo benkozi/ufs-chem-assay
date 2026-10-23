@@ -72,5 +72,5 @@ plotting:
 # float64 ULPs at any magnitude.
 baseline_comparisons:
   - sweep_selector: {}
-    ulid: '01M5JV8MBW0XE9TPE0BDCGSFJZ'
+    ulid: 01M5JV8MBW0XE9TPE0BDCGSFJZ
     rtol: 1.0e-15

@@ -23,7 +23,7 @@ from cli.override import apply_overrides
 from identity import HARNESS_ROOT
 from models.base import StrictModel
 from platforms import Platform, Runtime, default_runtime, detect_platform
-from settings import DEFAULT_BASELINE_STORE
+from settings import DEFAULT_BASELINE_STORE, DEFAULT_OUTPUT_STORE
 
 __all__ = ["HARNESS_ROOT", "ResolveApplication", "RunConfig"]
 
@@ -72,6 +72,17 @@ class BaselinesSection(StrictModel):
         default=None,
         ge=0,
         description="ASSAY_BASELINE_RTOL: relative tolerance (x |baseline|) over every entry; null = the entries' own",
+    )
+
+
+class OutputsSection(StrictModel):
+    store: str = Field(
+        default=DEFAULT_OUTPUT_STORE,
+        description=(
+            "ASSAY_OUTPUT_STORE: where upload-output (and --upload-output) copies a "
+            "run's whole output root as <store>/<run_id>/: an s3://bucket/prefix or "
+            "a local directory"
+        ),
     )
 
 
@@ -130,6 +141,14 @@ class HarnessSection(StrictModel):
             "Pass --record-benchmarks: at session end, append the run's benchmark "
             "rows to each suite's committed configuration benchmarks.csv (the "
             "per-run <output root>/benchmarks.csv is always written)"
+        ),
+    )
+    upload_output: bool = Field(
+        default=False,
+        description=(
+            "Pass --upload-output: at session end, after every other artifact, "
+            "upload the whole output root to outputs.store under the run ULID "
+            "(off by default; needs network where the session runs)"
         ),
     )
     runtime: Runtime | None = Field(
@@ -273,6 +292,7 @@ class RunConfig(StrictModel):
     )
     data: DataSection = Field(default_factory=DataSection)
     baselines: BaselinesSection = Field(default_factory=BaselinesSection)
+    outputs: OutputsSection = Field(default_factory=OutputsSection)
     harness: HarnessSection = Field(default_factory=HarnessSection)
     slurm: SlurmSection | None = Field(
         default=None,

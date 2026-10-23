@@ -195,6 +195,7 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "export ASSAY_JOB_ENV='I_MPI_FABRICS=shm FI_PROVIDER=tcp'",  # the driver jobs' env
         "export ASSAY_ENABLE_BASELINE_COMPARISONS=false",
         "export ASSAY_BASELINE_STORE=s3://ufs-chem/baselines",
+        "export ASSAY_OUTPUT_STORE=s3://ufs-chem/assay-output",
         "export ASSAY_RUN_TIMEOUT_S=300",
         "export ASSAY_DASK_NWORKERS=2",
         f"export UV_CACHE_DIR={ursa.root_dir}/uv-cache",
@@ -224,9 +225,19 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "--run-examples",
         "--publish-baselines",
         "--no-suite-update",
+        "--upload-output",  # off by default everywhere
     ):
         assert absent not in text, absent
     assert "--record-benchmarks" in text  # the Ursa template keeps every run
+
+
+def test_harness_stage_renders_the_upload_flag_when_asked(tmp_path: Path) -> None:
+    config = _ursa(
+        tmp_path, {"harness.upload_output": True, "outputs.store": "/scratch/outputs"}
+    )
+    text = render_stage(Stage.HARNESS, config, _CECE).text
+    assert "--upload-output" in text
+    assert "export ASSAY_OUTPUT_STORE=/scratch/outputs" in text
 
 
 def test_harness_stage_exports_are_field_driven(tmp_path: Path) -> None:

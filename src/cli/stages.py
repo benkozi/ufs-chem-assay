@@ -50,6 +50,7 @@ SETTINGS_NOT_MIRRORED = frozenset(
         "slurm_queue_wait_s",  # slurm.queue_wait_s
         "job_env",  # harness.env under the slurm runtime
         "input_search_path",  # data.input_search_path
+        "output_store",  # outputs.store
     }
 )
 
@@ -152,6 +153,7 @@ def _exports(
     if config.baselines.root_dir is not None:
         exports.append((f"{ENV_PREFIX}BASELINE_ROOT_DIR", q(config.baselines.root_dir)))
     exports.append((f"{ENV_PREFIX}BASELINE_STORE", q(config.baselines.store)))
+    exports.append((f"{ENV_PREFIX}OUTPUT_STORE", q(config.outputs.store)))
     for tolerance, override in (
         ("ATOL", config.baselines.atol),
         ("RTOL", config.baselines.rtol),
@@ -193,6 +195,8 @@ def _harness(
         pytest_args.append("--no-suite-update")
     if harness.record_benchmarks:
         pytest_args.append("--record-benchmarks")
+    if harness.upload_output:
+        pytest_args.append("--upload-output")
     pytest_args += harness.pytest_args
     return [
         *clean_python_env(section),

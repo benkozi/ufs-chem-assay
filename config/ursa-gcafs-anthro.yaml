@@ -31,6 +31,8 @@ baselines:
   root_dir:  # for the cold-start run: --override baselines:root_dir=<dir> baselines:enabled=true
   enabled: false  # the first run has no baseline to compare against; true once published
   store: s3://ufs-chem/baselines
+outputs:
+  store: s3://ufs-chem/assay-output  # ASSAY_OUTPUT_STORE: an s3://bucket/prefix or a local directory
 harness:
   suite_config: gcafs-anthro-suite.yaml  # the use case (config/ursa.yaml: simple-maccity)
   output_root: ufs-chem-assay-output
@@ -40,6 +42,7 @@ harness:
   publish_baselines: false  # publish from the login node afterwards (runbook step 5)
   no_suite_update: false
   record_benchmarks: true  # every run is kept: rows appended to cece/gcafs-anthro/benchmarks.csv; commit them
+  upload_output: false  # pytest --upload-output: copy the whole output root to outputs.store/<run ULID> at session end
   runtime:  # slurm (the platform's default)
   launcher: ''
   env:  # exported inside the driver job: the MPI hints, then the single-thread geometry

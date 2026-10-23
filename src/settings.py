@@ -17,7 +17,7 @@ import shlex
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
@@ -34,6 +34,7 @@ ENV_PREFIX = "ASSAY_"
 LEGACY_ENV_PREFIX = "CECE_"  # accepted as a fallback for every harness setting
 _ENV_FILE = ".env"
 DEFAULT_BASELINE_STORE = "s3://ufs-chem/baselines"
+DEFAULT_OUTPUT_STORE = "s3://ufs-chem/assay-output"
 
 
 class Settings(BaseSettings):
@@ -131,6 +132,14 @@ class Settings(BaseSettings):
             "Where baselines are published, append-only, as <store>/<ulid>/: an "
             "S3 prefix (s3://bucket/prefix, never a bucket root) or a local "
             "directory (a Dropbox folder, a scratch area)"
+        ),
+    )
+    output_store: str = Field(
+        DEFAULT_OUTPUT_STORE,
+        description=(
+            "Where upload-output copies a run's whole output root as "
+            "<store>/<run_id>/ (resumable, never deleting): an S3 prefix "
+            "(s3://bucket/prefix, never a bucket root) or a local directory"
         ),
     )
     baseline_atol: float | None = Field(
@@ -233,13 +242,13 @@ class Settings(BaseSettings):
             pairs[name] = value
         return pairs
 
-    @field_validator("baseline_store", mode="after")
+    @field_validator("baseline_store", "output_store", mode="after")
     @classmethod
-    def _store_is_a_prefix_or_directory(cls, value: str) -> str:
+    def _store_is_a_prefix_or_directory(cls, value: str, info: ValidationInfo) -> str:
         # An S3 prefix: normalised (no trailing slash) and never a bucket
-        # root, so the store stays apart from anything else the bucket holds.
+        # root, so a store stays apart from anything else the bucket holds.
         # Anything else is a local directory (a Dropbox folder, a scratch
-        # area): kept absolute; it need not exist until publication.
+        # area): kept absolute; it need not exist until used.
         if value.startswith("s3://"):
             value = value.rstrip("/")
             if (
@@ -247,13 +256,13 @@ class Settings(BaseSettings):
                 or not value[len("s3://") :].partition("/")[2]
             ):
                 raise ValueError(
-                    f"baseline_store must be an s3://bucket/prefix (a key prefix, "
+                    f"{info.field_name} must be an s3://bucket/prefix (a key prefix, "
                     f"not a bucket root) or a local directory, got {value!r}"
                 )
             return value
         if "://" in value or not value.strip():
             raise ValueError(
-                f"baseline_store must be an s3://bucket/prefix or a local directory, "
+                f"{info.field_name} must be an s3://bucket/prefix or a local directory, "
                 f"got {value!r}"
             )
         return str(Path(value).expanduser().resolve())

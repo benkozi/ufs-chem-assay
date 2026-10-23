@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 from pathlib import Path, PurePosixPath
 
 import yaml
@@ -33,6 +34,7 @@ from cli.shell import run_bash, write_script
 from cli.stages import render_stage
 from logs import configure_logging, get_logger
 from models.suite_config import RunManifest
+from outputs import download_output, upload_output
 from platforms import Platform
 from s3_sync import check_reachable
 from selection import resolve_suites
@@ -243,6 +245,54 @@ def _parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="log the rows that would be appended to which file; write nothing",
+    )
+    upload = subparsers.add_parser(
+        "upload-output",
+        help=(
+            "copy a finished run's whole output root to the output store under "
+            "its run ULID (<store>/<run_id>/); resumable, nothing deleted"
+        ),
+    )
+    upload.add_argument(
+        "--output-root",
+        required=True,
+        type=Path,
+        help="the run's output root (the directory holding run.yaml), as a host path",
+    )
+    upload.add_argument(
+        "--store",
+        default=None,
+        metavar="STORE",
+        help="override ASSAY_OUTPUT_STORE: an s3://bucket/prefix or a local directory",
+    )
+    upload.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="the wrapper's own --dryrun plan (or a file count for a directory store); nothing written",
+    )
+    download = subparsers.add_parser(
+        "download-output",
+        help="copy a run's output root back from the output store by its run ULID",
+    )
+    download.add_argument(
+        "--ulid", required=True, metavar="RUN_ID", help="the run ULID"
+    )
+    download.add_argument(
+        "--dest",
+        required=True,
+        type=Path,
+        help="the directory to download into; the root lands at <dest>/<run ULID>/",
+    )
+    download.add_argument(
+        "--store",
+        default=None,
+        metavar="STORE",
+        help="override ASSAY_OUTPUT_STORE: an s3://bucket/prefix or a local directory",
+    )
+    download.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="the wrapper's own --dryrun plan (or a file count for a directory store); nothing written",
     )
     return parser
 
@@ -610,6 +660,83 @@ def _record_benchmarks(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _output_store(args: argparse.Namespace) -> str | None:
+    """The output store for the two output subcommands: the --store override
+    as an init kwarg (validated like the setting), else the setting. None
+    with the error logged when the store is unreachable or invalid."""
+    try:
+        settings = (
+            Settings() if args.store is None else Settings(output_store=args.store)
+        )
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return None
+    store = settings.output_store
+    if store.startswith("s3://"):
+        try:
+            check_reachable(store)
+        except ConnectionError as exc:
+            logger.error("%s; run this from a node with network", exc)
+            return None
+    return store
+
+
+def _upload_output(args: argparse.Namespace) -> int:
+    """Upload a finished run's output root under its run ULID. Every failure
+    is one ERROR line and exit 1."""
+    output_root = args.output_root.resolve()
+    if not (output_root / "run.yaml").is_file():
+        logger.error("%s is not a run's output root: no run.yaml", output_root)
+        return 1
+    store = _output_store(args)
+    if store is None:
+        return 1
+    try:
+        record = upload_output(output_root, store, dry_run=args.dry_run)
+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
+        logger.error("upload of %s failed: %s", output_root, _transfer_detail(exc))
+        return 1
+    logger.info(
+        "%srun %s -> %s (%s file(s), %s bytes)",
+        "dry run: " if args.dry_run else "uploaded ",
+        record.run_id,
+        record.destination,
+        record.files,
+        record.bytes,
+    )
+    return 0
+
+
+def _download_output(args: argparse.Namespace) -> int:
+    """Download a run's output root by ULID into --dest. Every failure is one
+    ERROR line and exit 1."""
+    store = _output_store(args)
+    if store is None:
+        return 1
+    try:
+        target = download_output(
+            args.ulid, store, args.dest.resolve(), dry_run=args.dry_run
+        )
+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
+        logger.error("download of %s failed: %s", args.ulid, _transfer_detail(exc))
+        return 1
+    logger.info(
+        "%srun %s -> %s",
+        "dry run: " if args.dry_run else "downloaded ",
+        args.ulid,
+        target,
+    )
+    return 0
+
+
+def _transfer_detail(exc: Exception) -> str:
+    if isinstance(exc, subprocess.CalledProcessError):
+        output = (exc.output or "").strip()
+        tail = output.splitlines()[-1] if output else ""
+        return f"aws s3 sync exited {exc.returncode}: {tail}"
+    return str(exc)
+
+
 def main(argv: list[str] | None = None) -> int:
     # The harness's namespace logger, level from the same variable pytest
     # honours (settings.log_level, with the legacy spelling as fallback).
@@ -622,6 +749,10 @@ def main(argv: list[str] | None = None) -> int:
         return _fetch(args)
     if args.command == "record-benchmarks":
         return _record_benchmarks(args)
+    if args.command == "upload-output":
+        return _upload_output(args)
+    if args.command == "download-output":
+        return _download_output(args)
     if args.command == "publish-baselines":
         return _publish_baselines(args)
     return _run(args)

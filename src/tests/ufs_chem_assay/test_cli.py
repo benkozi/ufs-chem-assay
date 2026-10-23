@@ -1007,6 +1007,149 @@ def test_record_benchmarks_refuses_a_run_of_another_application(
     assert any("other run" in r.getMessage() for r in caplog.records)
 
 
+# ── upload-output / download-output ──────────────────────────────────────────
+
+
+@pytest.fixture
+def output_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A fabricated output root and a directory store (no AWS, no network)."""
+    monkeypatch.chdir(tmp_path)
+    for key in ("ASSAY_OUTPUT_STORE", "ASSAY_PLATFORM", "ASSAY_APPLICATION"):
+        monkeypatch.delenv(key, raising=False)
+    root = tmp_path / "output"
+    (root / "01JCOMBOCOMBOCOMBOCOMBOCOM").mkdir(parents=True)
+    (root / "run.yaml").write_text(
+        "run_id: 01JRUNRUNRUNRUNRUNRUNRUNRU\napplication: cece\n"
+    )
+    (root / "01JCOMBOCOMBOCOMBOCOMBOCOM" / "x.nc").write_bytes(b"nc")
+    monkeypatch.setenv("ASSAY_OUTPUT_STORE", str(tmp_path / "store"))
+    return root
+
+
+def test_upload_and_download_output_round_trip_through_a_directory_store(
+    output_env: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert main(["upload-output", f"--output-root={output_env}", "--dry-run"]) == 0
+    assert not (tmp_path / "store").exists()
+    assert main(["upload-output", f"--output-root={output_env}"]) == 0
+    copy = tmp_path / "store" / "01JRUNRUNRUNRUNRUNRUNRUNRU"
+    assert (copy / "01JCOMBOCOMBOCOMBOCOMBOCOM" / "x.nc").read_bytes() == b"nc"
+    assert (copy / "upload.yaml").is_file()
+    dest = tmp_path / "back"
+    assert (
+        main(["download-output", "--ulid=01JRUNRUNRUNRUNRUNRUNRUNRU", f"--dest={dest}"])
+        == 0
+    )
+    assert (dest / "01JRUNRUNRUNRUNRUNRUNRUNRU" / "run.yaml").is_file()
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("dry run: run 01JRUN" in m for m in messages)
+
+
+def test_output_subcommands_clean_errors(
+    output_env: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        assert main(["upload-output", f"--output-root={tmp_path / 'nope'}"]) == 1
+        assert (
+            main(
+                [
+                    "upload-output",
+                    f"--output-root={output_env}",
+                    "--store=s3://bucket-root",
+                ]
+            )
+            == 1
+        )
+        assert (
+            main(
+                [
+                    "download-output",
+                    "--ulid=01JABSENTABSENTABSENTABSEN",
+                    f"--dest={tmp_path / 'b'}",
+                ]
+            )
+            == 1
+        )
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("no run.yaml" in m for m in messages)
+    assert any("output_store" in m for m in messages)
+    assert any("no output for 01JABSENT" in m for m in messages)
+
+
+def test_output_subcommands_probe_an_s3_store_first(
+    output_env: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    probe = mocker.patch(
+        "cli.main.check_reachable", side_effect=ConnectionError("no route")
+    )
+    upload = mocker.patch("cli.main.upload_output")
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "upload-output",
+                f"--output-root={output_env}",
+                "--store=s3://ufs-chem/assay-output",
+            ]
+        )
+    assert code == 1
+    probe.assert_called_once_with("s3://ufs-chem/assay-output")
+    upload.assert_not_called()
+    assert any("node with network" in r.getMessage() for r in caplog.records)
+    # The download probes the same way.
+    download = mocker.patch("cli.main.download_output")
+    assert (
+        main(
+            [
+                "download-output",
+                "--ulid=01JRUNRUNRUNRUNRUNRUNRUNRU",
+                "--dest=d",
+                "--store=s3://ufs-chem/assay-output",
+            ]
+        )
+        == 1
+    )
+    download.assert_not_called()
+
+
+def test_output_subcommands_report_transfer_failures(
+    output_env: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch("cli.main.check_reachable")
+    mocker.patch(
+        "cli.main.upload_output",
+        side_effect=subprocess.CalledProcessError(
+            1, ["aws"], output="x\nAccessDenied\n"
+        ),
+    )
+    mocker.patch("cli.main.download_output", side_effect=OSError("disk full"))
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        assert (
+            main(
+                [
+                    "upload-output",
+                    f"--output-root={output_env}",
+                    "--store=s3://ufs-chem/assay-output",
+                ]
+            )
+            == 1
+        )
+        assert (
+            main(
+                [
+                    "download-output",
+                    "--ulid=01JRUNRUNRUNRUNRUNRUNRUNRU",
+                    "--dest=d",
+                    "--store=s3://ufs-chem/assay-output",
+                ]
+            )
+            == 1
+        )
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("AccessDenied" in m for m in messages)
+    assert any("disk full" in m for m in messages)
+
+
 # ── the remaining error branches ─────────────────────────────────────────────
 
 

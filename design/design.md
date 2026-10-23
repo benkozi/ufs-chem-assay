@@ -416,6 +416,7 @@ Layout under the output root is the same either way:
 <output-root>/                 # default: pytest tmp dir; else /work-relative
   benchmarks.csv               # one BenchmarkRow per executed combination (header
                                #   only after a dry run); see Benchmarks
+  upload.yaml                  # once uploaded: OutputUploadRecord (see Output upload)
   run.yaml                     # RunManifest (incl. inputs as found, baselines as
                                #   found or synced): session ULID, application,
                                #   application_commit (the checkout's HEAD SHA; null
@@ -822,6 +823,29 @@ Publishing (2026-10-08, `baselines.py`; full design in
 - **CI** keeps comparisons off (no credentials for the private store);
   the CECE pin is `ufs-community/CECE` at `develop` since 2026-10-08.
 
+## Output upload
+
+(2026-10-23, `src/outputs.py`; full design in
+`design/feat/20261019-1447-global-anthro-use-case/20261023-1307-output-upload.md`.)
+A finished run's **whole output root** goes to `<output store>/<run_id>/`
+with one resumable `aws s3 sync` through the S3 wrapper (a directory store
+by copy): `ufs-chem-assay upload-output --output-root` and, as the last
+session-end step after the plots, `pytest --upload-output`
+(`harness.upload_output`, false in every template; refused at session
+start when the S3 store is unreachable, as `--publish-baselines` is; a
+dry-run session uploads nothing). `ASSAY_OUTPUT_STORE` (`outputs.store`)
+defaults to `s3://ufs-chem/assay-output`, validated like the baseline
+store. Unlike a baseline the upload is never refused and never deletes: a
+run is the same run every time, so re-running after a publish adds the
+new `baseline.yaml`. `upload.yaml` (`OutputUploadRecord`: run_id, store,
+destination, uploaded_at, uploaded_by, files, bytes) is written into the
+root before the sync and uploaded with it. `download-output --ulid --dest`
+syncs `<store>/<run_id>/` into `<dest>/<run_id>/` through a staging
+directory moved into place only when `run.yaml` arrived (an absent prefix
+syncs nothing and exits 0), never deleting local files. Both subcommands
+pass `--dry-run` to the wrapper. The live `data_integration` round trip
+uses the test prefix of the private bucket.
+
 ## Benchmarks
 
 Persistent benchmarking (2026-10-23, `src/benchmarks.py`; full design in
@@ -1018,6 +1042,7 @@ All code under `src/`; the project is `uv`-managed with its own
     s3_sync.py            # stand-alone `aws s3 sync` wrapper; credentials are
                           #   the CLI's own; one harness import (the logger)
     benchmarks.py         # BenchmarkRow, tic/toc and sacct parsing, the three benchmarks.csv writers
+    outputs.py            # upload-output / download-output: a run's root <-> <store>/<run_id>/
     settings.py           # harness-wide pydantic-settings (ASSAY_*, CECE_* fallback)
     tests/
       config/             # <application>/<configuration>/: the configuration's files
