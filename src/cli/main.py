@@ -27,7 +27,6 @@ import yaml
 from applications.base import Application, Stage
 from applications.registry import get_application
 from baselines import default_selector, ensure_baselines, load_run, plan, publish
-from baselines.models import CONVENTIONS
 from benchmarks import BENCHMARK_FILENAME, append_benchmarks, read_benchmarks_csv
 from cli.run_config import RunConfig
 from cli.shell import run_bash, write_script
@@ -535,9 +534,8 @@ def _publish_baselines(args: argparse.Namespace) -> int:
 def _record_benchmarks(args: argparse.Namespace) -> int:
     """Append a finished run's rows to the committed per-configuration
     files: run.yaml names the application and suites, the per-run
-    benchmarks.csv holds the rows (their `published` cell refreshed from the
-    combination directories, so a publish since the session is reflected),
-    and each suite's rows go to <suite dir>/benchmarks.csv. Every failure is
+    benchmarks.csv holds the rows, and each suite's rows go to
+    <suite dir>/benchmarks.csv; rows already there are left alone. Every failure is
     one ERROR line and exit 1."""
     output_root = args.output_root.resolve()
     run_yaml = output_root / "run.yaml"
@@ -577,16 +575,6 @@ def _record_benchmarks(args: argparse.Namespace) -> int:
     if not rows:
         logger.info("%s holds no rows (nothing executed); nothing to record", per_run)
         return 0
-    rows = [
-        row.model_copy(
-            update={
-                "published": (
-                    output_root / row.combo_id / CONVENTIONS.manifest
-                ).is_file()
-            }
-        )
-        for row in rows
-    ]
     paths = {suite.name: path for path, suite in resolved.suites}
     failed = False
     for suite_name in sorted({row.suite for row in rows}):
@@ -614,11 +602,10 @@ def _record_benchmarks(args: argparse.Namespace) -> int:
             failed = True
             continue
         logger.info(
-            "%s: %s appended, %s already recorded, %s updated; review the diff and commit it",
+            "%s: %s appended, %s already recorded; review the diff and commit it",
             target,
             result.appended,
             result.skipped,
-            result.updated,
         )
     return 1 if failed else 0
 

@@ -844,32 +844,31 @@ Persistent benchmarking (2026-10-23, `src/benchmarks.py`; full design in
   passed/failed/timeout — timeout from the harness's `TimeoutExpired` or
   Slurm's `TIMEOUT`; `exit_code`; `nc_files`; `output_bytes`), and the
   baseline links (`baseline_ulid` — null for the placeholder,
-  `baseline_state`, `comparison_result`, `published`). Dry runs produce
-  no rows.
+  `baseline_state`, `comparison_result`; whether the combination later
+  became a baseline is the suite's `ulid:` line, not a column — a row
+  never changes once written). Dry runs produce no rows.
 - **Three files, one writer**: `<output root>/benchmarks.csv` (every row;
   header only after a dry run) and `<combo_id>/benchmarks.csv` (that row;
   it travels with a published baseline, so it is written before the
-  publish and refreshed after it, when `published` may have flipped) —
-  always; and the committed per-configuration
+  publish) — always; and the committed per-configuration
   `src/tests/config/<application>/<configuration>/benchmarks.csv`, appended
   at session end under `--record-benchmarks` (`harness.record_benchmarks`,
   true in the Ursa templates so every expensive run is kept, false in
   `local.yaml`) and by `ufs-chem-assay record-benchmarks --output-root`
-  for a finished run (its `published` cells refreshed from the
-  combination directories). `append_benchmarks` creates the file with the
-  header, refuses a foreign header, skips a present `(run_id, combo_id)`
-  except to flip its `published` cell to true, appends the rest as lines,
-  and restores the original text when the reload fails — the ULID
-  repoint's pattern; the user reviews the diff and commits.
+  for a finished run. `append_benchmarks` creates the file with the
+  header, refuses a foreign header, skips a present `(run_id, combo_id)`,
+  appends the rest as lines without touching existing ones, and restores
+  the original text when the reload fails — the ULID repoint's pattern;
+  the user reviews the diff and commits.
 - **The runner surfaces the job**: `run_driver` returns `DriverExecution`
   (the Slurm job id, None elsewhere); a failed or cancelled job raises
   `SlurmJobError`/`SlurmJobTimeout` (subclasses of the standard
   exceptions) carrying the id, since accounting matters most then;
   `DriverRunResult` keeps `execution`, `duration_s`, `timeout_s`.
 - **Session-end order**: report → benchmarks (per-run and per-combination
-  files) → publish → benchmarks (refresh, committed file) → stats → plots;
-  each benchmark pass is wrapped so it never fails the session and names
-  the post-hoc command on failure.
+  files, and the committed file under `--record-benchmarks`) → publish →
+  stats → plots; the benchmark step is wrapped so it never fails the
+  session and names the post-hoc command on failure.
 
 ## Type checking
 

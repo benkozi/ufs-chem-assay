@@ -5,8 +5,8 @@ writer: `<output root>/benchmarks.csv` (every row of the run),
 `<combo_dir>/benchmarks.csv` (that combination's row, uploaded with a
 published baseline), and the committed per-configuration
 `src/tests/config/<application>/<configuration>/benchmarks.csv`, which
-`append_benchmarks` grows by rows (duplicates skipped, one in-place cell:
-`published`) and the user commits. Slurm's numbers come from `sacct`, once
+`append_benchmarks` grows by rows (duplicates skipped, nothing rewritten)
+and the user commits. Slurm's numbers come from `sacct`, once
 per job, where the platform has accounting; the job's own `tic`/`toc`
 lines in the `.out` give a runtime-independent wall time.
 """
@@ -25,7 +25,6 @@ from typing import Literal
 import pandas as pd
 from pydantic import ConfigDict, Field
 
-from baselines.models import CONVENTIONS
 from logs import get_logger
 from models.base import StrictModel
 from models.suite_config import RunManifest
@@ -40,7 +39,16 @@ DriverResult = Literal["passed", "failed", "timeout"]
 _TIC = re.compile(r"^tic: (\S+)$", re.MULTILINE)
 _TOC = re.compile(r"^toc: (\S+)$", re.MULTILINE)
 _CLOCK_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-_SACCT_FIELDS = ["JobID", "Submit", "Start", "End", "Elapsed", "MaxRSS", "State", "ExitCode"]
+_SACCT_FIELDS = [
+    "JobID",
+    "Submit",
+    "Start",
+    "End",
+    "Elapsed",
+    "MaxRSS",
+    "State",
+    "ExitCode",
+]
 _SACCT_RETRY_DELAY_S = 2.0
 _RSS_UNITS = {"K": 1, "M": 1024, "G": 1024**2, "T": 1024**3}
 
@@ -55,15 +63,23 @@ class SlurmAccounting(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     job_id: str = Field(description="The Slurm job id")
-    submit: datetime | None = Field(description="Submit time (the cluster's local clock)")
-    start: datetime | None = Field(description="Start time; None when the job never started")
+    submit: datetime | None = Field(
+        description="Submit time (the cluster's local clock)"
+    )
+    start: datetime | None = Field(
+        description="Start time; None when the job never started"
+    )
     end: datetime | None = Field(description="End time; None when unknown")
     elapsed_s: float | None = Field(description="Elapsed, in seconds")
-    queue_s: float | None = Field(description="Start - Submit, in seconds; None without both")
+    queue_s: float | None = Field(
+        description="Start - Submit, in seconds; None without both"
+    )
     max_rss_kb: int | None = Field(
         description="The largest MaxRSS over the job's steps, in KiB; None when none reported"
     )
-    state: str | None = Field(description="State as printed (COMPLETED, TIMEOUT, CANCELLED by …)")
+    state: str | None = Field(
+        description="State as printed (COMPLETED, TIMEOUT, CANCELLED by …)"
+    )
     exit_code: int | None = Field(description="The first number of ExitCode (N:M)")
 
 
@@ -185,7 +201,9 @@ class BenchmarkRow(StrictModel):
     """One executed combination of one run — identity, provenance, launch,
     timings, memory, outcome, baseline links. The CSV columns, in this order."""
 
-    recorded_at: datetime = Field(description="When the session wrote the row (UTC, aware)")
+    recorded_at: datetime = Field(
+        description="When the session wrote the row (UTC, aware)"
+    )
     run_id: str = Field(description="Session ULID (the output root)")
     application: str = Field(description="Registry name of the application")
     suite: str = Field(description="Unique suite name")
@@ -196,32 +214,58 @@ class BenchmarkRow(StrictModel):
     config_sha256: str = Field(
         description="SHA-256 of the application's config_fingerprint of the generated config: equal across runs of the same configuration"
     )
-    application_commit: str | None = Field(description="HEAD of the application checkout; null when none")
+    application_commit: str | None = Field(
+        description="HEAD of the application checkout; null when none"
+    )
     harness_version: str = Field(description="Harness package version")
-    harness_commit: str | None = Field(description="Harness checkout HEAD (-dirty when edited); null outside a checkout")
+    harness_commit: str | None = Field(
+        description="Harness checkout HEAD (-dirty when edited); null outside a checkout"
+    )
     platform: Platform = Field(description="Machine the run happened on")
     runtime: Runtime = Field(description="How the driver was spawned")
-    modulefile: str | None = Field(description="Modulefile the driver jobs loaded; null outside slurm")
-    sbatch_args: str | None = Field(description="run.yaml's launch.sbatch_args; null outside slurm")
-    srun_args: str | None = Field(description="run.yaml's launch.srun_args; null outside slurm")
+    modulefile: str | None = Field(
+        description="Modulefile the driver jobs loaded; null outside slurm"
+    )
+    sbatch_args: str | None = Field(
+        description="run.yaml's launch.sbatch_args; null outside slurm"
+    )
+    srun_args: str | None = Field(
+        description="run.yaml's launch.srun_args; null outside slurm"
+    )
     job_env: str | None = Field(
         description="run.yaml's launch.job_env as NAME=VALUE pairs, space-joined (the ASSAY_JOB_ENV spelling); null outside slurm"
     )
-    timeout_s: int = Field(description="The effective per-combination timeout (the suite's, capped by run_timeout_s)")
+    timeout_s: int = Field(
+        description="The effective per-combination timeout (the suite's, capped by run_timeout_s)"
+    )
     driver_result: DriverResult = Field(
         description="test_driver_execution's verdict; timeout when the harness's TimeoutExpired fired or Slurm's State is TIMEOUT"
     )
     exit_code: int | None = Field(
         description="The driver's exit code (docker/native: the process's; slurm: sacct's ExitCode); null when unknown"
     )
-    duration_s: float = Field(description="The harness's clock around the driver call (slurm: includes the queue)")
-    wall_s: float | None = Field(description="toc - tic from the .out; null without toc (killed) or without the lines")
-    queue_s: float | None = Field(description="Slurm Start - Submit; null without accounting")
-    elapsed_s: float | None = Field(description="Slurm Elapsed; null without accounting")
-    max_rss_kb: int | None = Field(description="Slurm MaxRSS over the job's steps, KiB; null without accounting")
+    duration_s: float = Field(
+        description="The harness's clock around the driver call (slurm: includes the queue)"
+    )
+    wall_s: float | None = Field(
+        description="toc - tic from the .out; null without toc (killed) or without the lines"
+    )
+    queue_s: float | None = Field(
+        description="Slurm Start - Submit; null without accounting"
+    )
+    elapsed_s: float | None = Field(
+        description="Slurm Elapsed; null without accounting"
+    )
+    max_rss_kb: int | None = Field(
+        description="Slurm MaxRSS over the job's steps, KiB; null without accounting"
+    )
     slurm_job_id: str | None = Field(description="The Slurm job id; null outside slurm")
-    slurm_state: str | None = Field(description="Slurm State as printed; null without accounting")
-    nc_files: int = Field(description="NetCDF files in the combination directory (top level)")
+    slurm_state: str | None = Field(
+        description="Slurm State as printed; null without accounting"
+    )
+    nc_files: int = Field(
+        description="NetCDF files in the combination directory (top level)"
+    )
     output_bytes: int = Field(description="Their total size in bytes")
     baseline_ulid: str | None = Field(
         description="The ULID the suite entry pinned and the run compared against; null without an entry or for the placeholder"
@@ -232,9 +276,6 @@ class BenchmarkRow(StrictModel):
     comparison_result: TestResult | None = Field(
         description="test_baseline_comparison's verdict; null when the test did not run"
     )
-    published: bool = Field(
-        description="Whether the combination directory carried baseline.yaml when the row was written or last re-recorded"
-    )
 
 
 BENCHMARK_COLUMNS = list(BenchmarkRow.model_fields)
@@ -242,7 +283,10 @@ BENCHMARK_COLUMNS = list(BenchmarkRow.model_fields)
 
 def _cells(row: BenchmarkRow) -> list[str]:
     dumped = row.model_dump(mode="json")
-    return ["" if dumped[column] is None else str(dumped[column]) for column in BENCHMARK_COLUMNS]
+    return [
+        "" if dumped[column] is None else str(dumped[column])
+        for column in BENCHMARK_COLUMNS
+    ]
 
 
 def write_benchmarks_csv(rows: Sequence[BenchmarkRow], path: Path) -> pd.DataFrame:
@@ -275,7 +319,10 @@ def read_benchmarks_csv(path: Path) -> list[BenchmarkRow]:
         _validate_header(path, header)
         return [
             BenchmarkRow.model_validate(
-                {column: (cell if cell != "" else None) for column, cell in zip(BENCHMARK_COLUMNS, cells, strict=True)}
+                {
+                    column: (cell if cell != "" else None)
+                    for column, cell in zip(BENCHMARK_COLUMNS, cells, strict=True)
+                }
             )
             for cells in reader
             if cells
@@ -288,47 +335,33 @@ class AppendResult(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     appended: int = Field(description="Rows added")
-    skipped: int = Field(description="Rows already present (same run_id and combo_id), left alone")
-    updated: int = Field(description="Present rows whose published cell flipped to true")
+    skipped: int = Field(
+        description="Rows already present (same run_id and combo_id), left alone"
+    )
 
 
 def append_benchmarks(repo_csv: Path, rows: Sequence[BenchmarkRow]) -> AppendResult:
     """Grow the committed per-configuration file: created with the header
-    when absent; a present (run_id, combo_id) is skipped — except that its
-    `published` cell is set to true when the new row says so (a publish after
-    the recording; the one in-place edit); the rest are appended as lines.
-    Nothing is re-sorted or re-formatted. The file is reloaded through the
-    model afterwards and restored from the original text if that fails."""
+    when absent; a present (run_id, combo_id) is skipped; the rest are
+    appended as lines. Existing lines are never touched, re-sorted, or
+    re-formatted. The file is reloaded through the model afterwards and
+    restored from the original text if that fails."""
     if not repo_csv.is_file():
         repo_csv.parent.mkdir(parents=True, exist_ok=True)
         write_benchmarks_csv(rows, repo_csv)
-        return AppendResult(appended=len(rows), skipped=0, updated=0)
+        return AppendResult(appended=len(rows), skipped=0)
     original = repo_csv.read_text()
     existing = read_benchmarks_csv(repo_csv)  # validates the header
-    keys = {(row.run_id, row.combo_id): index for index, row in enumerate(existing)}
-    lines = original.splitlines(keepends=True)
-    appended = skipped = updated = 0
+    keys = {(row.run_id, row.combo_id) for row in existing}
+    appended = skipped = 0
     to_append: list[BenchmarkRow] = []
     for row in rows:
-        index = keys.get((row.run_id, row.combo_id))
-        if index is None:
-            to_append.append(row)
-            appended += 1
-            continue
-        present = existing[index]
-        if row.published and not present.published:
-            # Data lines follow the header one per row (no cell holds a newline).
-            lines[index + 1] = ",".join(_cells(present.model_copy(update={"published": True}))) + "\n"
-            logger.info(
-                "%s: run %s combo %s now published; published cell set to true",
-                repo_csv,
-                row.run_id,
-                row.combo_id,
-            )
-            updated += 1
-        else:
+        if (row.run_id, row.combo_id) in keys:
             skipped += 1
-    text = "".join(lines)
+            continue
+        to_append.append(row)
+        appended += 1
+    text = original
     if text and not text.endswith("\n"):
         text += "\n"
     with open(repo_csv, "w", newline="") as f:
@@ -340,22 +373,25 @@ def append_benchmarks(repo_csv: Path, rows: Sequence[BenchmarkRow]) -> AppendRes
         read_benchmarks_csv(repo_csv)
     except (ValueError, OSError) as exc:
         repo_csv.write_text(original)
-        raise ValueError(f"{repo_csv}: reload after the append failed ({exc}); restored") from exc
+        raise ValueError(
+            f"{repo_csv}: reload after the append failed ({exc}); restored"
+        ) from exc
     logger.info(
-        "%s: %s row(s) appended, %s skipped (already recorded), %s updated",
+        "%s: %s row(s) appended, %s skipped (already recorded)",
         repo_csv,
         appended,
         skipped,
-        updated,
     )
-    return AppendResult(appended=appended, skipped=skipped, updated=updated)
+    return AppendResult(appended=appended, skipped=skipped)
 
 
 # ── building a row ───────────────────────────────────────────────────────────
 
 
 def _driver_result(
-    error: Exception | None, test_result: TestResult | None, accounting: SlurmAccounting | None
+    error: Exception | None,
+    test_result: TestResult | None,
+    accounting: SlurmAccounting | None,
 ) -> DriverResult:
     if isinstance(error, subprocess.TimeoutExpired):
         return "timeout"
@@ -366,7 +402,9 @@ def _driver_result(
     return "failed"
 
 
-def _exit_code(error: Exception | None, accounting: SlurmAccounting | None) -> int | None:
+def _exit_code(
+    error: Exception | None, accounting: SlurmAccounting | None
+) -> int | None:
     if accounting is not None and accounting.exit_code is not None:
         return accounting.exit_code
     if isinstance(error, subprocess.CalledProcessError):
@@ -392,7 +430,7 @@ def collect_row(
 ) -> BenchmarkRow:
     """One combination's row from the session's pieces: the run manifest,
     the driver call's outcome and clock, the combination directory (the
-    .out's tic/toc, the NetCDF written, baseline.yaml), the accounting when
+    .out's tic/toc, the NetCDF written), the accounting when
     the platform has it, the tests' verdicts (by test function name), and
     the pinned baseline as (ulid or None for the placeholder, state)."""
     out_text = ""
@@ -418,9 +456,13 @@ def collect_row(
         modulefile=run.modulefile,
         sbatch_args=launch.sbatch_args if launch else None,
         srun_args=launch.srun_args if launch else None,
-        job_env=" ".join(f"{k}={v}" for k, v in launch.job_env.items()) if launch else None,
+        job_env=" ".join(f"{k}={v}" for k, v in launch.job_env.items())
+        if launch
+        else None,
         timeout_s=timeout_s,
-        driver_result=_driver_result(error, test_results.get("test_driver_execution"), accounting),
+        driver_result=_driver_result(
+            error, test_results.get("test_driver_execution"), accounting
+        ),
         exit_code=_exit_code(error, accounting),
         duration_s=duration_s,
         wall_s=parse_tic_toc(out_text),
@@ -434,6 +476,4 @@ def collect_row(
         baseline_ulid=baseline_ulid,
         baseline_state=baseline_state,
         comparison_result=test_results.get("test_baseline_comparison"),
-        published=(combo_dir / CONVENTIONS.manifest).is_file(),
     )
-

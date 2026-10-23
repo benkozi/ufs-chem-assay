@@ -746,7 +746,9 @@ lines, empty when the job was killed; `queue_s`, `elapsed_s`,
 on platforms that have it — Ursa today — and empty elsewhere), outcome
 (`driver_result`: passed/failed/timeout, `exit_code`, `nc_files`,
 `output_bytes`), and the baseline links (`baseline_ulid`,
-`baseline_state`, `comparison_result`, `published`).
+`baseline_state`, `comparison_result`). Whether a combination later became
+a baseline is the suite's `ulid:` line and the store's manifest, not a
+column: a row never changes once written.
 
 The committed copy lives beside each configuration's suites,
 `src/tests/config/<application>/<configuration>/benchmarks.csv`, and grows
@@ -755,9 +757,8 @@ by rows: `pytest --record-benchmarks` (the run config's
 `local.yaml`) appends the run's rows at session end, and
 `ufs-chem-assay record-benchmarks --output-root=<root>` does the same for a
 finished run (`--dry-run` lists what it would append). A row already
-present — same `run_id` and `combo_id` — is skipped, except that its
-`published` cell flips to true once the combination has been published;
-nothing is ever re-sorted or rewritten, and a header that is not the
+present — same `run_id` and `combo_id` — is skipped; existing lines are
+never touched, re-sorted, or rewritten, and a header that is not the
 model's columns is refused. Review the diff and commit it, as with
 baseline ULIDs and input digests.
 

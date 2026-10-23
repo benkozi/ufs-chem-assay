@@ -88,7 +88,6 @@ def _row(**overrides: object) -> BenchmarkRow:
         "baseline_ulid": None,
         "baseline_state": "unpublished",
         "comparison_result": "skipped",
-        "published": False,
     }
     values.update(overrides)
     return BenchmarkRow.model_validate(values)
@@ -107,7 +106,11 @@ def test_columns_are_the_model_fields_in_order() -> None:
         "combo",
         "combo_id",
     ]
-    assert BENCHMARK_COLUMNS[-3:] == ["baseline_state", "comparison_result", "published"]
+    assert BENCHMARK_COLUMNS[-3:] == [
+        "baseline_ulid",
+        "baseline_state",
+        "comparison_result",
+    ]
     assert BENCHMARK_FILENAME == "benchmarks.csv"
     for field in BenchmarkRow.model_fields.values():
         assert field.description, field
@@ -130,7 +133,12 @@ def test_parse_tic_toc_reads_the_two_lines_in_seconds() -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ["", "tic: 2026-10-23T14:05:31Z\nkilled", "toc: 2026-10-23T14:35:01Z\n", "tic: garbage\ntoc: 2026-10-23T14:35:01Z\n"],
+    [
+        "",
+        "tic: 2026-10-23T14:05:31Z\nkilled",
+        "toc: 2026-10-23T14:35:01Z\n",
+        "tic: garbage\ntoc: 2026-10-23T14:35:01Z\n",
+    ],
 )
 def test_parse_tic_toc_is_none_without_both_lines(text: str) -> None:
     assert parse_tic_toc(text) is None
@@ -163,13 +171,15 @@ def test_parse_sacct_handles_days_unknown_starts_and_missing_rows() -> None:
 
 
 def test_parse_sacct_skips_malformed_lines_and_unreadable_fields() -> None:
-    text = (
-        "garbage line without pipes\n"
-        "9|notatime|notatime||weird|lots|RUNNING|x\n"
-    )
+    text = "garbage line without pipes\n9|notatime|notatime||weird|lots|RUNNING|x\n"
     accounting = parse_sacct(text, "9")
     assert accounting is not None
-    assert (accounting.submit, accounting.start, accounting.elapsed_s, accounting.max_rss_kb) == (
+    assert (
+        accounting.submit,
+        accounting.start,
+        accounting.elapsed_s,
+        accounting.max_rss_kb,
+    ) == (
         None,
         None,
         None,
@@ -206,7 +216,9 @@ def test_slurm_accounting_is_none_when_sacct_is_missing_or_fails(
     assert slurm_accounting("1") is None
     mocker.patch(
         "benchmarks.subprocess.run",
-        return_value=subprocess.CompletedProcess(["sacct"], 1, stdout="", stderr="boom"),
+        return_value=subprocess.CompletedProcess(
+            ["sacct"], 1, stdout="", stderr="boom"
+        ),
     )
     assert slurm_accounting("1") is None
     mocker.patch(
@@ -221,7 +233,7 @@ def test_slurm_accounting_is_none_when_sacct_is_missing_or_fails(
 
 
 def test_write_and_read_round_trip_with_empty_cells_as_none(tmp_path: Path) -> None:
-    rows = [_row(), _row(combo_id="01JOTHEROTHEROTHEROTHEROTH", wall_s=12.5, published=True)]
+    rows = [_row(), _row(combo_id="01JOTHEROTHEROTHEROTHEROTH", wall_s=12.5)]
     path = tmp_path / BENCHMARK_FILENAME
     frame = write_benchmarks_csv(rows, path)
     assert list(frame.columns) == BENCHMARK_COLUMNS
@@ -249,29 +261,25 @@ def test_read_refuses_a_foreign_header(tmp_path: Path) -> None:
         read_benchmarks_csv(path)
 
 
-def test_append_creates_appends_skips_duplicates_and_flips_published(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_append_creates_appends_and_skips_duplicates(tmp_path: Path) -> None:
     repo = tmp_path / "cece" / "gcafs-anthro" / BENCHMARK_FILENAME
     first = _row()
     result = append_benchmarks(repo, [first])
-    assert result == AppendResult(appended=1, skipped=0, updated=0)
+    assert result == AppendResult(appended=1, skipped=0)
     assert read_benchmarks_csv(repo) == [first]
     before = repo.read_text()
     # The same row again: skipped; a new run's row: appended as one line.
     second = _row(run_id="01JRUN2RUN2RUN2RUN2RUN2RUN")
     result = append_benchmarks(repo, [first, second])
-    assert result == AppendResult(appended=1, skipped=1, updated=0)
+    assert result == AppendResult(appended=1, skipped=1)
     after = repo.read_text()
-    assert after.startswith(before)
+    assert after.startswith(before)  # existing lines are never touched
     assert len(after.splitlines()) == 3
-    # Published later: the one in-place edit — that row's published cell.
-    result = append_benchmarks(repo, [first.model_copy(update={"published": True})])
-    assert result == AppendResult(appended=0, skipped=0, updated=1)
-    rows = read_benchmarks_csv(repo)
-    assert [r.published for r in rows] == [True, False]
-    assert len(repo.read_text().splitlines()) == 3
-    assert any("published" in r.getMessage() for r in caplog.records)
+    # Idempotent: nothing new, nothing changed.
+    assert append_benchmarks(repo, [first, second]) == AppendResult(
+        appended=0, skipped=2
+    )
+    assert repo.read_text() == after
 
 
 def test_append_to_a_file_without_a_trailing_newline(tmp_path: Path) -> None:
@@ -293,7 +301,9 @@ def test_append_refuses_a_foreign_header_and_restores_on_a_bad_reload(
     assert repo.read_text() == "run_id,combo_id\nx,y\n"
     write_benchmarks_csv([_row()], repo)
     original = repo.read_text()
-    mocker.patch("benchmarks.read_benchmarks_csv", side_effect=[[_row()], ValueError("bad")])
+    mocker.patch(
+        "benchmarks.read_benchmarks_csv", side_effect=[[_row()], ValueError("bad")]
+    )
     with pytest.raises(ValueError, match="restored"):
         append_benchmarks(repo, [_row(run_id="01JRUN2RUN2RUN2RUN2RUN2RUN")])
     assert repo.read_text() == original
@@ -302,22 +312,24 @@ def test_append_refuses_a_foreign_header_and_restores_on_a_bad_reload(
 # ── collect_row ──────────────────────────────────────────────────────────────
 
 
-def _combo_dir(tmp_path: Path, *, published: bool, toc: bool = True) -> Path:
+def _combo_dir(tmp_path: Path, *, toc: bool = True) -> Path:
     combo_dir = tmp_path / "01JCOMBOCOMBOCOMBOCOMBOCOM"
     combo_dir.mkdir()
     for hour in (12, 13):
         (combo_dir / f"cece_20211220_{hour}00.nc").write_bytes(b"x" * 10)
     (combo_dir / "sub").mkdir()
     (combo_dir / "sub" / "not-counted.nc").write_bytes(b"y")
-    out = "tic: 2026-10-23T14:05:31Z\nrunning\n" + ("toc: 2026-10-23T14:35:01Z\n" if toc else "")
+    out = "tic: 2026-10-23T14:05:31Z\nrunning\n" + (
+        "toc: 2026-10-23T14:35:01Z\n" if toc else ""
+    )
     (combo_dir / "01JCOMBOCOMBOCOMBOCOMBOCOM.out").write_text(out)
-    if published:
-        (combo_dir / "baseline.yaml").write_text("ulid: x\n")
     return combo_dir
 
 
-def test_collect_row_joins_run_outcome_files_accounting_and_baseline(tmp_path: Path) -> None:
-    combo_dir = _combo_dir(tmp_path, published=True)
+def test_collect_row_joins_run_outcome_files_accounting_and_baseline(
+    tmp_path: Path,
+) -> None:
+    combo_dir = _combo_dir(tmp_path)
     row = collect_row(
         recorded_at=_RECORDED,
         run=_RUN,
@@ -330,13 +342,20 @@ def test_collect_row_joins_run_outcome_files_accounting_and_baseline(tmp_path: P
         error=None,
         combo_dir=combo_dir,
         accounting=parse_sacct(_SACCT.replace("TIMEOUT", "COMPLETED"), "123"),
-        test_results={"test_driver_execution": "passed", "test_baseline_comparison": "passed"},
+        test_results={
+            "test_driver_execution": "passed",
+            "test_baseline_comparison": "passed",
+        },
         baseline=("01JBASEBASEBASEBASEBASEBAS", "synced"),
     )
     assert row.driver_result == "passed"
     assert row.exit_code == 0
     assert row.wall_s == 1770.0
-    assert (row.queue_s, row.elapsed_s, row.max_rss_kb) == (330.0, 1800.0, int(3.5 * 1024 * 1024))
+    assert (row.queue_s, row.elapsed_s, row.max_rss_kb) == (
+        330.0,
+        1800.0,
+        int(3.5 * 1024 * 1024),
+    )
     assert (row.slurm_job_id, row.slurm_state) == ("123", "COMPLETED")
     assert (row.nc_files, row.output_bytes) == (2, 20)
     assert (row.baseline_ulid, row.baseline_state, row.comparison_result) == (
@@ -344,13 +363,12 @@ def test_collect_row_joins_run_outcome_files_accounting_and_baseline(tmp_path: P
         "synced",
         "passed",
     )
-    assert row.published is True
     assert row.job_env == "OMP_NUM_THREADS=1 I_MPI_FABRICS=shm"
     assert row.sbatch_args == _RUN.launch.sbatch_args if _RUN.launch else False
 
 
 def test_collect_row_timeout_and_failure_verdicts(tmp_path: Path) -> None:
-    combo_dir = _combo_dir(tmp_path, published=False, toc=False)
+    combo_dir = _combo_dir(tmp_path, toc=False)
     common = {
         "recorded_at": _RECORDED,
         "run": _RUN,
@@ -373,8 +391,11 @@ def test_collect_row_timeout_and_failure_verdicts(tmp_path: Path) -> None:
     assert row.driver_result == "timeout"
     assert row.wall_s is None  # no toc
     assert row.exit_code == 0  # sacct's ExitCode for the job
-    assert (row.baseline_ulid, row.baseline_state, row.comparison_result) == (None, None, None)
-    assert row.published is False
+    assert (row.baseline_ulid, row.baseline_state, row.comparison_result) == (
+        None,
+        None,
+        None,
+    )
     # The harness's own outer timeout, no accounting (docker/native).
     row = collect_row(
         error=subprocess.TimeoutExpired(["docker"], 10),
@@ -382,7 +403,12 @@ def test_collect_row_timeout_and_failure_verdicts(tmp_path: Path) -> None:
         **common,  # type: ignore[arg-type]
     )
     assert row.driver_result == "timeout"
-    assert (row.queue_s, row.elapsed_s, row.max_rss_kb, row.slurm_job_id) == (None, None, None, None)
+    assert (row.queue_s, row.elapsed_s, row.max_rss_kb, row.slurm_job_id) == (
+        None,
+        None,
+        None,
+        None,
+    )
     # A plain failure with an exit code.
     row = collect_row(
         error=subprocess.CalledProcessError(3, ["docker"]),
@@ -393,8 +419,10 @@ def test_collect_row_timeout_and_failure_verdicts(tmp_path: Path) -> None:
 
 
 def test_collect_row_without_a_launch_record(tmp_path: Path) -> None:
-    combo_dir = _combo_dir(tmp_path, published=False)
-    run = _RUN.model_copy(update={"launch": None, "runtime": Runtime.DOCKER, "platform": Platform.LOCAL})
+    combo_dir = _combo_dir(tmp_path)
+    run = _RUN.model_copy(
+        update={"launch": None, "runtime": Runtime.DOCKER, "platform": Platform.LOCAL}
+    )
     row = collect_row(
         recorded_at=_RECORDED,
         run=run,
@@ -407,15 +435,32 @@ def test_collect_row_without_a_launch_record(tmp_path: Path) -> None:
         error=None,
         combo_dir=combo_dir,
         accounting=None,
-        test_results={"test_driver_execution": "passed", "test_baseline_comparison": "skipped"},
+        test_results={
+            "test_driver_execution": "passed",
+            "test_baseline_comparison": "skipped",
+        },
         baseline=(None, "unpublished"),
     )
     assert (row.sbatch_args, row.srun_args, row.job_env) == (None, None, None)
     assert row.runtime is Runtime.DOCKER
-    assert (row.baseline_ulid, row.baseline_state, row.comparison_result) == (None, "unpublished", "skipped")
+    assert (row.baseline_ulid, row.baseline_state, row.comparison_result) == (
+        None,
+        "unpublished",
+        "skipped",
+    )
 
 
 def test_accounting_model_is_frozen() -> None:
-    accounting = SlurmAccounting(job_id="1", submit=None, start=None, end=None, elapsed_s=None, max_rss_kb=None, state=None, exit_code=None, queue_s=None)
+    accounting = SlurmAccounting(
+        job_id="1",
+        submit=None,
+        start=None,
+        end=None,
+        elapsed_s=None,
+        max_rss_kb=None,
+        state=None,
+        exit_code=None,
+        queue_s=None,
+    )
     with pytest.raises(ValidationError):
         accounting.state = "x"  # type: ignore[misc]

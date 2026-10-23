@@ -924,15 +924,11 @@ def test_record_benchmarks_appends_to_the_suites_configuration_file(
     assert code == 0
     rows = read_benchmarks_csv(target)
     assert {row.combo_id for row in rows} == {c.combo_id for c in recorded_run.combos}
-    assert all(row.published is False for row in rows)
     assert any("review the diff and commit" in r.getMessage() for r in caplog.records)
-    # Published since the session: the second recording flips the cell, appends nothing.
-    first = recorded_run.combos[0]
-    (recorded_run.combo_dir(first.name) / "baseline.yaml").write_text("ulid: x\n")
+    # Recording the same run again appends nothing and changes nothing.
+    before = target.read_text()
     assert main(["record-benchmarks", f"--output-root={recorded_run.root}"]) == 0
-    by_id = {row.combo_id: row for row in read_benchmarks_csv(target)}
-    assert by_id[first.combo_id].published is True
-    assert len(by_id) == len(recorded_run.combos)
+    assert target.read_text() == before
 
 
 def test_record_benchmarks_dry_run_writes_nothing(recorded_run: Run) -> None:

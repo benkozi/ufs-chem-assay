@@ -14,7 +14,6 @@ from ulid import ULID
 from analysis import RunContext, concatenate_stats_csvs
 from applications.base import Application, ApplicationSettings, DriverConfig
 from baselines import StagedBaseline, SuiteInput, ensure_baselines, publish_session
-from baselines.models import CONVENTIONS
 from baselines.plan import read_run
 from benchmarks import (
     BENCHMARK_FILENAME,
@@ -492,10 +491,11 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
             list(report_rows.values()), roots.host / "test-report.csv"
         )
 
-    # Benchmarks, first pass: the per-run file (header only after a dry run)
-    # and each executed combination's own file — before publishing, so a
-    # published baseline carries its row. Never raises into pytest.
-    benchmark_rows: dict[str, BenchmarkRow] = {}
+    # Benchmarks: the per-run file (header only after a dry run), each
+    # executed combination's own file — before publishing, so a published
+    # baseline carries its row — and, with --record-benchmarks, the rows
+    # appended to each suite's committed configuration file for the user to
+    # commit. Rows never change once written. Never raises into pytest.
     try:
         benchmark_rows = _benchmark_rows(config, roots, contexts, report_rows)
         write_benchmarks_csv(
@@ -503,8 +503,15 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         )
         for combo_id, row in benchmark_rows.items():
             write_benchmarks_csv([row], roots.host / combo_id / BENCHMARK_FILENAME)
+        if benchmark_rows and config.getoption("--record-benchmarks"):
+            _record_benchmarks(contexts, benchmark_rows)
     except Exception as exc:  # the hook must not fail the session
-        logger.error("writing benchmarks failed: %s", exc)
+        logger.error(
+            "benchmarks failed: %s; record the run later: ufs-chem-assay "
+            "record-benchmarks --output-root=%s",
+            exc,
+            roots.host,
+        )
 
     # Publication right after the report is on disk and before the plots (a
     # plotting failure must not cost a publish). Never raises into pytest:
@@ -541,21 +548,6 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
                 "from a node with network: ufs-chem-assay publish-baselines "
                 "--output-root=%s",
                 exc,
-                roots.host,
-            )
-
-    # Benchmarks, second pass: `published` may have flipped just now; the
-    # per-combination files follow, and with --record-benchmarks the rows go
-    # to each suite's committed configuration file for the user to commit.
-    if benchmark_rows:
-        try:
-            _record_benchmarks(config, roots, contexts, benchmark_rows)
-        except Exception as exc:  # the hook must not fail the session
-            logger.error(
-                "recording benchmarks failed: %s; the run's rows are in %s — record "
-                "them later: ufs-chem-assay record-benchmarks --output-root=%s",
-                exc,
-                roots.host / BENCHMARK_FILENAME,
                 roots.host,
             )
 
@@ -654,22 +646,9 @@ def _benchmark_rows(
 
 
 def _record_benchmarks(
-    config: pytest.Config,
-    roots: ComboRoots,
-    contexts: list[SuiteContext],
-    rows: dict[str, BenchmarkRow],
+    contexts: list[SuiteContext], rows: dict[str, BenchmarkRow]
 ) -> None:
-    """After publishing: refresh `published`, rewrite the per-combination
-    files that changed, and append to the committed files when asked."""
-    for combo_id, row in list(rows.items()):
-        published = (roots.host / combo_id / CONVENTIONS.manifest).is_file()
-        if published != row.published:
-            rows[combo_id] = row.model_copy(update={"published": published})
-            write_benchmarks_csv(
-                [rows[combo_id]], roots.host / combo_id / BENCHMARK_FILENAME
-            )
-    if not config.getoption("--record-benchmarks"):
-        return
+    """Append each suite's rows to its committed configuration file."""
     for context in contexts:
         mine = [
             rows[combo.combo_id] for combo in context.combos if combo.combo_id in rows

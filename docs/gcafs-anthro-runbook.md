@@ -161,18 +161,25 @@ checkout — the first rows are the point of the 30-minute experiment:
 `toc`), `elapsed_s` about 1800, `queue_s` and `max_rss_kb` from `sacct`,
 and the launch columns saying one task, one bound core, the single-thread
 exports. The same row sits in the combination directory as
-`benchmarks.csv`, and the run's own copy is
-`$ROOT/CECE/ufs-chem-assay-output/benchmarks.csv`. After the publish
-(step 5) the row's `published` cell is stale until it is re-recorded:
+`benchmarks.csv` (so it travels with the baseline when published), and the
+run's own copy is `$ROOT/CECE/ufs-chem-assay-output/benchmarks.csv`.
+
+```bash
+git diff src/tests/config/cece/gcafs-anthro/benchmarks.csv
+```
+
+Commit the file with the repoint. A row never changes once written; for a
+run that was not recorded (a run config with `record_benchmarks: false`,
+or a session that died before its end), `record-benchmarks` adds its rows
+afterwards:
 
 ```bash
 cd $ROOT/ufs-chem-assay
 uv run --no-sync ufs-chem-assay record-benchmarks --output-root=$ROOT/CECE/ufs-chem-assay-output
-git diff src/tests/config/cece/gcafs-anthro/benchmarks.csv
 ```
 
-Commit the file with the repoint. Raise `timeout_s`, run again, and the
-next row lands beside the first; that pair is the measurement.
+Raise `timeout_s`, run again, and the next row lands beside the first;
+that pair is the measurement.
 
 ## 6. Cold start: the baseline comes back from the store
 

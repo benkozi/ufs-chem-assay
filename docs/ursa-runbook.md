@@ -243,8 +243,8 @@ but only reachable on this machine.
 `src/tests/config/cece/maccity/benchmarks.csv` in your harness checkout
 (`config/ursa.yaml` sets `harness.record_benchmarks: true`): timings, Slurm's
 elapsed, queue wait and peak memory (`sacct`), the verdicts, and the
-baseline links. Review and commit it with the repoint. For a run that was
-not recorded, or after publishing (the `published` column flips):
+baseline links. Review and commit it with the repoint. A row never changes
+once written; for a run that was not recorded:
 
 ```bash
 cd $ROOT/ufs-chem-assay
