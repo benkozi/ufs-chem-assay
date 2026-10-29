@@ -1,0 +1,591 @@
+# The global anthropogenic use case (issue 33): @zmoon's cece_config_v5.yml,
+# carried 2026-10-19 with the seven input paths made cwd-relative
+# (data/gcafs-anthro/<basename>; the driver runs in the checkout) and two
+# driver keys dropped that CECE develop does not read at this level
+# (amio_read_timeout_s, amio_staging_timeout_ms — see the model's comment).
+# 0.25-degree global grid, 25 hourly steps from 2021-12-20T11 (crossing a day
+# boundary: the daily, weekly, and hourly cadences all turn over), 10 species
+# over 32 streams and 7 files, SO2/OC/BC written every step. The author's note
+# on the EDGAR_TODNOX stream stands: investigate mapalgo bilinear, since the
+# file is coarse (a candidate sweep, not a change here).
+driver:
+  start_time: '2021-12-20T11:00:00'
+  end_time: '2021-12-21T12:00:00'
+  timestep_seconds: 3600
+  amio_staging_buffer_count: 32
+  amio_staging_buffer_capacity_bytes: 67108864
+  amio_prefetch_depth: 1
+  grid:
+    nx: 1440
+    ny: 720
+    nz: 1
+    lon_min: -180.0
+    lon_max: 180.0
+    lat_min: -90.0
+    lat_max: 90.0
+species:
+  SO2:
+    - field: SO2_agr
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - EDGAR_TODNOX
+    - field: SO2_ind
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - EDGAR_TODNOX
+    - field: SO2_rco
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - CAMS_DAILY_RES
+        - CAMS_HOURLY_RES_PM10_PM25
+    - field: SO2_tra
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - CAMS_WEEKLY_TRO
+        - CAMS_HOURLY_TRO_WEEKDAY
+    - field: SO2_sol
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - EDGAR_TODNOX
+    - field: SO2_was
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - EDGAR_TODNOX
+  SO2_elev:
+    - field: SO2_ene
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - CAMS_WEEKLY_ENE_PM25
+        - CAMS_HOURLY_ENE_PM25
+  SO2_ship:
+    - field: SO2_shp
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - EDGAR_TODNOX
+  SO4_ship:
+    - field: SO4_shp
+      operation: add
+      scale: 0.077
+      scale_fields:
+        - EDGAR_TODNOX
+  OC:
+    - field: OC_agr
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - EDGAR_TODNOX
+    - field: OC_ind
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - EDGAR_TODNOX
+    - field: OC_rco
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - CAMS_DAILY_RES
+        - CAMS_HOURLY_RES_PM10_PM25
+    - field: OC_tra
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - CAMS_WEEKLY_TRO
+        - CAMS_HOURLY_TRO_WEEKDAY
+    - field: OC_sol
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - EDGAR_TODNOX
+    - field: OC_was
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - EDGAR_TODNOX
+  OC_elev:
+    - field: OC_ene
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - CAMS_WEEKLY_ENE_PM25
+        - CAMS_HOURLY_ENE_PM25
+  OC_ship:
+    - field: OC_shp
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - EDGAR_TODNOX
+  BC:
+    - field: BC_agr
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - EDGAR_TODNOX
+    - field: BC_ind
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - EDGAR_TODNOX
+    - field: BC_rco
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - CAMS_DAILY_RES
+        - CAMS_HOURLY_RES_PM10_PM25
+    - field: BC_tra
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - CAMS_WEEKLY_TRO
+        - CAMS_HOURLY_TRO_WEEKDAY
+    - field: BC_sol
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - EDGAR_TODNOX
+    - field: BC_was
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - EDGAR_TODNOX
+  BC_elev:
+    - field: BC_ene
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - CAMS_WEEKLY_ENE_PM25
+        - CAMS_HOURLY_ENE_PM25
+  BC_ship:
+    - field: BC_shp
+      operation: add
+      scale: 1.0
+      scale_fields:
+        - EDGAR_TODNOX
+cece_data:
+  streams:
+    - name: BC_agr
+      file: data/gcafs-anthro/BC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: BC_agr
+          model: BC_agr
+    - name: BC_ene
+      file: data/gcafs-anthro/BC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: BC_ene
+          model: BC_ene
+    - name: BC_ind
+      file: data/gcafs-anthro/BC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: BC_ind
+          model: BC_ind
+    - name: BC_rco
+      file: data/gcafs-anthro/BC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: BC_rco
+          model: BC_rco
+    - name: BC_tra
+      file: data/gcafs-anthro/BC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: BC_tra
+          model: BC_tra
+    - name: BC_shp
+      file: data/gcafs-anthro/BC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: BC_shp
+          model: BC_shp
+    - name: BC_sol
+      file: data/gcafs-anthro/BC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: BC_sol
+          model: BC_sol
+    - name: BC_was
+      file: data/gcafs-anthro/BC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: BC_was
+          model: BC_was
+    - name: OC_agr
+      file: data/gcafs-anthro/OC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: OC_agr
+          model: OC_agr
+    - name: OC_ene
+      file: data/gcafs-anthro/OC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: OC_ene
+          model: OC_ene
+    - name: OC_ind
+      file: data/gcafs-anthro/OC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: OC_ind
+          model: OC_ind
+    - name: OC_rco
+      file: data/gcafs-anthro/OC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: OC_rco
+          model: OC_rco
+    - name: OC_tra
+      file: data/gcafs-anthro/OC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: OC_tra
+          model: OC_tra
+    - name: OC_shp
+      file: data/gcafs-anthro/OC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: OC_shp
+          model: OC_shp
+    - name: OC_sol
+      file: data/gcafs-anthro/OC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: OC_sol
+          model: OC_sol
+    - name: OC_was
+      file: data/gcafs-anthro/OC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: OC_was
+          model: OC_was
+    - name: SO2_agr
+      file: data/gcafs-anthro/SO2-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: SO2_agr
+          model: SO2_agr
+    - name: SO2_ene
+      file: data/gcafs-anthro/SO2-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: SO2_ene
+          model: SO2_ene
+    - name: SO2_ind
+      file: data/gcafs-anthro/SO2-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: SO2_ind
+          model: SO2_ind
+    - name: SO2_rco
+      file: data/gcafs-anthro/SO2-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: SO2_rco
+          model: SO2_rco
+    - name: SO2_tra
+      file: data/gcafs-anthro/SO2-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: SO2_tra
+          model: SO2_tra
+    - name: SO2_shp
+      file: data/gcafs-anthro/SO2-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: SO2_shp
+          model: SO2_shp
+    - name: SO4_shp
+      file: data/gcafs-anthro/SO2-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: SO2_shp
+          model: SO4_shp
+    - name: SO2_sol
+      file: data/gcafs-anthro/SO2-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: SO2_sol
+          model: SO2_sol
+    - name: SO2_was
+      file: data/gcafs-anthro/SO2-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+      yearFirst: 2021
+      yearLast: 2021
+      yearAlign: 2021
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: monthly
+      time_label: start
+      variables:
+        - file: SO2_was
+          model: SO2_was
+    - name: EDGAR_TODNOX
+      file: data/gcafs-anthro/EDGAR_hourly_NOxScal.nc
+      yearFirst: 2000
+      yearLast: 2000
+      yearAlign: 2000
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: hourly
+      variables:
+        - file: NOXscale
+          model: EDGAR_TODNOX
+    - name: CAMS_DAILY_RES
+      file: data/gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_daily.nc
+      yearFirst: 2011
+      yearLast: 2020
+      yearAlign: 2011
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: series
+      time_label: start
+      variables:
+        - file: FD_res
+          model: CAMS_DAILY_RES
+    - name: CAMS_WEEKLY_ENE_PM25
+      file: data/gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_weekly_fixtime.nc
+      yearFirst: 2017
+      yearLast: 2017
+      yearAlign: 2017
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: weekly
+      variables:
+        - file: FW_ene_pm25
+          model: CAMS_WEEKLY_ENE_PM25
+    - name: CAMS_WEEKLY_TRO
+      file: data/gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_weekly_fixtime.nc
+      yearFirst: 2017
+      yearLast: 2017
+      yearAlign: 2017
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: weekly
+      variables:
+        - file: FW_tro
+          model: CAMS_WEEKLY_TRO
+    - name: CAMS_HOURLY_ENE_PM25
+      file: data/gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_hourly_fixtime_utc.nc
+      yearFirst: 2017
+      yearLast: 2017
+      yearAlign: 2017
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: hourly
+      variables:
+        - file: FH_ene_pm25
+          model: CAMS_HOURLY_ENE_PM25
+    - name: CAMS_HOURLY_RES_PM10_PM25
+      file: data/gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_hourly_fixtime_utc.nc
+      yearFirst: 2017
+      yearLast: 2017
+      yearAlign: 2017
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: hourly
+      variables:
+        - file: FH_res_pm10_pm25
+          model: CAMS_HOURLY_RES_PM10_PM25
+    - name: CAMS_HOURLY_TRO_WEEKDAY
+      file: data/gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_hourly_fixtime_utc.nc
+      yearFirst: 2017
+      yearLast: 2017
+      yearAlign: 2017
+      taxmode: cycle
+      tintalgo: nearest
+      mapalgo: consd
+      cadence: hourly
+      variables:
+        - file: FH_dow_tro
+          model: CAMS_HOURLY_TRO_WEEKDAY
+output:
+  enabled: true
+  directory: .
+  filename_pattern: cece_{YYYY}{MM}{DD}_{HH}{mm}.nc
+  frequency_steps: 1
+  fields:
+    - SO2
+    - OC
+    - BC

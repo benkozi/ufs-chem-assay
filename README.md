@@ -15,8 +15,12 @@ checkout, data directory — lives in an application adapter; CECE is the
 shipped one (`application: cece`, the default in every suite and run
 config), and a session runs one application. Configurations the harness
 carries live under `src/tests/config/<application>/<configuration>/`, each
-beside the suites that sweep it. Design rationale lives in
-[design/design.md](design/design.md).
+beside the suites that sweep it: `cece/maccity/` (a 4x5 CO configuration
+over one public input; the default suite and the CI integration run) and
+`cece/gcafs-anthro/` (the global anthropogenic use case — 0.25°, 25 hourly
+steps, 32 streams over seven placed inputs; Ursa only, see
+[docs/gcafs-anthro-runbook.md](docs/gcafs-anthro-runbook.md)). Design
+rationale lives in [design/design.md](design/design.md).
 
 ## Prerequisites
 
@@ -207,7 +211,18 @@ Options:
   `s3://bucket/key` object, whether the bucket allows anonymous reads,
   the destination relative to the checkout's `data/`, and the expected
   digest; `ufs-chem-assay fetch` stages them, verifying the digest before
-  a download replaces anything), the per-combination timeout
+  a download replaces anything. `url: null` declares an input with no
+  remote source yet, verified by its required `sha256` and never
+  downloaded: absent, `fetch` links it into place from the entry's
+  `sources:` path for the session's platform (`{ursa: /abs/path}` —
+  where the file is known to live; a missing declared file is a named
+  failure) or, without one, from the one file of that name found under
+  `ASSAY_INPUT_SEARCH_PATH` (the run config's `data.input_search_path`:
+  this machine's directories; none or several matches fail, naming the
+  path to place it at), and
+  `fetch --record-digests` writes the on-disk `sha256` of every such input
+  whose digest differs into the suite file — review the diff and commit,
+  as with baseline ULIDs), the per-combination timeout
   (`timeout_s`), and the sweep — which, for CECE,
   mirrors the driver-config structure, attaching swept
   values to named streams (or positional species entries). A sweep value
@@ -406,8 +421,9 @@ setting a run reads has a key in it: the `harness:` section mirrors every
 harness-wide setting (`ASSAY_*`) plus the pytest options, and each
 application's section under `applications:` mirrors its own settings
 (`CECE_*`) plus how to obtain and build it. The shipped templates
-(`config/local.yaml` for a laptop, `config/ursa.yaml` for Ursa) list every
-key and run as-is from a checkout laid out like the runbook:
+(`config/local.yaml` for a laptop, `config/ursa.yaml` for Ursa,
+`config/ursa-gcafs-anthro.yaml` for the gcafs-anthro use case on Ursa) list
+every key and run as-is from a checkout laid out like the runbook:
 
 ```yaml
 platform: ursa
@@ -481,10 +497,18 @@ default once `ASSAY_PLATFORM` is anything but `local`; the platform is
 detected from the hostname and overridable). Each job is
 a rendered script, `<combo_id>.sbatch`, kept beside the combo's `.yaml`
 and `.out` so a failed job is reproducible by hand: `#SBATCH` directives
-from `ASSAY_SBATCH_ARGS` (account, QOS, partition, cpus) and the suite's
+from `ASSAY_SBATCH_ARGS` (account, QOS, partition, `-N 1 -n <ntasks> -c
+<cpus>`, then `slurm.extra_args` verbatim) and the suite's
 `timeout_s` rounded up to whole minutes, the `CECE_MODULEFILE` load,
-the `ASSAY_JOB_ENV` exports, and the driver behind `srun --ntasks=1`
-(MPI inside a batch job needs Slurm's PMI endpoint). Two environments stay apart on
+the `ASSAY_JOB_ENV` exports, and the driver behind `srun` with
+`ASSAY_SRUN_ARGS` (`--ntasks=<ntasks>` plus `slurm.srun_args`, e.g.
+`--cpu-bind=cores`; MPI inside a batch job needs Slurm's PMI endpoint),
+bracketed by `tic`/`toc` timestamps and followed by RDHPCS's `report-mem`
+when present, so the job's `.out` records its own wall time and memory.
+The task count is a run-config choice, not a configuration one: the driver
+splits latitude bands across the ranks it is given, and `run.yaml` (and a
+published `baseline.yaml`) records the launch — `sbatch_args`,
+`srun_args`, `job_env` — under `launch`. Two environments stay apart on
 purpose: the harness venv never sees the modulefile (spack-stack's
 `PYTHONPATH` would shadow its numpy), the driver always does. Analysis
 runs in the pytest process, so cap `ASSAY_DASK_NWORKERS` on a login node.
@@ -494,7 +518,13 @@ shell already suits both the harness and the driver; not Ursa, where the
 two environments conflict.
 
 The run config above assembles all of that; the same steps by hand are
-in [docs/ursa-runbook.md](docs/ursa-runbook.md).
+in [docs/ursa-runbook.md](docs/ursa-runbook.md). The gcafs-anthro
+configuration has its own run config, `config/ursa-gcafs-anthro.yaml`
+(the Ursa template with the suite, a raised timeout cap, and one task on
+one bound core with the single-thread exports and `--mem=0` baked in; its
+inputs' Ursa locations are in the suite's `sources:`), and its own
+runbook:
+[docs/gcafs-anthro-runbook.md](docs/gcafs-anthro-runbook.md).
 
 ## CI and releases
 
@@ -627,6 +657,7 @@ directory per combination:
 
 ```
 <output-root>/
+  upload.yaml                  # present once the root was uploaded (upload-output)
   run.yaml                       # run manifest: session ULID; the application and
                                  #   its checkout's HEAD SHA (application_commit; null
                                  #   only when no checkout is configured — a configured
@@ -684,11 +715,25 @@ unknown keys in suite or driver config files are rejected at load time.
 
 Spatial plots render at session end (suite `plotting.enabled`, default on;
 `gif_enabled` controls the per-variable GIF), one per spatial field — the
-same lat/lon rule as the statistics. All plots of a variable share
-one **exact suite-wide min/max color scale** derived from the descriptive
-statistics — so plotting requires `compute_descriptive_stats`. First-time
-boundary rendering downloads Natural Earth coastline/border data; offline,
-plots degrade to data-only maps with a warning.
+same lat/lon rule as the statistics. All plots of a variable share one
+**suite-wide color scale** derived from the descriptive statistics — so
+plotting requires `compute_descriptive_stats` — whose maximum is always the
+exact suite-wide maximum (an outlier that saturates a map is a finding).
+The scale is **logarithmic by default** (`plotting.scale: log`): emission
+and concentration fields are non-negative and span many decades, and a
+linear map shows a blank globe with a few bright cells. Under `log` the
+floor is `max / 10**plotting.decades` (default 5), never below the
+suite-wide smallest positive value (the `min_positive` statistic), or
+`plotting.floor` in data units when set; zeros (and negatives) have no
+logarithm and are drawn light grey with `(grey: 0)` in the colorbar label,
+so "no emission" and "small emission" read differently. `plotting.scale:
+symlog` keeps zeros on the colorbar inside a linear core of that floor;
+`linear` is the plain exact min/max. The title carries `[log]`/`[symlog]`.
+Bias maps are symmetric at the exact max |difference|, linear by default;
+`plotting.bias_scale: symlog` (with `bias_decades`) shows ULP-level
+structure beside gross differences. First-time boundary rendering
+downloads Natural Earth coastline/border data; offline, plots degrade to
+data-only maps with a warning.
 
 Stats CSV columns: `run_id`, `application`, `suite` (the suite's unique
 `name` from its yaml, e.g. `simple-maccity`), identity (`combo_id`, `combo`, `file`,
@@ -696,7 +741,75 @@ Stats CSV columns: `run_id`, `application`, `suite` (the suite's unique
 timestamp from its NetCDF time coordinate as `time` (ISO-8601) plus part
 columns `year`/`month`/`day`/`hour`/`minute`/`second` for easy time
 summaries (null if the file has no time coordinate), and the nan-aware
-statistics (`count`, `sum`, `mean`, `std`, `min`, `max`, `median`).
+statistics (`count`, `sum`, `mean`, `std`, `min`, `min_positive` — the
+smallest value above zero, empty when none —, `max`, `median`).
+
+## Output upload
+
+A finished run's **whole output root** — `run.yaml`, the CSVs, every
+combination directory with its NetCDF, `.out`, logs, plots, job script and
+`baseline.yaml` — can be copied to an output store under its run ULID:
+
+```sh
+AWS_PROFILE=<profile> uv run ufs-chem-assay upload-output --output-root=<root> [--dry-run]
+AWS_PROFILE=<profile> uv run ufs-chem-assay download-output --ulid=<run_id> --dest=<dir> [--dry-run]
+```
+
+The store is `ASSAY_OUTPUT_STORE` (the run config's `outputs.store`), by
+default **`s3://ufs-chem/assay-output`** — the copy lives at
+`<store>/<run_id>/`, beside the `baselines/` prefix in the same bucket;
+`--store` overrides it per call, and a local directory works as a store too
+(no AWS needed). Uploading is one resumable `aws s3 sync`: re-running it
+transfers only what changed (a `baseline.yaml` written by a later publish,
+say) and never deletes anything, and nothing is refused — a run is the same
+run every time. `upload.yaml`, written into the root first and uploaded
+with it, records the run ULID, store, destination, when, by whom, and the
+file count and bytes. The download lands at `<dest>/<run_id>/` (`--dest` is
+required), refuses a ULID the store does not hold, and never deletes local
+files. `--dry-run` on either passes the wrapper's `--dryrun` through (a file
+count for a directory store); an S3 store is probed first so a node without
+network fails in seconds.
+
+`pytest --upload-output` (the run config's `harness.upload_output`, **false
+in every template**) does the upload as the last step of the session, after
+the plots, so the copy is complete; with an S3 store the session refuses the
+flag at start when the bucket is unreachable, and a dry-run session uploads
+nothing. On Ursa that means the slurm runtime from a login node; a session
+inside an allocation uploads afterwards with the command above.
+
+## Benchmarks
+
+Every session writes **`<output root>/benchmarks.csv`**: one row per
+executed combination (dry runs write the header alone), and the same row
+again as `<combo_id>/benchmarks.csv` inside the combination directory, so
+a published baseline carries its own benchmark. A row is a `BenchmarkRow`
+(`src/benchmarks.py`; the model's fields are the columns): identity
+(`run_id`, `combo_id`, `suite`, `combo`, `config_sha256` — equal across
+runs of the same generated configuration), provenance
+(`application_commit`, `harness_version`, `harness_commit`, `platform`,
+`runtime`, `modulefile`, the launch: `sbatch_args`, `srun_args`,
+`job_env`), timings (`duration_s`: the harness's clock around the driver
+call, queue included under slurm; `wall_s`: the job's own `tic`→`toc`
+lines, empty when the job was killed; `queue_s`, `elapsed_s`,
+`max_rss_kb`, `slurm_job_id`, `slurm_state`: Slurm accounting via `sacct`,
+on platforms that have it — Ursa today — and empty elsewhere), outcome
+(`driver_result`: passed/failed/timeout, `exit_code`, `nc_files`,
+`output_bytes`), and the baseline links (`baseline_ulid`,
+`baseline_state`, `comparison_result`). Whether a combination later became
+a baseline is the suite's `ulid:` line and the store's manifest, not a
+column: a row never changes once written.
+
+The committed copy lives beside each configuration's suites,
+`src/tests/config/<application>/<configuration>/benchmarks.csv`, and grows
+by rows: `pytest --record-benchmarks` (the run config's
+`harness.record_benchmarks`, **true in the Ursa templates**, false in
+`local.yaml`) appends the run's rows at session end, and
+`ufs-chem-assay record-benchmarks --output-root=<root>` does the same for a
+finished run (`--dry-run` lists what it would append). A row already
+present — same `run_id` and `combo_id` — is skipped; existing lines are
+never touched, re-sorted, or rewritten, and a header that is not the
+model's columns is refused. Review the diff and commit it, as with
+baseline ULIDs and input digests.
 
 ## Environment variables
 
@@ -719,16 +832,19 @@ Harness-wide:
 | `ASSAY_RUNTIME`                 | how the driver is spawned (`docker`, `native`, `slurm`) | `docker` on `local`, `slurm` elsewhere |
 | `ASSAY_LAUNCHER`                | command prefix for native driver runs (e.g. `srun --ntasks=1`) | empty (run directly) |
 | `ASSAY_SBATCH_ARGS`             | slurm runtime: sbatch options per driver job (`-A … -q … -p … -N 1 -n 1 -c …`) | empty |
+| `ASSAY_SRUN_ARGS`               | slurm runtime: options of the `srun` that launches the driver inside each job (the run config renders `--ntasks=<slurm.ntasks> <slurm.srun_args>`) | `--ntasks=1` |
 | `ASSAY_SLURM_QUEUE_WAIT_S`      | slurm runtime: seconds a driver job may wait in the queue before the harness cancels it (the run config's `slurm.queue_wait_s`) | `3600` |
 | `ASSAY_JOB_ENV`                 | slurm runtime: `NAME=VALUE` pairs exported inside each driver job | empty |
 | `ASSAY_RUN_TIMEOUT_S`           | caps the suite `timeout_s` when smaller        | `300`                            |
 | `ASSAY_LOG_LEVEL`               | runner log level (`DEBUG`, `INFO`, ...)        | `INFO`                           |
 | `ASSAY_DASK_NWORKERS`           | dask workers for the stats cluster (int > 0)   | unset → all available cores      |
-| `ASSAY_BASELINE_ROOT_DIR`       | baselines live at `<root>/<ulid>/`; absent ones are synced there from the store at session start (and by `fetch`); unset means read-only from the cwd, nothing is synced | unset → current working directory |
+| `ASSAY_BASELINE_ROOT_DIR`       | baselines live at `<root>/<ulid>/`; absent ones are synced there from the store at session start (and by `fetch`); unset means read-only from the cwd, nothing is synced. An entry pinning the all-zero placeholder ULID is "not published yet": never synced, the comparison test skips, `publish-baselines` fills it in | unset → current working directory |
 | `ASSAY_ENABLE_BASELINE_COMPARISONS` | global switch; `false` skips comparison tests | `true`                          |
 | `ASSAY_BASELINE_STORE`          | where `publish-baselines` writes `<store>/<ulid>/` (append-only): an `s3://bucket/prefix` (never a bucket root) or a local directory | `s3://ufs-chem/baselines` |
+| `ASSAY_OUTPUT_STORE`            | where `upload-output` / `--upload-output` copy a run's whole output root as `<store>/<run_id>/` (resumable): an `s3://bucket/prefix` or a local directory | `s3://ufs-chem/assay-output` |
 | `ASSAY_BASELINE_ATOL`           | absolute data tolerance over every comparison's own `atol` (`--baseline-atol` wins) | unset → the entries' values |
 | `ASSAY_BASELINE_RTOL`           | relative data tolerance (× \|baseline\|) over every comparison's own `rtol` (`--baseline-rtol` wins) | unset → the entries' values |
+| `ASSAY_INPUT_SEARCH_PATH`       | colon-separated dirs `fetch` searches recursively, by basename, to link source-less (`url: null`) inputs into the data directory | unset → absent ones fail |
 | `ASSAY_CONFIG_SEARCH_PATH`      | prepended to relative `config_path` values     | unset                            |
 | `ASSAY_SUITE_CONFIG_SEARCH_PATH` | colon-separated dirs searched recursively for `--suite-config` selection | unset → built-in suite dir only |
 

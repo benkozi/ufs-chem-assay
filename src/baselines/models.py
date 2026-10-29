@@ -10,11 +10,16 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, InstanceOf
 
 from models.base import StrictModel
-from models.suite_config import BaselineComparison, RecordedBaseline, SuiteConfig
+from models.suite_config import (
+    BaselineComparison,
+    LaunchRecord,
+    RecordedBaseline,
+    SuiteConfig,
+)
 from platforms import Platform, Runtime
 
 Action = Literal["published", "would-publish", "skipped", "failed"]
-BaselineState = Literal["local", "synced", "would-sync", "failed"]
+BaselineState = Literal["local", "synced", "would-sync", "unpublished", "failed"]
 
 
 class BaselineConventions(StrictModel):
@@ -40,6 +45,14 @@ class BaselineConventions(StrictModel):
     )
     digest_chunk: int = Field(
         1024 * 1024, gt=0, description="Read size for the manifest's SHA-256 digests"
+    )
+    unpublished_ulid: str = Field(
+        "0" * 26,
+        description=(
+            "The placeholder a suite pins before its first publish: never looked "
+            "for in the store (state `unpublished`, the comparison test skips), "
+            "superseded by nothing when the entry is first published"
+        ),
     )
 
 
@@ -102,6 +115,13 @@ class BaselineManifest(StrictModel):
     )
     platform: Platform = Field(description="Machine the run happened on")
     runtime: Runtime = Field(description="How the driver was spawned")
+    launch: LaunchRecord | None = Field(
+        default=None,
+        description=(
+            "The run's job launch (ranks, srun options, job environment) under "
+            "the slurm runtime; null otherwise"
+        ),
+    )
     published_at: datetime = Field(description="Publication time, UTC, timezone-aware")
     published_by: str = Field(description="<user>@<hostname> that published it")
     superseded_ulid: str | None = Field(
@@ -194,7 +214,8 @@ class StagedBaseline(StrictModel):
     state: BaselineState = Field(
         description=(
             "local: present, nothing done; synced: fetched from the store into "
-            "place; would-sync: a dry run's plan; failed: see detail"
+            "place; would-sync: a dry run's plan; unpublished: the entry pins the "
+            "placeholder ULID (no baseline yet); failed: see detail"
         )
     )
     detail: str = Field(description="Why: present, synced, or the error")

@@ -45,9 +45,12 @@ SETTINGS_NOT_MIRRORED = frozenset(
         "baseline_store",  # baselines.store
         "baseline_atol",  # baselines.atol
         "baseline_rtol",  # baselines.rtol
-        "sbatch_args",  # slurm: (account, qos, partition, cpus)
+        "sbatch_args",  # slurm: (account, qos, partition, ntasks, cpus, extra_args)
+        "srun_args",  # slurm: (ntasks, srun_args)
         "slurm_queue_wait_s",  # slurm.queue_wait_s
         "job_env",  # harness.env under the slurm runtime
+        "input_search_path",  # data.input_search_path
+        "output_store",  # outputs.store
     }
 )
 
@@ -133,6 +136,7 @@ def _exports(
     if config.runtime is Runtime.SLURM:
         assert config.slurm is not None, "slurm runtime needs a slurm: section"
         exports.append((f"{ENV_PREFIX}SBATCH_ARGS", q(config.slurm.sbatch_args)))
+        exports.append((f"{ENV_PREFIX}SRUN_ARGS", q(config.slurm.srun_args_value)))
         exports.append(
             (f"{ENV_PREFIX}SLURM_QUEUE_WAIT_S", str(config.slurm.queue_wait_s))
         )
@@ -149,12 +153,21 @@ def _exports(
     if config.baselines.root_dir is not None:
         exports.append((f"{ENV_PREFIX}BASELINE_ROOT_DIR", q(config.baselines.root_dir)))
     exports.append((f"{ENV_PREFIX}BASELINE_STORE", q(config.baselines.store)))
+    exports.append((f"{ENV_PREFIX}OUTPUT_STORE", q(config.outputs.store)))
     for tolerance, override in (
         ("ATOL", config.baselines.atol),
         ("RTOL", config.baselines.rtol),
     ):
         if override is not None:
             exports.append((f"{ENV_PREFIX}BASELINE_{tolerance}", str(override)))
+    if config.data.input_search_path:
+        # Where fetch links source-less inputs from (this machine's trees).
+        exports.append(
+            (
+                f"{ENV_PREFIX}INPUT_SEARCH_PATH",
+                q(search_path_value(config.data.input_search_path)),
+            )
+        )
     exports.append(("PATH", '"$HOME/.local/bin:$PATH"'))
     exports.append(("UV_CACHE_DIR", q(config.uv_cache_dir)))
     if config.runtime is not Runtime.SLURM:
@@ -180,6 +193,10 @@ def _harness(
         pytest_args.append("--publish-baselines")
     if harness.no_suite_update:
         pytest_args.append("--no-suite-update")
+    if harness.record_benchmarks:
+        pytest_args.append("--record-benchmarks")
+    if harness.upload_output:
+        pytest_args.append("--upload-output")
     pytest_args += harness.pytest_args
     return [
         *clean_python_env(section),

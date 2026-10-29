@@ -22,7 +22,7 @@ from logs import get_logger
 
 logger = get_logger("analysis")
 
-_STATS_PER_VARIABLE = 7  # count, sum, mean, std, min, max, median
+_STATS_PER_VARIABLE = 8  # count, sum, mean, std, min, max, median
 
 
 class RunContext(BaseModel):
@@ -66,6 +66,9 @@ class VariableStats(BaseModel):
     mean: float
     std: float
     min: float
+    min_positive: (
+        float | None
+    )  # smallest value > 0; None when the field has none (the log floor's input)
     max: float
     median: float
 
@@ -147,6 +150,7 @@ def compute_file_stats(
                     dsa.nanmean(flat),
                     dsa.nanstd(flat),
                     dsa.nanmin(flat),
+                    dsa.nanmin(dsa.where(flat > 0, flat, np.nan)),
                     dsa.nanmax(flat),
                     dsa.nanmedian(flat, axis=0),
                 ]
@@ -156,7 +160,7 @@ def compute_file_stats(
 
     stats = []
     for index, name in enumerate(names):
-        count, total, mean, std, minimum, maximum, median = computed[
+        count, total, mean, std, minimum, min_positive, maximum, median = computed[
             index * _STATS_PER_VARIABLE : (index + 1) * _STATS_PER_VARIABLE
         ]
         stats.append(
@@ -174,6 +178,9 @@ def compute_file_stats(
                 mean=float(mean),
                 std=float(std),
                 min=float(minimum),
+                min_positive=(
+                    None if np.isnan(float(min_positive)) else float(min_positive)
+                ),
                 max=float(maximum),
                 median=float(median),
             )

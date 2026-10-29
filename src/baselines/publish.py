@@ -72,9 +72,16 @@ def _manifest(
         harness_commit=run.harness_commit,
         platform=run.platform,
         runtime=run.runtime,
+        launch=run.launch,
         published_at=datetime.now(UTC),
         published_by=f"{getpass.getuser()}@{socket.gethostname()}",
-        superseded_ulid=record.previous_ulid,
+        # The placeholder a suite pins before its first publish supersedes
+        # nothing.
+        superseded_ulid=(
+            None
+            if record.previous_ulid == CONVENTIONS.unpublished_ulid
+            else record.previous_ulid
+        ),
         parameters=read_parameters(output_root, record.ulid),
         files=_files(record.source_dir),
     )

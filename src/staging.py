@@ -1,28 +1,36 @@
 """Staging a suite's declared inputs into the application checkout's data
 directory, through the S3 wrapper: one filtered `aws s3 sync` of the object's
 parent prefix per missing file, verified by digest in a staging directory,
-then moved into place. Nothing here raises for a transfer failure — every
-input is attempted and the outcome is returned; the caller (the CLI's exit
-code) decides what a failure means. The pytest session never calls this: it
-only checks presence (`missing_inputs`) and fails fast.
+then moved into place. An input with no remote source (url null) is never
+downloaded: absent, it is linked from the input search path (one basename
+match under this machine's trees) and verified; present, it is verified;
+with `record_digests`, a differing digest is recorded for the caller to
+write into the suite (`rewrite_suite_digests`). Nothing here raises for a
+transfer failure — every input is attempted and the outcome is returned; the
+caller (the CLI's exit code) decides what a failure means. The pytest
+session never calls this: it only checks presence (`missing_inputs`) and
+fails fast.
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
+import yaml
 from pydantic import ConfigDict, Field
 from ulid import ULID
 
 from logs import get_logger
 from models.base import StrictModel
 from models.suite_config import InputFile, SuiteConfig
+from platforms import Platform
 from s3_sync import S3SyncConfig, check_reachable, sync
 
 logger = get_logger("staging")
@@ -32,8 +40,11 @@ logger = get_logger("staging")
 # removed at the start of the next staging pass.
 STAGING_DIRNAME = ".staging"
 _CHUNK = 1024 * 1024
+ENV_INPUT_SEARCH_PATH = "ASSAY_INPUT_SEARCH_PATH"
 
-Action = Literal["skipped", "downloaded", "would-fetch", "failed"]
+Action = Literal[
+    "skipped", "downloaded", "would-fetch", "linked", "would-link", "recorded", "failed"
+]
 
 
 class StagedInput(StrictModel):
@@ -41,13 +52,18 @@ class StagedInput(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    url: str = Field(description="The input's S3 object URI")
+    url: str | None = Field(
+        description="The input's S3 object URI; null for one with no remote source"
+    )
     path: Path = Field(description="Host path the input is staged at")
     action: Action = Field(
         description=(
             "skipped: present and verified (or present, no digest declared); "
             "downloaded: fetched, verified, moved into place; would-fetch: a dry "
-            "run's plan; failed: see detail"
+            "run's plan; linked: a source-less input symlinked from the input "
+            "search path and verified; would-link: that plan; recorded: a "
+            "source-less input whose on-disk digest the caller is to write into "
+            "the suite (sha256 holds it); failed: see detail"
         )
     )
     detail: str = Field(description="Why: the verification outcome or the error")
@@ -172,14 +188,143 @@ def _fetch(entry: InputFile, target: Path, staging_root: Path) -> StagedInput:
     )
 
 
+def _find_source(name: str, search_path: Sequence[Path]) -> list[Path]:
+    """Every file called `name` under the search-path directories (recursive,
+    sorted): the one link target, or the ambiguity to report."""
+    found: list[Path] = []
+    for directory in search_path:
+        if directory.is_dir():
+            found += sorted(p for p in directory.rglob(name) if p.is_file())
+    return found
+
+
+def _link_source_less(
+    target: Path,
+    search_path: Sequence[Path],
+    *,
+    dry_run: bool,
+    declared: PurePosixPath | None = None,
+    platform: Platform | None = None,
+) -> tuple[str | None, str]:
+    """Link an absent source-less input: from its declared source for this
+    platform when the suite names one (a missing declared file is a named
+    failure, never a fallback), else from the one basename match under the
+    search path. Returns (error, note): error set when nothing was (or
+    would be) linked; note describes what happened for the result's detail."""
+    if declared is not None:
+        source = Path(declared)
+        if not source.is_file():
+            return (
+                f"declared source for {platform} is missing: {declared}; "
+                f"place or link the file at {target}"
+            ), ""
+    else:
+        search = ", ".join(str(d) for d in search_path)
+        if not search_path:
+            return (
+                f"absent and no input search path is set ({ENV_INPUT_SEARCH_PATH}); "
+                f"place or link the file at {target}"
+            ), ""
+        found = _find_source(target.name, search_path)
+        if not found:
+            return (
+                f"absent and not found under the input search path ({search}); "
+                f"place or link the file at {target}"
+            ), ""
+        if len(found) > 1:
+            return (
+                f"absent and ambiguous under the input search path: "
+                f"{', '.join(str(p) for p in found)}; place or link the file at {target}"
+            ), ""
+        (source,) = found
+    if dry_run:
+        return None, f"would link to {source}"
+    if target.is_symlink():  # dangling: is_file() was False
+        target.unlink()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.symlink_to(source.resolve())
+    return None, f"linked to {source}"
+
+
+def _stage_source_less(
+    entry: InputFile,
+    target: Path,
+    search_path: Sequence[Path],
+    *,
+    dry_run: bool,
+    record_digests: bool,
+    platform: Platform | None,
+) -> StagedInput:
+    """The url-null path: present → verify (and record when asked); absent →
+    link from the declared source for this platform or the search path,
+    then verify. Never the network."""
+    assert entry.sha256 is not None  # the model requires it without a url
+    note = ""
+    if not target.is_file():
+        declared = (
+            entry.sources.get(platform)
+            if entry.sources is not None and platform is not None
+            else None
+        )
+        error, note = _link_source_less(
+            target, search_path, dry_run=dry_run, declared=declared, platform=platform
+        )
+        if error is not None:
+            return StagedInput(
+                url=None, path=target, action="failed", detail=error, sha256=None
+            )
+        if dry_run:
+            return StagedInput(
+                url=None, path=target, action="would-link", detail=note, sha256=None
+            )
+        note = f"{note}; "
+    usable, detail, digest = _present(entry, target)
+    if usable:
+        return StagedInput(
+            url=None,
+            path=target,
+            action="linked" if note else "skipped",
+            detail=f"{note}{detail}",
+            sha256=digest,
+        )
+    if record_digests and digest is not None:
+        return StagedInput(
+            url=None,
+            path=target,
+            action="recorded",
+            detail=f"{note}sha256 recorded: {digest} (was {entry.sha256})",
+            sha256=digest,
+        )
+    return StagedInput(
+        url=None,
+        path=target,
+        action="failed",
+        detail=f"{note}{detail}; no source to re-fetch from — replace the file at {target}",
+        sha256=digest,
+    )
+
+
 def stage_inputs(
-    inputs: Sequence[InputFile], data_dir: Path, *, dry_run: bool = False
+    inputs: Sequence[InputFile],
+    data_dir: Path,
+    *,
+    dry_run: bool = False,
+    search_path: Sequence[Path] = (),
+    record_digests: bool = False,
+    platform: Platform | None = None,
 ) -> list[StagedInput]:
     """Stage every input into data_dir: present-and-verified files are
     skipped without touching the network; the rest are fetched one by one
-    (every input attempted even after a failure). A dry run classifies and
-    passes the wrapper's own dry run through for the files it would fetch;
-    it writes nothing."""
+    (every input attempted even after a failure). An input with no remote
+    source (url null) is never fetched: absent, it is symlinked from the
+    suite's declared source for `platform` when there is one, else from the
+    one basename match under `search_path` (none or several is a failure
+    naming the path to place the file at), and then verified like any
+    present file;
+    with `record_digests`, a present file whose digest differs from the
+    declared one is reported `recorded` with its digest instead of failed.
+    A dry run classifies, plans links, and passes the wrapper's own dry run
+    through for the files it would fetch; it writes nothing."""
     staging_root = data_dir / STAGING_DIRNAME
     if staging_root.exists():
         logger.info("removing stale staging directory %s", staging_root)
@@ -190,6 +335,19 @@ def stage_inputs(
     unreachable: dict[str, str] = {}
     for entry in inputs:
         target = data_dir / entry.dst
+        if entry.url is None:
+            result = _stage_source_less(
+                entry,
+                target,
+                search_path,
+                dry_run=dry_run,
+                record_digests=record_digests,
+                platform=platform,
+            )
+            log = logger.error if result.action == "failed" else logger.info
+            log("%s: %s (%s)", target, result.action, result.detail)
+            results.append(result)
+            continue
         usable, detail, digest = _present(entry, target)
         if usable:
             logger.info("%s: skipped (%s)", target, detail)
@@ -254,3 +412,87 @@ def stage_inputs(
     if staging_root.exists():
         shutil.rmtree(staging_root, ignore_errors=True)
     return results
+
+
+# ── Recording digests into a suite file ───────────────────────────────────────
+
+_DST_LINE = re.compile(
+    r"^(?P<indent>[ \t]*)(?:-[ \t]+)?dst:[ \t]*(?P<dst>\S+)[ \t]*(?:#.*)?$"
+)
+_ITEM_START = re.compile(r"^[ \t]*-[ \t]+\w")
+_SHA_LINE = re.compile(
+    r"^(?P<head>[ \t]*(?:-[ \t]+)?sha256:[ \t]*)(?P<quote>['\"]?)(?P<value>[^'\"#\s]+)(?P=quote)(?P<tail>[ \t]*(?:#.*)?)$"
+)
+
+
+def _entry_sha_line(lines: list[str], dst: PurePosixPath) -> int:
+    """The index of the `sha256:` line of the inputs entry whose `dst:` is
+    `dst`: the entry runs from its `- ` item start to the next item start
+    or the next less-indented line."""
+    dst_index = next(
+        (
+            i
+            for i, line in enumerate(lines)
+            if (m := _DST_LINE.match(line)) and m["dst"].strip("'\"") == str(dst)
+        ),
+        None,
+    )
+    if dst_index is None:
+        raise ValueError(f"no `dst: {dst}` entry")
+    start = dst_index
+    while start > 0 and not _ITEM_START.match(lines[start]):
+        start -= 1
+    item_indent = len(lines[start]) - len(lines[start].lstrip())
+    end = start + 1
+    while end < len(lines):
+        line = lines[end]
+        if line.strip() and (
+            _ITEM_START.match(line) or len(line) - len(line.lstrip()) <= item_indent
+        ):
+            break
+        end += 1
+    for i in range(start, end):
+        if _SHA_LINE.match(lines[i]):
+            return i
+    raise ValueError(f"the `dst: {dst}` entry has no `sha256:` line")
+
+
+def rewrite_suite_digests(path: Path, updates: dict[PurePosixPath, str]) -> None:
+    """Rewrite the `sha256:` line of each named inputs entry in place, every
+    other byte kept (the suite files are hand-commented, which a YAML dump
+    would lose), verified by reloading: the suite must equal the previous
+    one with exactly those digests changed, or the original text is
+    restored. The ULID repoint's pattern (baselines/suite.py)."""
+    from applications.registry import load_suite
+
+    original = path.read_text()
+    expected = load_suite(path).model_dump()
+    lines = original.splitlines(keepends=True)
+    for dst, digest in updates.items():
+        index = _entry_sha_line(lines, dst)
+        match = _SHA_LINE.match(lines[index])
+        assert match is not None  # _entry_sha_line found it by this pattern
+        lines[index] = (
+            f"{match['head']}{match['quote']}{digest}{match['quote']}{match['tail']}"
+            + ("\n" if lines[index].endswith("\n") else "")
+        )
+        for entry in expected["inputs"]:
+            if PurePosixPath(entry["dst"]) == dst:
+                entry["sha256"] = digest
+    path.write_text("".join(lines))
+    try:
+        after = load_suite(path).model_dump()
+    except (
+        ValueError,
+        OSError,
+        yaml.YAMLError,
+    ) as exc:  # ValidationError is a ValueError
+        path.write_text(original)
+        raise ValueError(
+            f"{path}: reload after recording failed ({exc}); restored"
+        ) from exc
+    if after != expected:
+        path.write_text(original)
+        raise ValueError(
+            f"{path}: reload differs beyond the recorded digests; restored"
+        )

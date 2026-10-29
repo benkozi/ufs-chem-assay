@@ -92,7 +92,10 @@ def test_maccity_pipeline_runs_all_combos_mocked(
             timeout_s=effective_timeout,
             output_mount=(tmp_path, container_root),
         )
-        assert out_path.read_bytes() == b"INFO: CECE Finalize completed successfully\n"
+        # The driver's output between the runner's tic/toc clock lines.
+        assert out_path.read_text().splitlines()[1:-1] == [
+            "INFO: CECE Finalize completed successfully"
+        ]
 
         # Fabricate the files a *correct* driver would produce (first write at
         # hour 1), then run the suite's assertions in derived mode.

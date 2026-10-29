@@ -1,21 +1,29 @@
 import logging
 from pathlib import Path
 
+import matplotlib
+import matplotlib.axes
+import matplotlib.colors
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from cartopy.mpl.geoaxes import GeoAxes
+from matplotlib.colors import LogNorm, SymLogNorm
 from PIL import GifImagePlugin, Image
 from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
 from applications.registry import load_suite
-from models.suite_config import Plotting
+from models.suite_config import BiasColorScale, ColorScale, Plotting
 from plotting import (
     BIAS_PLOTS_DIRNAME,
     PLOTS_DIRNAME,
+    ZERO_COLOR,
     VariableScale,
+    derive_bias_scales,
     derive_scales,
+    make_norm,
     render_all_bias_plots,
     render_all_plots,
     render_bias_plot,
@@ -23,6 +31,8 @@ from plotting import (
     render_combo_plots,
     render_spatial_plot,
 )
+
+_LINEAR = Plotting(scale=ColorScale.linear)
 
 
 def _write_nc(path: Path, values: np.ndarray, hour: int) -> None:
@@ -54,27 +64,101 @@ def combo_dirs(tmp_path: Path) -> tuple[Path, np.ndarray, np.ndarray]:
     return tmp_path, first, second
 
 
-def _stats_frame(rows: list[tuple[str, float, float]]) -> pd.DataFrame:
-    return pd.DataFrame(
+def _stats_frame(
+    rows: list[tuple[str, float, float]], min_positive: list[float | None] | None = None
+) -> pd.DataFrame:
+    frame = pd.DataFrame(
         [
             {"variable": variable, "min": vmin, "max": vmax}
             for variable, vmin, vmax in rows
         ]
     )
+    if min_positive is not None:
+        frame["min_positive"] = min_positive
+    return frame
 
 
-def test_derive_scales_exact_suite_wide_min_max() -> None:
+def test_derive_scales_linear_exact_suite_wide_min_max() -> None:
     stats = _stats_frame(
         [("co", 0.2, 0.9), ("co", 0.1, 0.5), ("co", 0.3, 2.9), ("nox", -1.0, 1.0)]
     )
-    scales = derive_scales(stats)
+    scales = derive_scales(stats, _LINEAR)
     assert scales["co"] == VariableScale(variable="co", vmin=0.1, vmax=2.9)
     assert scales["nox"] == VariableScale(variable="nox", vmin=-1.0, vmax=1.0)
+    assert make_norm(scales["co"]) is None
 
 
-def test_derive_scales_guards_degenerate_range() -> None:
-    scales = derive_scales(_stats_frame([("co", 0.0, 0.0)]))
+def test_derive_scales_linear_guards_degenerate_range() -> None:
+    scales = derive_scales(_stats_frame([("co", 0.0, 0.0)]), _LINEAR)
     assert scales["co"].vmin < scales["co"].vmax  # all-zero field still renders
+
+
+def test_derive_scales_log_by_default_with_the_decade_floor() -> None:
+    # The maccity shape: zeros, a long tail, an exact maximum. Five decades
+    # below the maximum is the floor; the maximum stays exact.
+    stats = _stats_frame(
+        [("co", 0.0, 5.0e-9), ("co", 0.0, 2.0e-9)], min_positive=[7.6e-19, 8.0e-19]
+    )
+    scales = derive_scales(stats)
+    scale = scales["co"]
+    assert scale.scale is ColorScale.log
+    assert scale.vmax == 5.0e-9
+    assert scale.floor == pytest.approx(5.0e-14)
+    assert scale.vmin == scale.floor
+    norm = make_norm(scale)
+    assert isinstance(norm, LogNorm)
+    assert (norm.vmin, norm.vmax) == (scale.floor, 5.0e-9)
+
+
+def test_derive_scales_floor_never_below_the_smallest_positive_value() -> None:
+    stats = _stats_frame([("co", 0.0, 1.0)], min_positive=[0.01])
+    assert derive_scales(stats, Plotting(decades=5))["co"].floor == 0.01
+    assert derive_scales(stats, Plotting(decades=None))["co"].floor == 0.01
+    assert derive_scales(stats, Plotting(decades=1))["co"].floor == 0.1
+
+
+def test_derive_scales_explicit_floor_and_its_refusal(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stats = _stats_frame([("co", 0.0, 1.0)], min_positive=[1e-9])
+    assert derive_scales(stats, Plotting(floor=1e-3))["co"].floor == 1e-3
+    with caplog.at_level(logging.WARNING):
+        scale = derive_scales(stats, Plotting(floor=2.0))["co"]
+    assert scale.floor == pytest.approx(1e-5)  # the decade rule instead
+    assert any(
+        "not below the suite-wide maximum" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_derive_scales_without_a_positive_floor_falls_back_to_linear(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # An all-zero field: nothing to take the log of.
+    with caplog.at_level(logging.WARNING):
+        scales = derive_scales(_stats_frame([("co", 0.0, 0.0)], min_positive=[None]))
+    assert scales["co"].scale is ColorScale.linear
+    assert scales["co"].floor is None
+    assert scales["co"].vmin < scales["co"].vmax
+    assert any("linear scale instead" in r.getMessage() for r in caplog.records)
+    # decades: null with no positive value: the same fallback.
+    scales = derive_scales(_stats_frame([("co", 0.0, 1.0)]), Plotting(decades=None))
+    assert scales["co"].scale is ColorScale.linear
+
+
+def test_derive_scales_tolerates_stats_without_min_positive() -> None:
+    # A stats CSV from before the column: the decade rule alone.
+    scales = derive_scales(_stats_frame([("co", 0.0, 1.0)]))
+    assert scales["co"].floor == pytest.approx(1e-5)
+
+
+def test_derive_scales_symlog_keeps_zero_on_the_colorbar() -> None:
+    stats = _stats_frame([("co", 0.0, 1.0)], min_positive=[1e-3])
+    scale = derive_scales(stats, Plotting(scale=ColorScale.symlog, decades=2))["co"]
+    assert scale.scale is ColorScale.symlog
+    assert (scale.vmin, scale.vmax, scale.floor) == (0.0, 1.0, 1e-2)
+    norm = make_norm(scale)
+    assert isinstance(norm, SymLogNorm)
+    assert (norm.vmin, norm.vmax) == (0.0, 1.0)
 
 
 def test_render_spatial_plot_writes_png(
@@ -90,6 +174,51 @@ def test_render_spatial_plot_writes_png(
     )
     assert out_path.is_file()
     assert out_path.stat().st_size > 0
+
+
+def test_render_spatial_plot_log_masks_zeros_and_marks_the_title(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    values = np.array([[[0.0, 1e-12, 1e-10, 1e-9, 0.0]] * 4])
+    _write_nc(tmp_path / "f.nc", values, hour=1)
+    mesh = mocker.spy(GeoAxes, "pcolormesh")
+    title = mocker.spy(matplotlib.axes.Axes, "set_title")
+    face = mocker.spy(matplotlib.axes.Axes, "set_facecolor")
+    scale = VariableScale(
+        variable="co", vmin=1e-14, vmax=1e-9, scale=ColorScale.log, floor=1e-14
+    )
+    render_spatial_plot(tmp_path / "f.nc", "co", scale, tmp_path / "co.png")
+    kwargs = mesh.call_args.kwargs
+    assert isinstance(kwargs["norm"], LogNorm)
+    assert "vmin" not in kwargs  # a norm and vmin/vmax never both
+    data = mesh.call_args.args[3]
+    assert np.ma.is_masked(data)
+    assert int(np.ma.count_masked(data)) == 8  # the zeros, transparent …
+    assert face.call_args.args[1] == ZERO_COLOR  # … over a grey axes face
+    assert title.call_args.args[1].endswith("[log]")
+
+
+def test_render_spatial_plot_linear_passes_vmin_vmax_without_a_norm(
+    tmp_path: Path,
+    combo_dirs: tuple[Path, np.ndarray, np.ndarray],
+    mocker: MockerFixture,
+) -> None:
+    root, first, _ = combo_dirs
+    mesh = mocker.spy(GeoAxes, "pcolormesh")
+    scale = VariableScale(variable="co", vmin=0.0, vmax=float(first.max()))
+    render_spatial_plot(
+        root / "3f9a1c2b7d4e8a01" / "cece_20100101_010000.nc",
+        "co",
+        scale,
+        tmp_path / "co.png",
+    )
+    kwargs = mesh.call_args.kwargs
+    assert "norm" not in kwargs
+    assert (kwargs["vmin"], kwargs["vmax"], kwargs["cmap"]) == (
+        0.0,
+        float(first.max()),
+        "viridis",
+    )
 
 
 def test_render_combo_plots_pngs_and_gif(
@@ -139,15 +268,34 @@ def test_render_all_plots_covers_every_combo_dir(
     # render_all_plots derives combo directories from the frame (a per-suite
     # slice renders only that suite's combos on a flat multi-suite root).
     stats["combo_id"] = ["3f9a1c2b7d4e8a01", "9004a4e23c1dd90a"]
-    render_all_plots(root, stats, gif_enabled=True)
+    render_all_plots(root, stats, Plotting(gif_enabled=True))
     assert (root / "3f9a1c2b7d4e8a01" / "plots-overview" / "co.gif").is_file()
     assert (root / "9004a4e23c1dd90a" / "plots-overview" / "co.gif").is_file()
 
 
 def test_plotting_defaults_and_unknown_key() -> None:
-    assert Plotting() == Plotting(enabled=True, gif_enabled=True)
+    assert Plotting() == Plotting(
+        enabled=True,
+        gif_enabled=True,
+        scale=ColorScale.log,
+        decades=5,
+        floor=None,
+        bias_scale=BiasColorScale.linear,
+        bias_decades=5,
+    )
     with pytest.raises(ValidationError):
         Plotting(gif_speed=1)  # type: ignore[call-arg]
+    for bad in (
+        {"scale": "percentile"},
+        {"decades": 0},
+        {"floor": -1.0},
+        {"bias_scale": "log"},
+    ):
+        with pytest.raises(ValidationError):
+            Plotting.model_validate(bad)
+    assert (
+        Plotting(scale=ColorScale.linear, floor=3.0).floor == 3.0
+    )  # accepted, ignored
 
 
 def test_plotting_requires_descriptive_stats(
@@ -187,8 +335,6 @@ def _write_pair(realization: Path, baseline: Path, offset: float, hour: int) -> 
 
 
 def test_derive_bias_scales_symmetric_suite_wide() -> None:
-    from plotting import derive_bias_scales
-
     stats = pd.DataFrame(
         [
             {"variable": "co", "max_abs_diff": 0.25},
@@ -199,13 +345,38 @@ def test_derive_bias_scales_symmetric_suite_wide() -> None:
     scales = derive_bias_scales(stats)
     assert (scales["co"].vmin, scales["co"].vmax) == (-0.75, 0.75)
     assert (scales["nox"].vmin, scales["nox"].vmax) == (-0.1, 0.1)
+    assert scales["co"].scale is BiasColorScale.linear
+    assert make_norm(scales["co"]) is None
+    # symlog on request: linthresh by the bias_decades rule, symmetric.
+    symlog = derive_bias_scales(
+        stats, Plotting(bias_scale=BiasColorScale.symlog, bias_decades=3)
+    )
+    assert symlog["co"].floor == pytest.approx(0.75e-3)
+    norm = make_norm(symlog["co"])
+    assert isinstance(norm, SymLogNorm)
+    assert (norm.vmin, norm.vmax) == (-0.75, 0.75)
 
 
 def test_derive_bias_scales_guards_zero_bias() -> None:
-    from plotting import derive_bias_scales
-
     scales = derive_bias_scales(pd.DataFrame([{"variable": "co", "max_abs_diff": 0.0}]))
     assert scales["co"].vmin < 0 < scales["co"].vmax  # flat bias still renders
+
+
+def test_render_bias_plot_symlog_uses_a_norm(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    values = np.array([[[0.0, 1e-12, 1e-10, 1e-9, 0.0]] * 4])
+    _write_nc(tmp_path / "real.nc", values * 2, hour=1)
+    _write_nc(tmp_path / "base.nc", values, hour=1)
+    mesh = mocker.spy(GeoAxes, "pcolormesh")
+    scale = VariableScale(
+        variable="co", vmin=-1e-9, vmax=1e-9, scale=BiasColorScale.symlog, floor=1e-14
+    )
+    render_bias_plot(
+        tmp_path / "real.nc", tmp_path / "base.nc", "co", scale, tmp_path / "b.png"
+    )
+    assert isinstance(mesh.call_args.kwargs["norm"], SymLogNorm)
+    assert "vmin" not in mesh.call_args.kwargs
 
 
 def test_render_combo_bias_plots_pngs_and_gif(tmp_path: Path) -> None:
@@ -383,7 +554,7 @@ def test_render_all_plots_isolates_a_failing_combo(
     mocker.patch("plotting.render_combo_plots", side_effect=RuntimeError("combo"))
     stats = _stats_frame([("co", 0.0, 1.0)]).assign(combo_id="01JA")
     with caplog.at_level(logging.ERROR):
-        render_all_plots(tmp_path, stats, gif_enabled=False)
+        render_all_plots(tmp_path, stats, Plotting(gif_enabled=False))
     assert any("failed to render plots for" in r.getMessage() for r in caplog.records)
 
 

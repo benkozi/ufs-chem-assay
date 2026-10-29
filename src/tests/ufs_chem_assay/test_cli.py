@@ -3,9 +3,12 @@ overrides, dry-run, the effective-config artifact — through the CLI's
 main() in-process and through `python -m cli` once. The CLI speaks through
 the harness logger (`ufs-chem-assay.cli`), never print."""
 
+import hashlib
 import logging
+import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -15,8 +18,16 @@ from pytest_mock import MockerFixture
 from applications.base import Application
 from applications.registry import REGISTRY
 from baselines import BaselineState, StagedBaseline
+from benchmarks import (
+    BENCHMARK_FILENAME,
+    BenchmarkRow,
+    collect_row,
+    read_benchmarks_csv,
+    write_benchmarks_csv,
+)
 from cli.main import main
 from logs import LOGGER_NAME
+from platforms import Platform
 from s3_sync import S3SyncConfig
 from staging import Action, StagedInput
 from tests.ufs_chem_assay.baseline_runs import Run, fabricate_run, fake_sync
@@ -345,8 +356,11 @@ def fetch_env(
         "ASSAY_BASELINE_ROOT_DIR",
         "ASSAY_BASELINE_STORE",
         "ASSAY_ENABLE_BASELINE_COMPARISONS",
+        "ASSAY_INPUT_SEARCH_PATH",
+        "ASSAY_PLATFORM",
     ):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr("socket.gethostname", lambda: "laptop")  # platform: local
     mocker.patch("cli.main.ensure_baselines", return_value=[])
     checkout = tmp_path / "checkout"
     (checkout / "data").mkdir(parents=True)
@@ -379,13 +393,21 @@ def test_fetch_stages_the_merged_inputs_of_the_selected_suites(
             _staged(i.url, data_dir / i.dst, "skipped") for i in inputs
         ],
     )
-    code = main(["fetch", "--application=cece", r"--suite-config=.*-suite\.yaml"])
+    code = main(
+        ["fetch", "--application=cece", r"--suite-config=(one|two)-suite\.yaml"]
+    )
     assert code == 0
     stage.assert_called_once()
     inputs, data_dir = stage.call_args.args
     assert data_dir == fetch_env / "data"
-    assert stage.call_args.kwargs == {"dry_run": False}
-    # The shared file once, the private extra once: merged across both suites.
+    assert stage.call_args.kwargs == {
+        "dry_run": False,
+        "search_path": [],
+        "record_digests": False,
+        "platform": Platform.LOCAL,
+    }
+    # The shared file once, the private extra once: merged across both suites
+    # (the selector names the two fixtures; the built-in suites declare more).
     assert [(str(i.dst), i.public) for i in inputs] == [
         ("MACCity_4x5.nc", True),
         ("extra.nc", False),
@@ -424,7 +446,104 @@ def test_fetch_exit_code_follows_the_results(
 def test_fetch_dry_run_passes_through(mocker: MockerFixture) -> None:
     stage = mocker.patch("cli.main.stage_inputs", return_value=[])
     assert main(["fetch", "--suite-config=one-suite.yaml", "--dry-run"]) == 0
-    assert stage.call_args.kwargs == {"dry_run": True}
+    assert stage.call_args.kwargs == {
+        "dry_run": True,
+        "search_path": [],
+        "record_digests": False,
+        "platform": Platform.LOCAL,
+    }
+
+
+@pytest.mark.usefixtures("fetch_env")
+def test_fetch_passes_the_input_search_path_setting(
+    monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    monkeypatch.setenv(
+        "ASSAY_INPUT_SEARCH_PATH", os.pathsep.join(["/scratch/x/INPUT", "/scratch/y"])
+    )
+    stage = mocker.patch("cli.main.stage_inputs", return_value=[])
+    assert main(["fetch", "--suite-config=one-suite.yaml"]) == 0
+    assert stage.call_args.kwargs["search_path"] == [
+        Path("/scratch/x/INPUT"),
+        Path("/scratch/y"),
+    ]
+
+
+_PLACEHOLDER = "0" * 64
+
+
+def _placed_suite(fetch_env: Path, cece_config_path: Path) -> Path:
+    """A third fixture suite: one source-less input with the placeholder
+    digest, beside the two URL suites."""
+    suite_path = fetch_env.parent / "suites" / "three-suite.yaml"
+    suite_path.write_text(
+        f"name: three\nconfig_path: {cece_config_path}\ntimeout_s: 5\n"
+        "inputs:\n"
+        "  - url: null\n    dst: placed/x.nc\n"
+        f"    sha256: '{_PLACEHOLDER}'  # placeholder\n"
+    )
+    return suite_path
+
+
+def test_fetch_record_digests_rewrites_the_suite(
+    fetch_env: Path,
+    cece_config_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Real staging, no mocks: the placed file's digest lands in the suite
+    # file, every other byte kept, and the user commits the diff.
+    suite_path = _placed_suite(fetch_env, cece_config_path)
+    (fetch_env / "data" / "placed").mkdir()
+    (fetch_env / "data" / "placed" / "x.nc").write_bytes(b"placed bytes")
+    digest = hashlib.sha256(b"placed bytes").hexdigest()
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["fetch", "--suite-config=three-suite.yaml", "--record-digests"])
+    assert code == 0
+    text = suite_path.read_text()
+    assert f"    sha256: '{digest}'  # placeholder\n" in text
+    assert _PLACEHOLDER not in text
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("recorded" in m and "placed/x.nc" in m and digest in m for m in messages)
+    assert any("commit" in m for m in messages)
+    # Idempotent: the next fetch verifies and records nothing.
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert (
+            main(["fetch", "--suite-config=three-suite.yaml", "--record-digests"]) == 0
+        )
+    assert suite_path.read_text() == text
+
+
+def test_fetch_record_digests_refuses_a_dry_run(
+    fetch_env: Path, cece_config_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    _placed_suite(fetch_env, cece_config_path)
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "fetch",
+                "--suite-config=three-suite.yaml",
+                "--record-digests",
+                "--dry-run",
+            ]
+        )
+    assert code == 1
+    assert any("--dry-run" in r.getMessage() for r in caplog.records)
+
+
+def test_fetch_record_digests_reports_a_failed_rewrite(
+    fetch_env: Path,
+    cece_config_path: Path,
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _placed_suite(fetch_env, cece_config_path)
+    (fetch_env / "data" / "placed").mkdir()
+    (fetch_env / "data" / "placed" / "x.nc").write_bytes(b"placed bytes")
+    mocker.patch("cli.main.rewrite_suite_digests", side_effect=ValueError("boom"))
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(["fetch", "--suite-config=three-suite.yaml", "--record-digests"])
+    assert code == 1
+    assert any("boom" in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.usefixtures("fetch_env")
@@ -738,6 +857,297 @@ def test_fetch_exit_code_covers_failed_baselines(
     assert code == 1
     # ensure_baselines logs the states itself (grouped); fetch adds nothing.
     assert not [r for r in caplog.records if "baseline" in r.getMessage()]
+
+
+@pytest.mark.usefixtures("fetch_env")
+def test_fetch_exit_code_ignores_unpublished_baselines(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A suite shipped before its first publish pins the placeholder ULID:
+    # not a failure — there is nothing to fetch yet.
+    mocker.patch("cli.main.stage_inputs", return_value=[])
+    mocker.patch(
+        "cli.main.ensure_baselines",
+        return_value=[_staged_baseline("0" * 26, "unpublished")],
+    )
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["fetch", "--suite-config=one-suite.yaml"])
+    assert code == 0
+
+
+# ── record-benchmarks ────────────────────────────────────────────────────────
+
+
+def _benchmark_rows_for(run: Run) -> list[BenchmarkRow]:
+    recorded = datetime(2026, 10, 23, 15, 0, tzinfo=UTC)
+    return [
+        collect_row(
+            recorded_at=recorded,
+            run=run.manifest,
+            suite=run.suite.name,
+            combo=combo.name,
+            combo_id=combo.combo_id,
+            config_sha256="c" * 64,
+            timeout_s=10,
+            duration_s=1.5,
+            error=None,
+            combo_dir=run.combo_dir(combo.name),
+            accounting=None,
+            test_results={"test_driver_execution": "passed"},
+            baseline=None,
+        )
+        for combo in run.combos
+    ]
+
+
+@pytest.fixture
+def recorded_run(
+    tmp_path: Path, suite_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> Run:
+    """A fabricated finished run with its per-run benchmarks.csv, selectable
+    by name from its own suite directory (the committed file lands there)."""
+    monkeypatch.chdir(tmp_path)
+    for key in ("CECE_ROOT_DIR", "ASSAY_APPLICATION", "ASSAY_PLATFORM"):
+        monkeypatch.delenv(key, raising=False)
+    run = fabricate_run(tmp_path, suite_dir, name="recorded")
+    monkeypatch.setenv("ASSAY_SUITE_CONFIG_SEARCH_PATH", str(run.suite_path.parent))
+    write_benchmarks_csv(_benchmark_rows_for(run), run.root / BENCHMARK_FILENAME)
+    return run
+
+
+def test_record_benchmarks_appends_to_the_suites_configuration_file(
+    recorded_run: Run, caplog: pytest.LogCaptureFixture
+) -> None:
+    target = recorded_run.suite_path.parent / BENCHMARK_FILENAME
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["record-benchmarks", f"--output-root={recorded_run.root}"])
+    assert code == 0
+    rows = read_benchmarks_csv(target)
+    assert {row.combo_id for row in rows} == {c.combo_id for c in recorded_run.combos}
+    assert any("review the diff and commit" in r.getMessage() for r in caplog.records)
+    # Recording the same run again appends nothing and changes nothing.
+    before = target.read_text()
+    assert main(["record-benchmarks", f"--output-root={recorded_run.root}"]) == 0
+    assert target.read_text() == before
+
+
+def test_record_benchmarks_dry_run_writes_nothing(recorded_run: Run) -> None:
+    target = recorded_run.suite_path.parent / BENCHMARK_FILENAME
+    assert (
+        main(["record-benchmarks", f"--output-root={recorded_run.root}", "--dry-run"])
+        == 0
+    )
+    assert not target.exists()
+
+
+def test_record_benchmarks_clean_errors(
+    recorded_run: Run, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        assert main(["record-benchmarks", f"--output-root={tmp_path / 'nope'}"]) == 1
+        (recorded_run.root / BENCHMARK_FILENAME).unlink()
+        assert main(["record-benchmarks", f"--output-root={recorded_run.root}"]) == 1
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("no run.yaml" in m for m in messages)
+    assert any("benchmarks.csv" in m and "re-run" in m for m in messages)
+
+
+def test_record_benchmarks_empty_run_and_unselected_suite(
+    recorded_run: Run, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A suite the selection does not include: its rows are reported, exit 1.
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "record-benchmarks",
+                f"--output-root={recorded_run.root}",
+                "--suite-config=simple-maccity-suite.yaml",
+            ]
+        )
+    assert code == 1
+    assert any("not in the selection" in r.getMessage() for r in caplog.records)
+    # Nothing executed (a dry run's header-only file): nothing to record, exit 0.
+    write_benchmarks_csv([], recorded_run.root / BENCHMARK_FILENAME)
+    assert main(["record-benchmarks", f"--output-root={recorded_run.root}"]) == 0
+
+
+def test_record_benchmarks_selection_and_append_errors(
+    recorded_run: Run, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A selector matching nothing is the usual selection error, exit 1.
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "record-benchmarks",
+                f"--output-root={recorded_run.root}",
+                "--suite-config=absent-suite.yaml",
+            ]
+        )
+    assert code == 1
+    # A committed file with a foreign header refuses the append, exit 1.
+    target = recorded_run.suite_path.parent / BENCHMARK_FILENAME
+    target.write_text("run_id,combo_id\nx,y\n")
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(["record-benchmarks", f"--output-root={recorded_run.root}"])
+    assert code == 1
+    assert any("header" in r.getMessage() for r in caplog.records)
+    assert target.read_text() == "run_id,combo_id\nx,y\n"
+
+
+def test_record_benchmarks_refuses_a_run_of_another_application(
+    recorded_run: Run, caplog: pytest.LogCaptureFixture
+) -> None:
+    run_yaml = recorded_run.root / "run.yaml"
+    run_yaml.write_text(
+        run_yaml.read_text().replace("application: cece", "application: other", 1)
+    )
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(["record-benchmarks", f"--output-root={recorded_run.root}"])
+    assert code == 1
+    assert any("other run" in r.getMessage() for r in caplog.records)
+
+
+# ── upload-output / download-output ──────────────────────────────────────────
+
+
+@pytest.fixture
+def output_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A fabricated output root and a directory store (no AWS, no network)."""
+    monkeypatch.chdir(tmp_path)
+    for key in ("ASSAY_OUTPUT_STORE", "ASSAY_PLATFORM", "ASSAY_APPLICATION"):
+        monkeypatch.delenv(key, raising=False)
+    root = tmp_path / "output"
+    (root / "01JCOMBOCOMBOCOMBOCOMBOCOM").mkdir(parents=True)
+    (root / "run.yaml").write_text(
+        "run_id: 01JRUNRUNRUNRUNRUNRUNRUNRU\napplication: cece\n"
+    )
+    (root / "01JCOMBOCOMBOCOMBOCOMBOCOM" / "x.nc").write_bytes(b"nc")
+    monkeypatch.setenv("ASSAY_OUTPUT_STORE", str(tmp_path / "store"))
+    return root
+
+
+def test_upload_and_download_output_round_trip_through_a_directory_store(
+    output_env: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert main(["upload-output", f"--output-root={output_env}", "--dry-run"]) == 0
+    assert not (tmp_path / "store").exists()
+    assert main(["upload-output", f"--output-root={output_env}"]) == 0
+    copy = tmp_path / "store" / "01JRUNRUNRUNRUNRUNRUNRUNRU"
+    assert (copy / "01JCOMBOCOMBOCOMBOCOMBOCOM" / "x.nc").read_bytes() == b"nc"
+    assert (copy / "upload.yaml").is_file()
+    dest = tmp_path / "back"
+    assert (
+        main(["download-output", "--ulid=01JRUNRUNRUNRUNRUNRUNRUNRU", f"--dest={dest}"])
+        == 0
+    )
+    assert (dest / "01JRUNRUNRUNRUNRUNRUNRUNRU" / "run.yaml").is_file()
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("dry run: run 01JRUN" in m for m in messages)
+
+
+def test_output_subcommands_clean_errors(
+    output_env: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        assert main(["upload-output", f"--output-root={tmp_path / 'nope'}"]) == 1
+        assert (
+            main(
+                [
+                    "upload-output",
+                    f"--output-root={output_env}",
+                    "--store=s3://bucket-root",
+                ]
+            )
+            == 1
+        )
+        assert (
+            main(
+                [
+                    "download-output",
+                    "--ulid=01JABSENTABSENTABSENTABSEN",
+                    f"--dest={tmp_path / 'b'}",
+                ]
+            )
+            == 1
+        )
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("no run.yaml" in m for m in messages)
+    assert any("output_store" in m for m in messages)
+    assert any("no output for 01JABSENT" in m for m in messages)
+
+
+def test_output_subcommands_probe_an_s3_store_first(
+    output_env: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    probe = mocker.patch(
+        "cli.main.check_reachable", side_effect=ConnectionError("no route")
+    )
+    upload = mocker.patch("cli.main.upload_output")
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "upload-output",
+                f"--output-root={output_env}",
+                "--store=s3://ufs-chem/assay-output",
+            ]
+        )
+    assert code == 1
+    probe.assert_called_once_with("s3://ufs-chem/assay-output")
+    upload.assert_not_called()
+    assert any("node with network" in r.getMessage() for r in caplog.records)
+    # The download probes the same way.
+    download = mocker.patch("cli.main.download_output")
+    assert (
+        main(
+            [
+                "download-output",
+                "--ulid=01JRUNRUNRUNRUNRUNRUNRUNRU",
+                "--dest=d",
+                "--store=s3://ufs-chem/assay-output",
+            ]
+        )
+        == 1
+    )
+    download.assert_not_called()
+
+
+def test_output_subcommands_report_transfer_failures(
+    output_env: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch("cli.main.check_reachable")
+    mocker.patch(
+        "cli.main.upload_output",
+        side_effect=subprocess.CalledProcessError(
+            1, ["aws"], output="x\nAccessDenied\n"
+        ),
+    )
+    mocker.patch("cli.main.download_output", side_effect=OSError("disk full"))
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        assert (
+            main(
+                [
+                    "upload-output",
+                    f"--output-root={output_env}",
+                    "--store=s3://ufs-chem/assay-output",
+                ]
+            )
+            == 1
+        )
+        assert (
+            main(
+                [
+                    "download-output",
+                    "--ulid=01JRUNRUNRUNRUNRUNRUNRUNRU",
+                    "--dest=d",
+                    "--store=s3://ufs-chem/assay-output",
+                ]
+            )
+            == 1
+        )
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("AccessDenied" in m for m in messages)
+    assert any("disk full" in m for m in messages)
 
 
 # ── the remaining error branches ─────────────────────────────────────────────

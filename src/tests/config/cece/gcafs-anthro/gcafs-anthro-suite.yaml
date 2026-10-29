@@ -1,0 +1,79 @@
+# The global anthropogenic use case (issue 33): one configuration, no sweep —
+# the base config is the single combination. Ursa only: the inputs are not in
+# any bucket and the run takes hours; run it through config/ursa.yaml with the
+# override list in docs/gcafs-anthro-runbook.md (the batch QOS, the raised
+# timeout cap, the author's single-task single-thread geometry).
+name: gcafs-anthro
+config_path: gcafs-anthro.yaml
+timeout_s: 1800  # per combination; deliberately short (the author saw up to 3 h): see it time out, then raise
+# Inputs the base config reads, expected at <CECE_ROOT_DIR>/data/gcafs-anthro/.
+# No remote source yet (url: null): the files are copied there from the
+# existing staging area on Ursa, and `uv run ufs-chem-assay fetch
+# --suite-config=gcafs-anthro-suite.yaml` verifies each by sha256 and names any
+# that is missing — it never downloads these. On Ursa each entry's `sources`
+# names the file's known location (the author's staging area) and fetch links
+# it from there; elsewhere ASSAY_INPUT_SEARCH_PATH is searched by basename.
+# Filling in the url lines (after a one-time upload) makes them fetchable; the
+# digests stay.
+# The all-zero digests are placeholders: replace them with `sha256sum` of the
+# placed files (runbook step 5) before the first run — until then fetch fails
+# naming each file, which is the point.
+# The Ursa source paths below exceed the line limit:
+# yamllint disable rule:line-length
+inputs:
+  - url:
+    dst: gcafs-anthro/BC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+    sha256: 96130595582b89681748c3d82f632aa5d367fe17b3b530e0ebb6adfb30dd3d11
+    sources:
+      ursa: /scratch4/NCEPDEV/stmp/Wei.K.Li/RUNDIRS/C96_gcafs_cycled_noDA_catchem/gcdas.2021122012/prep_emissions.2816259/INPUT/CEDS/v2025-01/BC/BC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+  - url:
+    dst: gcafs-anthro/OC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+    sha256: a7f5ca2690d3dce2976f6c056facb518bb8b7dfec5df1821fcef2e17f44084fb
+    sources:
+      ursa: /scratch4/NCEPDEV/stmp/Wei.K.Li/RUNDIRS/C96_gcafs_cycled_noDA_catchem/gcdas.2021122012/prep_emissions.2816259/INPUT/CEDS/v2025-01/OC/OC-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+  - url:
+    dst: gcafs-anthro/SO2-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+    sha256: 5048121a7a8b9b98e037323ad7be283a05c8a93c896be44c9320f0f956f6e115
+    sources:
+      ursa: /scratch4/NCEPDEV/stmp/Wei.K.Li/RUNDIRS/C96_gcafs_cycled_noDA_catchem/gcdas.2021122012/prep_emissions.2816259/INPUT/CEDS/v2025-01/SO2/SO2-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2024-11-25_gn_202101-202112_processed.nc
+  - url:
+    dst: gcafs-anthro/EDGAR_hourly_NOxScal.nc
+    sha256: 6cd584b7d737ea913fd02f9753ec52e92db7e4539ae38023309d42d4e10a65d7
+    sources:
+      ursa: /scratch4/NCEPDEV/stmp/Wei.K.Li/RUNDIRS/C96_gcafs_cycled_noDA_catchem/gcdas.2021122012/prep_emissions.2816259/INPUT/EDGARv42/v2015-02/NO/EDGAR_hourly_NOxScal.nc
+  - url:
+    dst: gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_daily.nc
+    sha256: 493b6f03eae61b7921cb731543265850e749828c10c99f49595b5075c0a91eec
+    sources:
+      ursa: /scratch4/NCEPDEV/stmp/Wei.K.Li/RUNDIRS/C96_gcafs_cycled_noDA_catchem/gcdas.2021122012/prep_emissions.2816259/INPUT/CAMS-TEMPO/v3.1-2021/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_daily.nc
+  - url:
+    dst: gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_weekly_fixtime.nc
+    sha256: 66ee78235e08a29dfc7d6861639a3f70be4ef0ef3776737b956448766f738789
+    sources:
+      ursa: /scratch4/NCEPDEV/stmp/Wei.K.Li/RUNDIRS/C96_gcafs_cycled_noDA_catchem/gcdas.2021122012/prep_emissions.2816259/INPUT/CAMS-TEMPO/v3.1-2021/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_weekly_fixtime.nc
+  - url:
+    dst: gcafs-anthro/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_hourly_fixtime_utc.nc
+    sha256: 4e56377b449a6eea17213a83ac285bdcde695215f516b929c8e5e98b53c58c8d
+    sources:
+      ursa: /scratch3/NCEPDEV/naqfc/Zachary.Moon/cece-gcafs/input/CAMS-GLOB-TEMPO_Glb_0.1x0.1_tmp_weights_v3.1_hourly_fixtime_utc.nc
+# yamllint enable rule:line-length
+# assertions: defaults — file count derived from the config (25), filenames
+# from the pattern, every output variable on (time, lev, lat, lon). The species
+# attribute dictionaries are pinned after the first run writes them.
+analysis:
+  compute_descriptive_stats: true
+plotting:
+  enabled: true
+  gif_enabled: true
+  scale: log  # the default: SO2/OC/BC span many decades; zeros (ocean) grey
+  decades: 5  # the floor five decades below the suite-wide maximum
+  bias_scale: linear  # the default
+# One entry: the empty selector matches the single combination of a sweep-less
+# suite. The all-zero ULID means "not published yet": the harness never looks
+# for it, the comparison test skips, and publish-baselines replaces it (keeping
+# the quotes, which YAML needs for 26 zeros). rtol as for maccity: a few
+# float64 ULPs at any magnitude.
+baseline_comparisons:
+  - sweep_selector: {}
+    ulid: 01M5JV8MBW0XE9TPE0BDCGSFJZ
+    rtol: 1.0e-15

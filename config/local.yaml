@@ -23,10 +23,13 @@ applications:  # one section per application in the run, keyed by adapter name
       - cece_standalone_driver
 data:
   warm_cartopy: false
+  input_search_path: []  # ASSAY_INPUT_SEARCH_PATH: dirs fetch links url-null inputs from, by basename
 baselines:
   root_dir:  # ASSAY_BASELINE_ROOT_DIR
   enabled: false  # ASSAY_ENABLE_BASELINE_COMPARISONS
   store: s3://ufs-chem/baselines  # ASSAY_BASELINE_STORE: an s3://bucket/prefix or a local directory
+outputs:
+  store: s3://ufs-chem/assay-output  # ASSAY_OUTPUT_STORE: an s3://bucket/prefix or a local directory
 harness:
   suite_config: simple-maccity-suite.yaml  # regex over *-suite.yaml names; every match runs
   output_root: ufs-chem-assay-output  # relative: under the checkout (docker: must stay there)
@@ -35,6 +38,8 @@ harness:
   pytest_args: []
   publish_baselines: false  # pytest --publish-baselines: publish passing compared combos at session end
   no_suite_update: false  # pytest --no-suite-update: publish without repointing the suite files
+  record_benchmarks: false  # pytest --record-benchmarks; off on a laptop so maccity runs leave the tracked file alone
+  upload_output: false  # pytest --upload-output: copy the whole output root to outputs.store/<run ULID> at session end
   runtime:  # ASSAY_RUNTIME; null = the platform's default (docker here)
   launcher: ''  # ASSAY_LAUNCHER; unused under docker
   env: {}

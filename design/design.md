@@ -20,7 +20,14 @@ specific configurations of an application: a suite names a base
 configuration, the inputs it reads, and how it is swept, asserted, and
 analysed. The configurations the harness carries live under
 `src/tests/config/<application>/<configuration>/`, each beside the suites
-that sweep it (`cece/maccity/`: `maccity.yaml` and its three suites). The
+that sweep it (`cece/maccity/`: `maccity.yaml` and its three suites;
+`cece/gcafs-anthro/` since 2026-10-19: the global anthropogenic use case of
+issue #33, one sweep-less suite over seven placed inputs with their Ursa
+locations, run as shipped by `config/ursa-gcafs-anthro.yaml`, Ursa only — see
+`design/feat/20261019-1447-global-anthro-use-case/20261019-1447-global-anthro-use-case.md`,
+which also brought `grid.nz`, the driver-level AMIO input knobs, stream
+`time_label`, and the full cadence set into the CECE model, source-less
+inputs, and the job geometry below). The
 earlier notion of an application's shipped "examples" — run verbatim
 through its own tooling, or wrapped as suites — is retired entirely; see
 `design/feat/20261007-1555-retire-examples/20261007-1555-retire-examples.md`.
@@ -255,7 +262,17 @@ configs always point `driver.log_file` into the combo's output directory,
 so no base config can write a log into the checkout.
 
 **Inputs (2026-10-08).** A suite declares the files its base configuration
-reads: `inputs:` is a list of `{url, public, dst, sha256}` — an
+reads: `inputs:` is a list of `{url, public, dst, sha256}` (`url: null`,
+2026-10-19: an input with no remote source yet, only ever verified —
+`sha256` required, `public` refused; 2026-10-22: absent, `fetch` symlinks
+it from the entry's `sources: {<platform>: <absolute path>}` for the
+session's platform — where the file is known to live; a missing declared
+file is a named failure, never a fallback — else from the one basename
+match under `ASSAY_INPUT_SEARCH_PATH` / `data.input_search_path`, this
+machine's directories, and
+`fetch --record-digests` writes a differing on-disk digest into the
+suite's `sha256:` line textually with a reload check, the ULID repoint's
+pattern, for the user to commit) — an
 `s3://bucket/key` object, whether the bucket allows anonymous reads
 (`--no-sign-request`; CECE's sources are all public), the destination
 relative to the checkout's data directory (the adapter's `data_dirname`),
@@ -397,12 +414,15 @@ Layout under the output root is the same either way:
 
 ```
 <output-root>/                 # default: pytest tmp dir; else /work-relative
+  benchmarks.csv               # one BenchmarkRow per executed combination (header
+                               #   only after a dry run); see Benchmarks
+  upload.yaml                  # once uploaded: OutputUploadRecord (see Output upload)
   run.yaml                     # RunManifest (incl. inputs as found, baselines as
                                #   found or synced): session ULID, application,
                                #   application_commit (the checkout's HEAD SHA; null
-                               #   only when no checkout is configured — an
-                               #   unresolvable SHA for a configured root fails the
-                               #   session at start), harness_version, harness_commit,
+                               #   when no checkout is configured, or under --dry-run
+                               #   when the configured root yields none — a real run
+                               #   fails at collection), harness_version, harness_commit,
                                #   platform, runtime, modulefile, and every resolved
                                #   suite in selection order
   combos.csv                   # effective-parameter table: run_id, combo_id,
@@ -419,8 +439,9 @@ Layout under the output root is the same either way:
     <combo_id>-stats.csv       # per-NetCDF descriptive statistics
     <combo_id>-stats-comparison.csv # comparison record: one row per file x variable
     plots-overview/            # session-end spatial plots + per-variable GIF
-      co__cece_..._010000.png  #   (suite-wide exact min/max color scale,
-      co.gif                   #    derived from that suite's stats slice)
+      co__cece_..._010000.png  #   (suite-wide color scale from that suite's stats slice:
+      co.gif                   #    log by default — exact max, floor by the decade rule,
+                               #    zeros grey — or symlog/linear per plotting.scale)
     plots-baselines/           # bias maps (realization - baseline) + GIF,
                                #   RdBu_r symmetric suite-wide scale from
                                #   that suite's comparison slice; compared combos only
@@ -447,8 +468,15 @@ default on every other platform (RDHPC machines have no docker) — pytest
 runs on a login node and each driver call is one `sbatch --wait` job
 from a rendered `<combo_id>.sbatch` (Jinja2 template) kept beside the
 combo's artifacts — directives, `CECE_MODULEFILE` load, `ASSAY_JOB_ENV`,
-and the driver behind `srun --ntasks=1` — so the harness venv never sees
-the module environment and a failed job is reproducible by hand; and
+and the driver behind `srun ${ASSAY_SRUN_ARGS}` (`--ntasks=<slurm.ntasks>`
+plus `slurm.srun_args`; `sbatch -n` renders from the same `ntasks`, and
+`slurm.extra_args` appends directives such as `--mem=0`), bracketed by
+`tic`/`toc` timestamps and a guarded `report-mem` so the `.out` carries
+wall time and memory (2026-10-19) — so the harness venv never sees
+the module environment and a failed job is reproducible by hand; the
+launch (`sbatch_args`, `srun_args`, `job_env`) is recorded in `run.yaml`
+as `launch`, null outside slurm, because the driver's rank count is a
+property of the run, not of the configuration under test; and
 `native` — the driver as a host process, `cwd` = the application checkout,
 prefixed by the `launcher` setting, for a session inside an allocation. The platform is detected from the
 hostname (`ASSAY_PLATFORM` overrides; `local` when nothing matches) and
@@ -579,7 +607,17 @@ exit is the failure condition. The environment variables mirror `setup.sh`
     `root_dir` raises `UsageError` in `pytest_collection_modifyitems` —
     collection time rather than sessionstart, so harness-only runs (which
     collect no `driver_run` tests) stay green with no environment, while
-    the failure still lands before any test executes.
+    the failure still lands before any test executes. The application
+    commit is resolved there too (2026-10-22), only when driver tests are
+    collected: a harness-only session never touches the checkout whatever
+    `CECE_ROOT_DIR` names; a real run with a configured root that yields no
+    HEAD (absent, not a git checkout) is a `UsageError`; **a dry run never
+    requires a checkout** — it reads nothing from the application, so an
+    unresolvable commit records `application_commit: null` with one
+    WARNING, which is the setup order's normal state (harness suite, dry
+    run, then clone and build). A suite whose `config_path` anchors on the
+    checkout still needs it, at suite resolution, as before. See
+    `design/feat/20261019-1447-global-anthro-use-case/`, section 9a.
 - **Test report.** A `pytest_runtest_makereport` hookwrapper collects every
   combo-parameterized test's outcome (phases combine failed > skipped >
   passed via `report.worst_result`); `pytest_sessionfinish` writes
@@ -686,7 +724,8 @@ Publishing (2026-10-08, `baselines.py`; full design in
 - **`baseline.yaml`** (`BaselineManifest`) is written into the directory
   before the sync and uploaded with it: the ULID and store, application
   and `application_commit`, suite, combination, `run_id`, harness version
-  and commit, platform and runtime, publication time (UTC) and
+  and commit, platform and runtime, the run's `launch` (2026-10-19; null
+  outside slurm), publication time (UTC) and
   `user@host`, the ULID the suite entry pinned (`superseded_ulid`), the
   combination's `combos.csv` rows, and every file with size and digest. Its
   presence in a combination directory records that the combination was
@@ -751,8 +790,12 @@ Publishing (2026-10-08, `baselines.py`; full design in
   when a sync is needed; no baseline root means nothing is written and an
   absent baseline fails naming the setting; a dry run classifies only.
   `run.yaml` records each pinned baseline's state (`local`, `synced`,
-  `would-sync`, `failed` with the reason) and `test_baseline_comparison`
-  fails on `failed` with that reason. `fetch` skips baselines when
+  `would-sync`, `failed` with the reason; `unpublished` since 2026-10-22
+  for the all-zero placeholder ULID a suite pins before its first publish
+  — never looked for, the comparison test skips, `superseded_ulid: null`
+  when it is first published, and the repoint keeps the placeholder's
+  quotes) and `test_baseline_comparison` fails on `failed` with that
+  reason. `fetch` skips baselines when
   comparisons are off (CI has no credentials for the private store).
   The states are logged once, by `ensure_baselines`, one line per
   (state, reason) naming the ULIDs in it (`3 baselines failed (A, B, C):
@@ -780,6 +823,101 @@ Publishing (2026-10-08, `baselines.py`; full design in
   the output root.
 - **CI** keeps comparisons off (no credentials for the private store);
   the CECE pin is `ufs-community/CECE` at `develop` since 2026-10-08.
+
+## Output upload
+
+(2026-10-23, `src/outputs.py`; full design in
+`design/feat/20261019-1447-global-anthro-use-case/20261023-1307-output-upload.md`.)
+A finished run's **whole output root** goes to `<output store>/<run_id>/`
+with one resumable `aws s3 sync` through the S3 wrapper (a directory store
+by copy): `ufs-chem-assay upload-output --output-root` and, as the last
+session-end step after the plots, `pytest --upload-output`
+(`harness.upload_output`, false in every template; refused at session
+start when the S3 store is unreachable, as `--publish-baselines` is; a
+dry-run session uploads nothing). `ASSAY_OUTPUT_STORE` (`outputs.store`)
+defaults to `s3://ufs-chem/assay-output`, validated like the baseline
+store. Unlike a baseline the upload is never refused and never deletes: a
+run is the same run every time, so re-running after a publish adds the
+new `baseline.yaml`. `upload.yaml` (`OutputUploadRecord`: run_id, store,
+destination, uploaded_at, uploaded_by, files, bytes) is written into the
+root before the sync and uploaded with it. `download-output --ulid --dest`
+syncs `<store>/<run_id>/` into `<dest>/<run_id>/` through a staging
+directory moved into place only when `run.yaml` arrived (an absent prefix
+syncs nothing and exits 0), never deleting local files. Both subcommands
+pass `--dry-run` to the wrapper. The live `data_integration` round trip
+uses the test prefix of the private bucket.
+
+## Benchmarks
+
+Persistent benchmarking (2026-10-23, `src/benchmarks.py`; full design in
+`design/feat/20261019-1447-global-anthro-use-case/20261023-0847-add-benchmarking.md`):
+
+- **One row per executed combination per run** — `BenchmarkRow`, a strict
+  model whose fields are the CSV columns: identity (`run_id`, `combo_id`,
+  `suite`, `combo`, `config_sha256` — the SHA-256 of the adapter's
+  `config_fingerprint`, equal across runs of the same generated
+  configuration), provenance (`application_commit`, harness version and
+  commit, platform, runtime, modulefile, the launch as `run.yaml` records
+  it), timings (`duration_s`: the harness clock around `run_driver`, queue
+  included under slurm; `wall_s`: the job's `tic`→`toc` lines — every
+  runtime writes them now, the runner around docker/native output, the
+  job template in the batch script; empty when the job was killed),
+  Slurm accounting (`queue_s`, `elapsed_s`, `max_rss_kb`, `slurm_job_id`,
+  `slurm_state` from one `sacct -P -n` query per job, retried once, on
+  platforms whose `platforms.ACCOUNTING` entry says so — Ursa; null
+  elsewhere, never a failure), outcome (`driver_result`
+  passed/failed/timeout — timeout from the harness's `TimeoutExpired` or
+  Slurm's `TIMEOUT`; `exit_code`; `nc_files`; `output_bytes`), and the
+  baseline links (`baseline_ulid` — null for the placeholder,
+  `baseline_state`, `comparison_result`; whether the combination later
+  became a baseline is the suite's `ulid:` line, not a column — a row
+  never changes once written). Dry runs produce no rows.
+- **Three files, one writer**: `<output root>/benchmarks.csv` (every row;
+  header only after a dry run) and `<combo_id>/benchmarks.csv` (that row;
+  it travels with a published baseline, so it is written before the
+  publish) — always; and the committed per-configuration
+  `src/tests/config/<application>/<configuration>/benchmarks.csv`, appended
+  at session end under `--record-benchmarks` (`harness.record_benchmarks`,
+  true in the Ursa templates so every expensive run is kept, false in
+  `local.yaml`) and by `ufs-chem-assay record-benchmarks --output-root`
+  for a finished run. `append_benchmarks` creates the file with the
+  header, refuses a foreign header, skips a present `(run_id, combo_id)`,
+  appends the rest as lines without touching existing ones, and restores
+  the original text when the reload fails — the ULID repoint's pattern;
+  the user reviews the diff and commits.
+- **The runner surfaces the job**: `run_driver` returns `DriverExecution`
+  (the Slurm job id, None elsewhere); a failed or cancelled job raises
+  `SlurmJobError`/`SlurmJobTimeout` (subclasses of the standard
+  exceptions) carrying the id, since accounting matters most then;
+  `DriverRunResult` keeps `execution`, `duration_s`, `timeout_s`.
+- **Session-end order**: report → benchmarks (per-run and per-combination
+  files, and the committed file under `--record-benchmarks`) → publish →
+  stats → plots; the benchmark step is wrapped so it never fails the
+  session and names the post-hoc command on failure.
+
+## Color scales
+
+(2026-10-23; full design in
+`design/feat/20261019-1447-global-anthro-use-case/20261023-1444-better-scales.md`.)
+Overview maps use a **logarithmic scale by default** (`Plotting.scale:
+log | symlog | linear`): the fields are non-negative and span many decades
+(the maccity CO flux: 47 % zeros, positives over ten decades), and the
+linear default inherited from the viewer showed a blank globe. The maximum
+stays the exact suite-wide maximum (the standing rule: never percentiles);
+the floor is a rule — `max / 10**decades`, default 5 (chosen by rendering
+the maccity field at 4–7 decades), never below the suite-wide smallest
+positive value, which is the new `min_positive` statistic — or an explicit
+`plotting.floor`. Under `log` zeros and negatives are masked and drawn
+light grey (`ZERO_COLOR`), named in the colorbar label; under `symlog` they
+sit in the linear core; `linear` is byte-identical to the old rendering. A
+variable with no positive value falls back to linear with a warning; an
+explicit floor at or above the maximum is refused in favour of the decade
+rule. `VariableScale` carries `scale` and `floor`; `make_norm` turns it into
+`LogNorm`/`SymLogNorm` (a norm and `vmin`/`vmax` are never both passed);
+the title carries `[log]`/`[symlog]`. Bias maps stay linear and symmetric
+at the exact max |diff| by default, with `bias_scale: symlog` and
+`bias_decades` offered. The session passes each suite's `plotting` to
+`render_all_plots`/`render_all_bias_plots`.
 
 ## Type checking
 
@@ -928,6 +1066,8 @@ All code under `src/`; the project is `uv`-managed with its own
                           #   launcher / sbatch), check_output, .out writing
     s3_sync.py            # stand-alone `aws s3 sync` wrapper; credentials are
                           #   the CLI's own; one harness import (the logger)
+    benchmarks.py         # BenchmarkRow, tic/toc and sacct parsing, the three benchmarks.csv writers
+    outputs.py            # upload-output / download-output: a run's root <-> <store>/<run_id>/
     settings.py           # harness-wide pydantic-settings (ASSAY_*, CECE_* fallback)
     tests/
       config/             # <application>/<configuration>/: the configuration's files
@@ -937,6 +1077,10 @@ All code under `src/`; the project is `uv`-managed with its own
         cece/maccity/exhaustive-maccity-asserted-suite.yaml
         cece/maccity/exhaustive-maccity-run-only-suite.yaml  # every enum value via ".*"
                                           #   regex sweeps; on-demand, run-only
+        cece/gcafs-anthro/gcafs-anthro.yaml           # the global anthropogenic use case (issue #33)
+        cece/gcafs-anthro/gcafs-anthro-suite.yaml     # sweep-less; seven placed inputs; Ursa only
+        <application>/<configuration>/benchmarks.csv  # the committed benchmark rows (append-only,
+                                          #   written by --record-benchmarks / record-benchmarks)
       ufs_chem_assay/     # the harness's own tests: mocked process call, no docker
         applications/cece/  # the CECE adapter's tests (test_cece_*.py)
         stubs.py          # an inert second adapter for several-application tests

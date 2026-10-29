@@ -62,6 +62,7 @@ def _stats_rows() -> list[VariableStats]:
             mean=0.5,
             std=0.1,
             min=0.0,
+            min_positive=None,
             max=1.0,
             median=0.5,
         )
@@ -99,11 +100,38 @@ def test_compute_file_stats_matches_numpy(
     assert stats.mean == pytest.approx(np.nanmean(data))
     assert stats.std == pytest.approx(np.nanstd(data))
     assert stats.min == pytest.approx(np.nanmin(data))
+    positives = data[data > 0]
+    assert stats.min_positive == pytest.approx(positives.min())
     assert stats.max == pytest.approx(np.nanmax(data))
     assert stats.median == pytest.approx(np.nanmedian(data))
 
 
 @pytest.mark.usefixtures("dask_client")
+def _field_nc(path: Path, values: np.ndarray) -> None:
+    xr.Dataset(
+        {"co": (("time", "lat", "lon"), values)},
+        coords={
+            "time": pd.date_range("2010-01-01", periods=1, freq="h"),
+            "lat": np.linspace(-90.0, 90.0, values.shape[1]),
+            "lon": np.linspace(-180.0, 180.0, values.shape[2]),
+        },
+    ).to_netcdf(path, engine="netcdf4")
+
+
+def test_compute_file_stats_min_positive_is_null_for_an_all_zero_field(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "zeros.nc"
+    _field_nc(path, np.zeros((1, 3, 4)))
+    (stats,) = compute_file_stats(path, "c", "01JCOMBO", _RUN)
+    assert stats.min == 0.0
+    assert stats.min_positive is None
+    # Zeros beside positives: the smallest positive value, not zero.
+    _field_nc(path, np.array([[[0.0, 2.0, 0.5, 0.0]] * 3]))
+    (stats,) = compute_file_stats(path, "c", "01JCOMBO", _RUN)
+    assert stats.min_positive == 0.5
+
+
 def test_compute_file_stats_null_time_without_time_coordinate(tmp_path: Path) -> None:
     dataset = xr.Dataset({"co": (("lat", "lon"), np.ones((2, 3)))})
     path = tmp_path / "timeless.nc"

@@ -2,6 +2,7 @@
 per application. Golden-line assertions — the runbook (docs/ursa-runbook.md)
 and these scripts must stay recognisably the same commands."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -190,9 +191,11 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "export ASSAY_PLATFORM=ursa",
         "export ASSAY_RUNTIME=slurm",
         "export ASSAY_SBATCH_ARGS='-A epic -q debug -p u1-compute -N 1 -n 1 -c 8'",
+        "export ASSAY_SRUN_ARGS=--ntasks=1",  # the srun inside each job
         "export ASSAY_JOB_ENV='I_MPI_FABRICS=shm FI_PROVIDER=tcp'",  # the driver jobs' env
         "export ASSAY_ENABLE_BASELINE_COMPARISONS=false",
         "export ASSAY_BASELINE_STORE=s3://ufs-chem/baselines",
+        "export ASSAY_OUTPUT_STORE=s3://ufs-chem/assay-output",
         "export ASSAY_RUN_TIMEOUT_S=300",
         "export ASSAY_DASK_NWORKERS=2",
         f"export UV_CACHE_DIR={ursa.root_dir}/uv-cache",
@@ -212,6 +215,7 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "UV_OFFLINE",
         "ASSAY_LAUNCHER",
         "ASSAY_LOG_LEVEL",  # null in the template: not exported
+        "ASSAY_INPUT_SEARCH_PATH",  # empty in the template: not exported
         "CECE_DOCKER_IMAGE",  # null in the template: the adapter's default
         "CECE_DRIVER_PATH",
         "SLURM_CPUS_PER_TASK",
@@ -221,8 +225,19 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "--run-examples",
         "--publish-baselines",
         "--no-suite-update",
+        "--upload-output",  # off by default everywhere
     ):
         assert absent not in text, absent
+    assert "--record-benchmarks" in text  # the Ursa template keeps every run
+
+
+def test_harness_stage_renders_the_upload_flag_when_asked(tmp_path: Path) -> None:
+    config = _ursa(
+        tmp_path, {"harness.upload_output": True, "outputs.store": "/scratch/outputs"}
+    )
+    text = render_stage(Stage.HARNESS, config, _CECE).text
+    assert "--upload-output" in text
+    assert "export ASSAY_OUTPUT_STORE=/scratch/outputs" in text
 
 
 def test_harness_stage_exports_are_field_driven(tmp_path: Path) -> None:
@@ -268,6 +283,7 @@ def test_native_harness_stage_keeps_the_launcher(tmp_path: Path) -> None:
 
 
 def test_local_harness_stage_has_no_slurm_or_offline_bits(local: RunConfig) -> None:
+    assert "--record-benchmarks" not in render_stage(Stage.HARNESS, local, _CECE).text
     text = render_stage(Stage.HARNESS, local, _CECE).text
     assert "export ASSAY_PLATFORM=local" in text
     assert "export ASSAY_RUNTIME=docker" in text
@@ -282,6 +298,70 @@ def test_platform_override_changes_runtime_exports() -> None:
     text = render_stage(Stage.HARNESS, config, _CECE).text
     assert "export ASSAY_PLATFORM=local" in text
     assert "export ASSAY_RUNTIME=docker" in text
+
+
+def test_data_and_harness_stages_export_the_input_search_path_when_set(
+    tmp_path: Path,
+) -> None:
+    # Both shared stages see it: the data stage's fetch links source-less
+    # inputs from it; the harness stage inherits the same exports.
+    dirs = ["/scratch/x/INPUT", "/scratch/y/input"]
+    config = _ursa(tmp_path, {"data.input_search_path": dirs})
+    for stage in (Stage.DATA, Stage.HARNESS):
+        text = render_stage(stage, config, _CECE).text
+        assert f"export ASSAY_INPUT_SEARCH_PATH={os.pathsep.join(dirs)}" in text
+
+
+def test_gcafs_anthro_template_renders_the_use_case_as_shipped(tmp_path: Path) -> None:
+    config = load_run_config(
+        run_config_file(tmp_path, "ursa-gcafs-anthro.yaml", root_dir=_URSA_ROOT)
+    )
+    text = render_stage(Stage.HARNESS, config, _CECE).text
+    for line in (
+        "export ASSAY_SBATCH_ARGS='-A epic -q debug -p u1-compute -N 1 -n 1 -c 1 --mem=0'",
+        "export ASSAY_SRUN_ARGS='--ntasks=1 --cpu-bind=cores'",
+        "export ASSAY_RUN_TIMEOUT_S=28800",
+        "export ASSAY_SLURM_QUEUE_WAIT_S=3600",
+        "--suite-config=gcafs-anthro-suite.yaml",
+        "--record-benchmarks",
+    ):
+        assert line in text, line
+    job_env = next(
+        l for l in text.splitlines() if l.startswith("export ASSAY_JOB_ENV=")
+    )
+    for pair in (
+        "I_MPI_FABRICS=shm",
+        "FI_PROVIDER=tcp",
+        "OMP_NUM_THREADS=1",
+        "OMP_PROC_BIND=spread",
+        "OMP_PLACES=threads",
+        "KOKKOS_NUM_THREADS=1",
+        "MKL_NUM_THREADS=1",
+        "OPENBLAS_NUM_THREADS=1",
+        "OPENBLAS_DEFAULT_NUM_THREADS=1",
+    ):
+        assert pair in job_env, pair
+    assert "ASSAY_INPUT_SEARCH_PATH" not in text
+
+
+def test_harness_stage_exports_the_srun_geometry_under_slurm_only(
+    tmp_path: Path, local: RunConfig
+) -> None:
+    geometry = _ursa(
+        tmp_path,
+        {
+            "slurm.ntasks": 4,
+            "slurm.srun_args": "--cpu-bind=cores",
+            "slurm.extra_args": "--mem=0",
+        },
+    )
+    text = render_stage(Stage.HARNESS, geometry, _CECE).text
+    assert "export ASSAY_SRUN_ARGS='--ntasks=4 --cpu-bind=cores'" in text
+    assert (
+        "export ASSAY_SBATCH_ARGS='-A epic -q debug -p u1-compute -N 1 -n 4 -c 8 --mem=0'"
+        in text
+    )
+    assert "ASSAY_SRUN_ARGS" not in render_stage(Stage.HARNESS, local, _CECE).text
 
 
 def test_harness_stage_exports_the_queue_allowance_under_slurm_only(

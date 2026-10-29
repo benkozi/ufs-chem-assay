@@ -1,7 +1,9 @@
+import hashlib
 import shutil
 import subprocess
 import time
 from collections.abc import Generator, Iterator
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
@@ -12,6 +14,16 @@ from ulid import ULID
 from analysis import RunContext, concatenate_stats_csvs
 from applications.base import Application, ApplicationSettings, DriverConfig
 from baselines import StagedBaseline, SuiteInput, ensure_baselines, publish_session
+from baselines.plan import read_run
+from benchmarks import (
+    BENCHMARK_FILENAME,
+    BenchmarkRow,
+    SlurmAccounting,
+    append_benchmarks,
+    collect_row,
+    slurm_accounting,
+    write_benchmarks_csv,
+)
 from combos import Combo, ParameterRow, enumerate_combos, write_combos_csv
 from comparison import concatenate_comparison_csvs, resolve_baseline_comparisons
 from identity import harness_commit, harness_version
@@ -20,15 +32,17 @@ from models.suite_config import (
     Analysis,
     Assertions,
     BaselineComparison,
+    LaunchRecord,
     RecordedInput,
     RunManifest,
     SuiteConfig,
 )
-from platforms import Runtime
+from outputs import upload_output
+from platforms import ACCOUNTING, Accounting, Runtime
 from plotting import render_all_bias_plots, render_all_plots
 from report import TestReportRow, worst_result, write_test_report_csv
 from resolution import resolve_output_roots
-from runner import DriverRunResult, run_driver, write_job_script
+from runner import DriverExecution, DriverRunResult, run_driver, write_job_script
 from s3_sync import check_reachable
 from selection import resolve_suites
 from settings import Settings
@@ -101,6 +115,8 @@ _EXPLICIT_ROOTS = pytest.StashKey[ComboRoots | None]()
 _REALIZED_ROOTS = pytest.StashKey[ComboRoots]()
 _REPORT_ROWS = pytest.StashKey[dict[str, TestReportRow]]()
 _BASELINE_STATES = pytest.StashKey[dict[str, StagedBaseline]]()  # by ULID
+_DRIVER_RESULTS = pytest.StashKey[dict[str, DriverRunResult]]()  # by combo_id
+_ACCOUNTING = pytest.StashKey[dict[str, SlurmAccounting]]()  # by combo_id
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -126,6 +142,26 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "built-in config directory; every match runs — several matches "
             "run as one multi-suite session. Default: the application's "
             "default suite (simple-maccity-suite.yaml for cece)."
+        ),
+    )
+    group.addoption(
+        "--record-benchmarks",
+        action="store_true",
+        help=(
+            "At session end, append this run's benchmark rows (one per executed "
+            "combination; always written to <output root>/benchmarks.csv) to each "
+            "selected suite's committed configuration file, "
+            "src/tests/config/<application>/<configuration>/benchmarks.csv — "
+            "review the diff and commit."
+        ),
+    )
+    group.addoption(
+        "--upload-output",
+        action="store_true",
+        help=(
+            "At session end, after every other artifact, copy the whole output "
+            "root to ASSAY_OUTPUT_STORE under the run ULID (off by default; a "
+            "dry-run session uploads nothing)."
         ),
     )
     group.addoption(
@@ -241,6 +277,20 @@ def pytest_sessionstart(session: pytest.Session) -> None:
                 "publish-baselines --output-root=<this run's output root>"
             ) from exc
 
+    if config.getoption("--upload-output") and settings.output_store.startswith(
+        "s3://"
+    ):
+        # Fail fast, as for --publish-baselines: a node without network must
+        # not run the whole suite only to fail the upload at the end.
+        try:
+            check_reachable(settings.output_store)
+        except ConnectionError as exc:
+            raise pytest.UsageError(
+                f"--upload-output: {exc}; run without the flag and upload "
+                "afterwards from a node with network: ufs-chem-assay "
+                "upload-output --output-root=<this run's output root>"
+            ) from exc
+
     # Selection, application, suite loading: the same sequence the CLI's
     # fetch runs (selection.resolve_suites); every failure is a usage error.
     try:
@@ -249,13 +299,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         raise pytest.UsageError(str(exc)) from exc
     app, app_settings = resolved.application, resolved.app_settings
 
-    # Sessions always run against a checked-out application when a root is
-    # configured: an unresolvable commit SHA is a fatal misconfiguration,
-    # surfaced here before any work. No configured root records null.
-    try:
-        config.stash[_APPLICATION_COMMIT] = app_settings.commit_sha()
-    except ValueError as exc:
-        raise pytest.UsageError(str(exc)) from exc
+    # The application commit is resolved at collection time, only when the
+    # session collects driver tests (pytest_collection_modifyitems): a
+    # harness-only session never touches the checkout, whatever the
+    # environment names. Null until then.
+    config.stash[_APPLICATION_COMMIT] = None
     config.stash[_HARNESS_VERSION] = harness_version()
     config.stash[_HARNESS_COMMIT] = harness_commit()
 
@@ -351,24 +399,43 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     # test-report.csv rows, keyed by nodeid in execution order; filled by the
     # pytest_runtest_makereport wrapper below.
     config.stash[_REPORT_ROWS] = {}
+    # Every executed combination's outcome and, where the platform has
+    # accounting, its job's numbers — the benchmark rows' raw material.
+    config.stash[_DRIVER_RESULTS] = {}
+    config.stash[_ACCOUNTING] = {}
 
 
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """Fail fast when driver execution is coming but no application root is
-    configured. Collection time (not sessionstart) so harness-only runs —
-    which collect no driver-executing tests — need no environment; still
+    """Resolve the application commit and fail fast when driver execution is
+    coming but no application root is configured. Collection time (not
+    sessionstart) so harness-only runs — which collect no driver-executing
+    tests — never touch the checkout, whatever CECE_ROOT_DIR names; still
     before any test executes."""
-    if config.getoption("--dry-run"):
-        return
-    needs_root = any(
+    needs_driver = any(
         "driver_run" in getattr(item, "fixturenames", ()) for item in items
     )
-    if not needs_root:
+    if not needs_driver:
         return
     app = config.stash[_APPLICATION]
     app_settings = config.stash[_APP_SETTINGS]
+    # A real run always runs against a checked-out application when a root
+    # is configured: an unresolvable commit SHA is a fatal misconfiguration.
+    # A dry run reads nothing from the application (the root is only the
+    # job scripts' --chdir), so there it records null and says why — the
+    # setup order is harness suite, dry run, then clone and build. No
+    # configured root records null either way.
+    dry_run = bool(config.getoption("--dry-run"))
+    try:
+        config.stash[_APPLICATION_COMMIT] = app_settings.commit_sha()
+    except ValueError as exc:
+        if not dry_run:
+            raise pytest.UsageError(str(exc)) from exc
+        logger.warning("%s; --dry-run records application_commit: null", exc)
+        config.stash[_APPLICATION_COMMIT] = None
+    if dry_run:
+        return
     if app_settings.root_dir is None:
         raise pytest.UsageError(
             f"driver execution requires the {app.name} checkout root; "
@@ -448,6 +515,28 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
             list(report_rows.values()), roots.host / "test-report.csv"
         )
 
+    # Benchmarks: the per-run file (header only after a dry run), each
+    # executed combination's own file — before publishing, so a published
+    # baseline carries its row — and, with --record-benchmarks, the rows
+    # appended to each suite's committed configuration file for the user to
+    # commit. Rows never change once written. Never raises into pytest.
+    try:
+        benchmark_rows = _benchmark_rows(config, roots, contexts, report_rows)
+        write_benchmarks_csv(
+            list(benchmark_rows.values()), roots.host / BENCHMARK_FILENAME
+        )
+        for combo_id, row in benchmark_rows.items():
+            write_benchmarks_csv([row], roots.host / combo_id / BENCHMARK_FILENAME)
+        if benchmark_rows and config.getoption("--record-benchmarks"):
+            _record_benchmarks(contexts, benchmark_rows)
+    except Exception as exc:  # the hook must not fail the session
+        logger.error(
+            "benchmarks failed: %s; record the run later: ufs-chem-assay "
+            "record-benchmarks --output-root=%s",
+            exc,
+            roots.host,
+        )
+
     # Publication right after the report is on disk and before the plots (a
     # plotting failure must not cost a publish). Never raises into pytest:
     # the session's exit status is the tests' verdict.
@@ -496,11 +585,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
                 continue
             suite_stats = stats[stats["suite"] == context.suite.name]
             if not suite_stats.empty:
-                render_all_plots(
-                    roots.host,
-                    suite_stats,
-                    gif_enabled=context.suite.plotting.gif_enabled,
-                )
+                render_all_plots(roots.host, suite_stats, context.suite.plotting)
 
     comparison_csvs = sorted(roots.host.glob("*/*-stats-comparison.csv"))
     if comparison_csvs:
@@ -523,7 +608,107 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
                 comparison_stats["suite"] == context.suite.name
             ]
             if pairs and not suite_comparisons.empty:
-                render_all_bias_plots(pairs, suite_comparisons)
+                render_all_bias_plots(pairs, suite_comparisons, context.suite.plotting)
+
+    # Last: the whole root, as it now stands, to the output store under the
+    # run ULID. A dry-run session has nothing worth keeping. Never raises
+    # into pytest; the post-hoc command is named on failure.
+    if config.getoption("--upload-output"):
+        _upload_output(config, roots)
+
+
+def _upload_output(config: pytest.Config, roots: ComboRoots) -> None:
+    settings = config.stash[_SETTINGS]
+    if config.getoption("--dry-run"):
+        logger.info("dry run: output not uploaded (nothing executed)")
+        return
+    try:
+        record = upload_output(roots.host, settings.output_store)
+    except Exception as exc:  # the hook must not fail the session
+        logger.error(
+            "uploading output failed: %s; upload it later: ufs-chem-assay "
+            "upload-output --output-root=%s",
+            exc,
+            roots.host,
+        )
+        return
+    logger.info(
+        "uploaded run %s -> %s (%s file(s), %s bytes)",
+        record.run_id,
+        record.destination,
+        record.files,
+        record.bytes,
+    )
+
+
+def _benchmark_rows(
+    config: pytest.Config,
+    roots: ComboRoots,
+    contexts: list[SuiteContext],
+    report_rows: dict[str, TestReportRow],
+) -> dict[str, BenchmarkRow]:
+    """One row per executed combination, keyed by combo_id (empty after a
+    dry run): the run manifest, the driver call's outcome and clock, the
+    tests' verdicts, the pinned baseline and its state, the accounting."""
+    results = config.stash.get(_DRIVER_RESULTS, {})
+    if not results:
+        return {}
+    run = read_run(roots.host)
+    app = config.stash[_APPLICATION]
+    states = config.stash.get(_BASELINE_STATES, {})
+    accounting = config.stash.get(_ACCOUNTING, {})
+    recorded_at = datetime.now(UTC)
+    rows: dict[str, BenchmarkRow] = {}
+    for context in contexts:
+        for combo in context.combos:
+            result = results.get(combo.combo_id)
+            if result is None:
+                continue
+            fingerprint = app.config_fingerprint(
+                app.generated_config_path(result.combo_dir, combo.combo_id)
+            )
+            entry = context.baselines.get(combo.name)
+            baseline: tuple[str | None, str | None] | None = None
+            if entry is not None:
+                staged = states.get(entry.ulid)
+                state = staged.state if staged is not None else None
+                baseline = (None if state == "unpublished" else entry.ulid, state)
+            rows[combo.combo_id] = collect_row(
+                recorded_at=recorded_at,
+                run=run,
+                suite=context.suite.name,
+                combo=combo.name,
+                combo_id=combo.combo_id,
+                config_sha256=hashlib.sha256(fingerprint.encode()).hexdigest(),
+                timeout_s=result.timeout_s,
+                duration_s=result.duration_s,
+                error=result.error,
+                combo_dir=result.combo_dir,
+                accounting=accounting.get(combo.combo_id),
+                test_results={
+                    row.pytest_name.split("[", 1)[0]: row.result
+                    for row in report_rows.values()
+                    if row.combo_id == combo.combo_id
+                },
+                baseline=baseline,
+            )
+    return rows
+
+
+def _record_benchmarks(
+    contexts: list[SuiteContext], rows: dict[str, BenchmarkRow]
+) -> None:
+    """Append each suite's rows to its committed configuration file."""
+    for context in contexts:
+        mine = [
+            rows[combo.combo_id] for combo in context.combos if combo.combo_id in rows
+        ]
+        if mine:
+            append_benchmarks(context.path.parent / BENCHMARK_FILENAME, mine)
+            logger.info(
+                "%s: review the diff and commit it",
+                context.path.parent / BENCHMARK_FILENAME,
+            )
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -701,6 +886,15 @@ def combo_roots(
         platform=settings.platform,
         runtime=settings.runtime,
         modulefile=request.config.stash[_APP_SETTINGS].modulefile,
+        launch=(
+            LaunchRecord(
+                sbatch_args=settings.sbatch_args,
+                srun_args=settings.srun_args,
+                job_env=settings.job_env_pairs,
+            )
+            if settings.runtime is Runtime.SLURM
+            else None
+        ),
         suites=[context.suite for context in request.config.stash[_SUITE_CONTEXTS]],
         inputs=inputs,
         baselines=[
@@ -800,8 +994,9 @@ def driver_run(
     logger.info("running combo %s (timeout=%ss)", combo.name, run_timeout_s)
     start = time.monotonic()
     error: Exception | None = None
+    execution = DriverExecution(job_id=None)
     try:
-        run_driver(
+        execution = run_driver(
             settings,
             application,
             app_settings,
@@ -823,10 +1018,22 @@ def driver_run(
             type(error).__name__,
         )
 
-    return DriverRunResult(
+    # A failed or cancelled Slurm job still has an id (the runner's exceptions
+    # carry it), and that is when its accounting matters most.
+    job_id = getattr(error, "job_id", None) or execution.job_id
+    result = DriverRunResult(
         combo=combo,
         combo_dir=generated.host_dir,
         out_path=out_path,
         config=generated.config,
         error=error,
+        execution=DriverExecution(job_id=job_id),
+        duration_s=duration,
+        timeout_s=run_timeout_s,
     )
+    request.config.stash[_DRIVER_RESULTS][combo.combo_id] = result
+    if job_id and ACCOUNTING.get(settings.platform) is Accounting.SACCT:
+        accounting = slurm_accounting(job_id)
+        if accounting is not None:
+            request.config.stash[_ACCOUNTING][combo.combo_id] = accounting
+    return result

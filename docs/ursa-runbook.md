@@ -3,7 +3,9 @@
 Manual steps to build the target driver (CECE's `cece_standalone_driver`,
 the application this runbook is written for) against the application's
 own Ursa modulefiles and run `simple-maccity-suite.yaml` through the
-harness from a login node, one Slurm job per driver call.
+harness from a login node, one Slurm job per driver call. The
+gcafs-anthro configuration has its own runbook on top of this one:
+[gcafs-anthro-runbook.md](gcafs-anthro-runbook.md).
 `ufs-chem-assay run --config-file=config/ursa.yaml` automates the same
 sequence (each stage renders to a script under `<root_dir>/scripts/`, so
 the two are the same commands).
@@ -79,6 +81,12 @@ UV_PYTHON=3.13 uv sync --frozen        # downloads CPython 3.13 + wheels
 uv run pytest src/tests/ufs_chem_assay # harness suite: hermetic, login-node safe
 uv run pytest src/tests/test_driver_combos.py --dry-run   # no CECE needed
 ```
+
+Both commands run before CECE exists, and neither needs a checkout: the
+harness suite never looks at one, and a dry run records
+`application_commit: null` (with a warning when `CECE_ROOT_DIR` is already
+exported but not yet cloned) — only a real run requires the configured
+root to be a git checkout.
 
 Python 3.13 rather than 3.14: every dependency has Linux wheels for
 3.13 (cartopy included), so nothing compiles during the sync.
@@ -156,10 +164,13 @@ The dry run renders every stage to `$ROOT/scripts/<NN>-<stage>-<application>.sh`
 `05-harness-cece.sh` before running it. It runs pytest
 **on the login node**, and pytest submits **one Slurm job per driver
 call**: each combo gets a rendered `<combo_id>.sbatch` beside its
-`.yaml` and `.out` under the output root, with the `#SBATCH` directives,
-the module load, and the `srun --ntasks=1` launch spelled out. The job's
-time limit is the suite's `timeout_s` rounded up to whole minutes; queue
-time does not count.
+`.yaml` and `.out` under the output root, with the `#SBATCH` directives
+(`-N 1 -n <slurm.ntasks> -c <slurm.cpus>` plus `slurm.extra_args`), the
+module load, and the `srun` launch (`--ntasks=<slurm.ntasks>` plus
+`slurm.srun_args`) spelled out, bracketed by `tic`/`toc` timestamps and
+followed by `report-mem`, so the `.out` records the job's wall time and
+memory. The job's time limit is the suite's `timeout_s` rounded up to
+whole minutes; queue time does not count.
 
 Two environments, kept apart: the harness venv must never see the
 modulefile (spack-stack sets `PYTHONPATH` to `python3.11` packages that
@@ -183,7 +194,8 @@ runs. In another window, `squeue -u $USER` shows the per-combo jobs
 (`ufs-chem-assay-<combo_id>`) come and go. Results land in
 `$ROOT/CECE/ufs-chem-assay-output/`: `run.yaml` (with `application:
 cece`, `application_commit`, the harness's own `harness_version` and
-`harness_commit`, `platform: ursa`, `runtime: slurm`, `modulefile`),
+`harness_commit`, `platform: ursa`, `runtime: slurm`, `modulefile`,
+`launch`: the directives, srun options and job environment),
 `combos.csv`,
 `test-report.csv`, and per combo the generated config, the job script,
 the job's `.out`, `cece.log`, NetCDF, stats, and plots. The login node
@@ -226,6 +238,35 @@ start: run without the flag, then publish the output root from a login
 or data-transfer node as above. `--store=/path/to/dir` (or `baselines.store`)
 publishes into a local directory instead of the bucket — no credentials,
 but only reachable on this machine.
+
+**Benchmarks.** The session appended one row per combination to
+`src/tests/config/cece/maccity/benchmarks.csv` in your harness checkout
+(`config/ursa.yaml` sets `harness.record_benchmarks: true`): timings, Slurm's
+elapsed, queue wait and peak memory (`sacct`), the verdicts, and the
+baseline links. Review and commit it with the repoint. A row never changes
+once written; for a run that was not recorded:
+
+```bash
+cd $ROOT/ufs-chem-assay
+uv run --no-sync ufs-chem-assay record-benchmarks --output-root=$ROOT/CECE/ufs-chem-assay-output
+```
+
+**Uploading a run.** To keep or share the whole output root (every
+combination's NetCDF, `.out`, `cece.log`, plots, job script), copy it to
+`s3://ufs-chem/assay-output/<run ULID>/` from the login node — resumable,
+re-runnable after a publish, never deleting:
+
+```bash
+cd $ROOT/ufs-chem-assay
+AWS_PROFILE=<profile> uv run --no-sync ufs-chem-assay upload-output --output-root=$ROOT/CECE/ufs-chem-assay-output --dry-run
+AWS_PROFILE=<profile> uv run --no-sync ufs-chem-assay upload-output --output-root=$ROOT/CECE/ufs-chem-assay-output
+```
+
+`harness.upload_output: true` in the run config does it at the end of the
+harness stage instead (off in every template; the login node has network).
+On any machine with the bucket credentials, `download-output --ulid <run
+ULID> --dest <dir>` brings the root back to `<dir>/<run ULID>/`; the ULID
+is `run_id` in `run.yaml` and the output root's name in the harness log.
 
 The `native` runtime (the driver as a direct host process) is not a
 supported path on Ursa: the harness venv and the driver need conflicting

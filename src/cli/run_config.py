@@ -23,7 +23,7 @@ from cli.override import apply_overrides
 from identity import HARNESS_ROOT
 from models.base import StrictModel
 from platforms import Platform, Runtime, default_runtime, detect_platform
-from settings import DEFAULT_BASELINE_STORE
+from settings import DEFAULT_BASELINE_STORE, DEFAULT_OUTPUT_STORE
 
 __all__ = ["HARNESS_ROOT", "ResolveApplication", "RunConfig"]
 
@@ -38,6 +38,14 @@ class DataSection(StrictModel):
     warm_cartopy: bool = Field(
         default=True,
         description="Fetch Natural Earth coastlines into cartopy's cache (login node)",
+    )
+    input_search_path: list[Path] = Field(
+        default_factory=list,
+        description=(
+            "ASSAY_INPUT_SEARCH_PATH: directories fetch searches recursively, by "
+            "basename, for source-less inputs (url null) to link into the data "
+            "directory; per-machine (this run's), never a suite's"
+        ),
     )
 
 
@@ -64,6 +72,17 @@ class BaselinesSection(StrictModel):
         default=None,
         ge=0,
         description="ASSAY_BASELINE_RTOL: relative tolerance (x |baseline|) over every entry; null = the entries' own",
+    )
+
+
+class OutputsSection(StrictModel):
+    store: str = Field(
+        default=DEFAULT_OUTPUT_STORE,
+        description=(
+            "ASSAY_OUTPUT_STORE: where upload-output (and --upload-output) copies a "
+            "run's whole output root as <store>/<run_id>/: an s3://bucket/prefix or "
+            "a local directory"
+        ),
     )
 
 
@@ -115,6 +134,22 @@ class HarnessSection(StrictModel):
     no_suite_update: bool = Field(
         default=False,
         description="Pass --no-suite-update (publish, but leave the suite files alone)",
+    )
+    record_benchmarks: bool = Field(
+        default=False,
+        description=(
+            "Pass --record-benchmarks: at session end, append the run's benchmark "
+            "rows to each suite's committed configuration benchmarks.csv (the "
+            "per-run <output root>/benchmarks.csv is always written)"
+        ),
+    )
+    upload_output: bool = Field(
+        default=False,
+        description=(
+            "Pass --upload-output: at session end, after every other artifact, "
+            "upload the whole output root to outputs.store under the run ULID "
+            "(off by default; needs network where the session runs)"
+        ),
     )
     runtime: Runtime | None = Field(
         default=None,
@@ -174,7 +209,27 @@ class SlurmSection(StrictModel):
     )
     qos: str = Field(default="batch", description="sbatch -q")
     partition: str = Field(default="u1-compute", description="sbatch -p")
-    cpus: int = Field(default=8, gt=0, description="sbatch -c for each driver job")
+    ntasks: int = Field(
+        default=1,
+        gt=0,
+        description=(
+            "sbatch -n and srun --ntasks: MPI tasks per driver job (the driver "
+            "decomposes latitude bands across them)"
+        ),
+    )
+    cpus: int = Field(
+        default=8, gt=0, description="sbatch -c for each driver job (cores per task)"
+    )
+    srun_args: str = Field(
+        default="",
+        description="Extra srun options for the driver launch, e.g. --cpu-bind=cores",
+    )
+    extra_args: str = Field(
+        default="",
+        description=(
+            "Extra sbatch directives appended verbatim, e.g. --mem=0 or --exclusive"
+        ),
+    )
     queue_wait_s: int = Field(
         default=3600,
         gt=0,
@@ -188,8 +243,19 @@ class SlurmSection(StrictModel):
 
     @property
     def sbatch_args(self) -> str:
-        """ASSAY_SBATCH_ARGS: one node, one task, the configured cpus."""
-        return f"-A {self.account} -q {self.qos} -p {self.partition} -N 1 -n 1 -c {self.cpus}"
+        """ASSAY_SBATCH_ARGS: one node, the configured tasks and cpus per
+        task, then the extra directives verbatim."""
+        base = (
+            f"-A {self.account} -q {self.qos} -p {self.partition} "
+            f"-N 1 -n {self.ntasks} -c {self.cpus}"
+        )
+        return f"{base} {self.extra_args}".strip()
+
+    @property
+    def srun_args_value(self) -> str:
+        """ASSAY_SRUN_ARGS: the task count (always, so sbatch -n and srun
+        --ntasks agree) then the extra srun options."""
+        return f"--ntasks={self.ntasks} {self.srun_args}".strip()
 
 
 class UvSection(StrictModel):
@@ -226,6 +292,7 @@ class RunConfig(StrictModel):
     )
     data: DataSection = Field(default_factory=DataSection)
     baselines: BaselinesSection = Field(default_factory=BaselinesSection)
+    outputs: OutputsSection = Field(default_factory=OutputsSection)
     harness: HarnessSection = Field(default_factory=HarnessSection)
     slurm: SlurmSection | None = Field(
         default=None,

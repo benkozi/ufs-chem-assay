@@ -10,11 +10,12 @@ from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _RUNBOOK = _REPO_ROOT / "docs" / "ursa-runbook.md"
+_GCAFS_RUNBOOK = _REPO_ROOT / "docs" / "gcafs-anthro-runbook.md"
 _README = _REPO_ROOT / "README.md"
 
 
 def _user_facing_files() -> list[Path]:
-    files = [_RUNBOOK]
+    files = [_RUNBOOK, _GCAFS_RUNBOOK]
     files += sorted((_REPO_ROOT / "config").glob("*.yaml"))
     return files
 
@@ -23,12 +24,13 @@ def test_templates_live_in_config() -> None:
     assert TEMPLATES_DIR == _REPO_ROOT / "config"
     assert sorted(p.name for p in TEMPLATES_DIR.glob("*.yaml")) == [
         "local.yaml",
+        "ursa-gcafs-anthro.yaml",
         "ursa.yaml",
     ]
     assert not (_REPO_ROOT / "scripts").exists()  # nothing hand-written ships there
 
 
-@pytest.mark.parametrize("name", ["local.yaml", "ursa.yaml"])
+@pytest.mark.parametrize("name", ["local.yaml", "ursa.yaml", "ursa-gcafs-anthro.yaml"])
 def test_templates_carry_the_applications_map(name: str) -> None:
     raw = yaml.safe_load((TEMPLATES_DIR / name).read_text())
     assert list(raw["applications"]) == ["cece"]
@@ -45,9 +47,44 @@ def test_nothing_user_specific(path: Path) -> None:
         assert needle not in text, f"{path.name} contains {needle!r}"
 
 
-def test_runbook_never_mentions_the_design() -> None:
-    assert "design/" not in _RUNBOOK.read_text()
-    assert "design doc" not in _RUNBOOK.read_text().lower()
+@pytest.mark.parametrize("path", [_RUNBOOK, _GCAFS_RUNBOOK], ids=lambda p: p.name)
+def test_runbook_never_mentions_the_design(path: Path) -> None:
+    assert "design/" not in path.read_text()
+    assert "design doc" not in path.read_text().lower()
+
+
+def test_gcafs_anthro_runbook_covers_the_use_case() -> None:
+    # The dedicated runbook: placed inputs, the override list, the run, the
+    # publish, the cold start, the four-rank check — and it names the
+    # suite and run config the CLI resolves. No scratch paths, no users.
+    text = _GCAFS_RUNBOOK.read_text()
+    for needle in (
+        "ursa-runbook.md",
+        "data/gcafs-anthro",
+        "sources",
+        "ASSAY_INPUT_SEARCH_PATH",
+        "fetch --suite-config=gcafs-anthro-suite.yaml --record-digests",
+        "git diff",
+        "config/ursa-gcafs-anthro.yaml --dry-run",
+        "config/ursa-gcafs-anthro.yaml --stage data --stage harness",
+        "--mem=0",
+        "publish-baselines",
+        "baselines:enabled=true",
+        "slurm:ntasks=4",
+        "report-mem",
+        "record-benchmarks --output-root=",
+        "gcafs-anthro/benchmarks.csv",
+        "upload-output --output-root=",
+        "download-output --ulid",
+        "assay-output/<run ULID>",
+    ):
+        assert needle in text, needle
+    assert (
+        "GCAFS=(" not in text
+    )  # the override list became config/ursa-gcafs-anthro.yaml
+    assert "ROOT=" not in text  # inherits $ROOT from the Ursa runbook
+    for scratch in ("/scratch3", "/scratch4", "RUNDIRS"):
+        assert scratch not in text, scratch
 
 
 def test_runbook_uses_placeholders_and_ref_variables() -> None:
@@ -68,6 +105,8 @@ def test_runbook_uses_placeholders_and_ref_variables() -> None:
     assert (
         ".sbatch" in text
     )  # the per-combo job script, and the resubmit-by-hand triage step
+    assert "record-benchmarks --output-root=" in text  # the committed rows
+    assert "upload-output --output-root=" in text  # keeping a run
     assert not (_REPO_ROOT / "scripts" / "ursa-harness.sh").exists()
 
 
@@ -101,6 +140,24 @@ def test_readme_documents_the_new_surfaces() -> None:
         "rtol",
         "--baseline-rtol",
         "ASSAY_BASELINE_RTOL",
+        "url: null",
+        "ASSAY_INPUT_SEARCH_PATH",
+        "--record-digests",
+        "ASSAY_SRUN_ARGS",
+        "gcafs-anthro-runbook.md",
+        "## Benchmarks",
+        "--record-benchmarks",
+        "record-benchmarks --output-root=",
+        "harness.record_benchmarks",
+        "config_sha256",
+        "## Output upload",
+        "upload-output --output-root=",
+        "download-output --ulid=",
+        "ASSAY_OUTPUT_STORE",
+        "s3://ufs-chem/assay-output",
+        "--upload-output",
+        "harness.upload_output",
+        "upload.yaml",
     ):
         assert needle in text, needle
     assert "buid-test-tweaks" not in text

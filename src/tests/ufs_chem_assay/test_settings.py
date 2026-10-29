@@ -22,6 +22,9 @@ _SCRUBBED = (
     "BASELINE_ROOT_DIR",
     "BASELINE_STORE",
     "LOG_LEVEL",
+    "SRUN_ARGS",
+    "INPUT_SEARCH_PATH",
+    "OUTPUT_STORE",
 )
 
 
@@ -137,6 +140,18 @@ def test_search_path_defaults_to_empty() -> None:
     assert Settings().suite_config_search_path == []
 
 
+def test_input_search_path_defaults_empty_and_splits_on_pathsep(
+    clean_env: pytest.MonkeyPatch,
+) -> None:
+    # Where fetch looks for source-less inputs to link from: per-machine
+    # directories, never in a suite.
+    assert Settings().input_search_path == []
+    clean_env.setenv(
+        f"{ENV_PREFIX}INPUT_SEARCH_PATH", os.pathsep.join(["/data/a", "/data/b"])
+    )
+    assert Settings().input_search_path == [Path("/data/a"), Path("/data/b")]
+
+
 def test_runtime_from_legacy_env(clean_env: pytest.MonkeyPatch) -> None:
     clean_env.setenv("CECE_RUNTIME", "native")
     assert Settings(platform=Platform.LOCAL).runtime is Runtime.NATIVE
@@ -168,6 +183,27 @@ def test_baseline_tolerance_overrides_reject_negatives() -> None:
 
 
 @pytest.mark.usefixtures("clean_env")
+def test_output_store_defaults_and_shares_the_store_validator(
+    clean_env: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    assert Settings().output_store == "s3://ufs-chem/assay-output"
+    clean_env.setenv(f"{ENV_PREFIX}OUTPUT_STORE", "s3://other/outputs/")
+    assert Settings().output_store == "s3://other/outputs"
+    clean_env.setenv(f"{ENV_PREFIX}OUTPUT_STORE", str(tmp_path / "outputs"))
+    assert Settings().output_store == str(tmp_path / "outputs")
+    clean_env.setenv(f"{ENV_PREFIX}OUTPUT_STORE", "s3://bucket-root")
+    with pytest.raises(ValidationError, match="output_store"):
+        Settings()
+
+
+def test_srun_args_defaults_to_one_task_and_reads_from_env(
+    clean_env: pytest.MonkeyPatch,
+) -> None:
+    assert Settings(platform=Platform.LOCAL).srun_args == "--ntasks=1"
+    clean_env.setenv(f"{ENV_PREFIX}SRUN_ARGS", "--ntasks=4 --cpu-bind=cores")
+    assert Settings(platform=Platform.LOCAL).srun_args == "--ntasks=4 --cpu-bind=cores"
+
+
 def test_baseline_store_defaults_to_the_ufs_chem_baselines_prefix() -> None:
     assert Settings().baseline_store == "s3://ufs-chem/baselines"
 

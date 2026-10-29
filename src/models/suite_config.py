@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from enum import StrEnum, unique
 from pathlib import Path, PurePosixPath
 
 import yaml
@@ -28,15 +29,20 @@ SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
 
 class InputFile(StrictModel):
-    """One input the suite's base configuration reads, staged into the
-    application checkout's data directory by `ufs-chem-assay fetch`: an S3
-    object, fetched with one filtered `aws s3 sync` of its parent prefix."""
+    """One input the suite's base configuration reads, expected in the
+    application checkout's data directory: an S3 object, fetched by
+    `ufs-chem-assay fetch` with one filtered `aws s3 sync` of its parent
+    prefix — or, with no url, a file placed there by hand (not in any
+    bucket yet) that `fetch` only ever verifies by digest."""
 
-    url: str = Field(
+    url: str | None = Field(
+        None,
         pattern=S3_OBJECT_URI_PATTERN,
         description=(
-            "S3 object URI of the file (s3://bucket/key); fetched with one "
-            "filtered `aws s3 sync` of the key's parent prefix"
+            "S3 object URI of the file (s3://bucket/key), fetched with one "
+            "filtered `aws s3 sync` of the key's parent prefix; null declares an "
+            "input with no remote source yet — placed at dst by hand, verified "
+            "by sha256, never downloaded"
         ),
     )
     public: bool = Field(
@@ -62,6 +68,15 @@ class InputFile(StrictModel):
             "replaces anything; null skips present non-empty files unverified"
         ),
     )
+    sources: dict[Platform, PurePosixPath] | None = Field(
+        None,
+        description=(
+            "Where the file is known to live, per platform (absolute paths): on "
+            "that platform `fetch` links an absent source-less input from here "
+            "before consulting the input search path, and a missing declared "
+            "file is a named failure; only with url null"
+        ),
+    )
 
     @field_validator("dst", mode="after")
     @classmethod
@@ -77,15 +92,52 @@ class InputFile(StrictModel):
             )
         return value
 
+    @field_validator("sources", mode="after")
+    @classmethod
+    def _sources_are_absolute(
+        cls, value: dict[Platform, PurePosixPath] | None
+    ) -> dict[Platform, PurePosixPath] | None:
+        if value is not None:
+            for platform, path in value.items():
+                if not path.is_absolute():
+                    raise ValueError(
+                        f"sources: the {platform.value} path must be absolute, got {str(path)!r}"
+                    )
+        return value
+
+    @model_validator(mode="after")
+    def _source_less_needs_a_digest(self) -> InputFile:
+        if self.url is None:
+            if self.sha256 is None:
+                raise ValueError(
+                    f"inputs: {str(self.dst)!r} has no url (no remote source) and "
+                    "must declare sha256 — without both, any non-empty file would pass"
+                )
+            if self.public:
+                raise ValueError(
+                    f"inputs: {str(self.dst)!r} has no url, so public has no meaning"
+                )
+        elif self.sources:
+            raise ValueError(
+                f"inputs: {str(self.dst)!r} has a url, so sources has no meaning "
+                "(a URL input is fetched, never linked)"
+            )
+        return self
+
+    def _url(self) -> str:
+        if self.url is None:
+            raise ValueError(f"input {str(self.dst)!r} has no remote source")
+        return self.url
+
     @property
     def parent_prefix(self) -> str:
         """`s3://bucket/a/b/file.nc` -> `s3://bucket/a/b/` (the sync source)."""
-        return self.url.rsplit("/", 1)[0] + "/"
+        return self._url().rsplit("/", 1)[0] + "/"
 
     @property
     def filename(self) -> str:
         """The key's last component (the sync's include filter)."""
-        return self.url.rsplit("/", 1)[1]
+        return self._url().rsplit("/", 1)[1]
 
 
 class AttributesAssertion(StrictModel):
@@ -191,15 +243,71 @@ class BaselineComparison(StrictModel):
     )
 
 
+@unique
+class ColorScale(StrEnum):
+    """Overview-map color scales (plotting.scale)."""
+
+    log = "log"  # LogNorm; zeros (and negatives) masked grey — the default
+    symlog = "symlog"  # SymLogNorm; zeros on the colorbar inside the linear core
+    linear = "linear"  # no transform: today's exact min/max
+
+
+@unique
+class BiasColorScale(StrEnum):
+    """Bias-map color scales (plotting.bias_scale)."""
+
+    linear = "linear"  # symmetric at the exact max |diff| — the default
+    symlog = "symlog"  # SymLogNorm, symmetric, linthresh by the decade rule
+
+
 class Plotting(StrictModel):
     """Spatial-plot rendering at session end. The shared color scale derives
-    from the descriptive statistics, so plotting requires the stats step."""
+    from the descriptive statistics, so plotting requires the stats step.
+    The maximum is always the exact suite-wide maximum; under log/symlog the
+    floor is a rule (decades below the maximum, never below the suite-wide
+    smallest positive value) or an explicit value."""
 
     enabled: bool = Field(
         True, description="Render spatial plots per NetCDF into <combo>/plots/"
     )
     gif_enabled: bool = Field(
         True, description="Assemble the per-variable plots into an animated GIF"
+    )
+    scale: ColorScale = Field(
+        ColorScale.log,
+        description=(
+            "Overview-map color scale: log (zeros masked grey, the default), "
+            "symlog (zeros on the colorbar), or linear (no transform)"
+        ),
+    )
+    decades: int | None = Field(
+        5,
+        ge=1,
+        description=(
+            "log/symlog: the floor is the suite-wide max / 10**decades, never "
+            "below the suite-wide smallest positive value; null = that smallest "
+            "positive value exactly"
+        ),
+    )
+    floor: float | None = Field(
+        None,
+        gt=0,
+        description=(
+            "log/symlog: an explicit floor in data units; overrides decades "
+            "(ignored under linear)"
+        ),
+    )
+    bias_scale: BiasColorScale = Field(
+        BiasColorScale.linear,
+        description=(
+            "Bias-map color scale: linear (symmetric at the exact max |diff|, the "
+            "default) or symlog"
+        ),
+    )
+    bias_decades: int = Field(
+        5,
+        ge=1,
+        description="bias symlog: linthresh = max |diff| / 10**bias_decades",
     )
 
 
@@ -342,7 +450,9 @@ class RecordedInput(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     suite: str = Field(description="Suite that declares the input")
-    url: str = Field(description="The input's S3 object URI")
+    url: str | None = Field(
+        description="The input's S3 object URI; null for one with no remote source"
+    )
     path: Path = Field(description="Host path the input is staged at")
     sha256: str | None = Field(description="The declared digest; null when none")
     bytes: int | None = Field(
@@ -361,8 +471,25 @@ class RecordedBaseline(StrictModel):
     ulid: str = Field(description="The baseline's ULID")
     source: str = Field(description="Where it is synced from: <store>/<ulid>")
     path: Path = Field(description="Where the session reads it: <baseline root>/<ulid>")
-    state: str = Field(description="local, synced, would-sync, or failed")
+    state: str = Field(
+        description="local, synced, would-sync, unpublished (placeholder ULID), or failed"
+    )
     detail: str = Field(description="Why: present, synced, or the error")
+
+
+class LaunchRecord(StrictModel):
+    """How the driver jobs were launched (run.yaml, slurm runtime): the
+    sbatch directives, the srun options, and the environment exported inside
+    each job — the rank count, binding, and thread settings that produced
+    the output. Copied into a published baseline's manifest."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    sbatch_args: str = Field(description="The ASSAY_SBATCH_ARGS directives, verbatim")
+    srun_args: str = Field(description="The ASSAY_SRUN_ARGS options, verbatim")
+    job_env: dict[str, str] = Field(
+        description="NAME -> VALUE exported inside every driver job (ASSAY_JOB_ENV)"
+    )
 
 
 class RunManifest(StrictModel):
@@ -383,8 +510,9 @@ class RunManifest(StrictModel):
     application_commit: str | None = Field(
         description=(
             "HEAD commit SHA of the application checkout the session ran "
-            "against; null only when no checkout is configured (a configured "
-            "root without a resolvable SHA fails the session at start)"
+            "against; null when no checkout is configured, or under --dry-run "
+            "when the configured root yields none (a real run fails at "
+            "collection instead)"
         ),
     )
     harness_version: str = Field(
@@ -405,6 +533,13 @@ class RunManifest(StrictModel):
     )
     modulefile: str | None = Field(
         description="Modulefile the driver jobs loaded (slurm runtime); null otherwise"
+    )
+    launch: LaunchRecord | None = Field(
+        default=None,
+        description=(
+            "How the driver jobs were launched (slurm runtime: directives, srun "
+            "options, job environment); null under docker and native"
+        ),
     )
     # SerializeAsAny: each suite dumps with its adapter's schema (the sweep).
     suites: list[SerializeAsAny[SuiteConfig]]
