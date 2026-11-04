@@ -28,8 +28,9 @@ from applications.base import (
 )
 from cli.run_config import HARNESS_ROOT, RunConfig, search_path_value
 from models.base import StrictModel
+from models.conventions import CONVENTIONS
 from platforms import Runtime
-from settings import ENV_PREFIX, Settings
+from settings import Settings
 
 _DRIVER_COMBOS = "src/tests/test_driver_combos.py"
 _SHEBANG = "#!/bin/bash"
@@ -45,9 +46,12 @@ SETTINGS_NOT_MIRRORED = frozenset(
         "baseline_store",  # baselines.store
         "baseline_atol",  # baselines.atol
         "baseline_rtol",  # baselines.rtol
-        "sbatch_args",  # slurm: (account, qos, partition, cpus)
+        "sbatch_args",  # slurm: (account, qos, partition, ntasks, cpus, extra_args)
+        "srun_args",  # slurm: (ntasks, srun_args)
         "slurm_queue_wait_s",  # slurm.queue_wait_s
         "job_env",  # harness.env under the slurm runtime
+        "input_search_path",  # data.input_search_path
+        "output_store",  # outputs.store
     }
 )
 
@@ -121,40 +125,58 @@ def _exports(
         if value is not None:
             exports.append((f"{prefix}{field.upper()}", value))
     exports += [
-        (f"{ENV_PREFIX}PLATFORM", config.platform.value),
-        (f"{ENV_PREFIX}RUNTIME", config.runtime.value),
+        (CONVENTIONS.env_var("PLATFORM"), config.platform.value),
+        (CONVENTIONS.env_var("RUNTIME"), config.runtime.value),
     ]
     for field in settings_mirror_fields():
         if field == "runtime":
             continue  # resolved above
         value = _env_value(getattr(harness, field))
         if value is not None:
-            exports.append((f"{ENV_PREFIX}{field.upper()}", value))
+            exports.append((CONVENTIONS.env_var(field), value))
     if config.runtime is Runtime.SLURM:
         assert config.slurm is not None, "slurm runtime needs a slurm: section"
-        exports.append((f"{ENV_PREFIX}SBATCH_ARGS", q(config.slurm.sbatch_args)))
         exports.append(
-            (f"{ENV_PREFIX}SLURM_QUEUE_WAIT_S", str(config.slurm.queue_wait_s))
+            (CONVENTIONS.env_var("SBATCH_ARGS"), q(config.slurm.sbatch_args))
+        )
+        exports.append(
+            (CONVENTIONS.env_var("SRUN_ARGS"), q(config.slurm.srun_args_value))
+        )
+        exports.append(
+            (CONVENTIONS.env_var("SLURM_QUEUE_WAIT_S"), str(config.slurm.queue_wait_s))
         )
         if harness.env:
             # The driver jobs' environment; the login-node shell never needs it.
             pairs = " ".join(f"{key}={value}" for key, value in harness.env.items())
-            exports.append((f"{ENV_PREFIX}JOB_ENV", q(pairs)))
+            exports.append((CONVENTIONS.env_var("JOB_ENV"), q(pairs)))
     exports.append(
         (
-            f"{ENV_PREFIX}ENABLE_BASELINE_COMPARISONS",
+            CONVENTIONS.env_var("ENABLE_BASELINE_COMPARISONS"),
             "true" if config.baselines.enabled else "false",
         )
     )
     if config.baselines.root_dir is not None:
-        exports.append((f"{ENV_PREFIX}BASELINE_ROOT_DIR", q(config.baselines.root_dir)))
-    exports.append((f"{ENV_PREFIX}BASELINE_STORE", q(config.baselines.store)))
+        exports.append(
+            (CONVENTIONS.env_var("BASELINE_ROOT_DIR"), q(config.baselines.root_dir))
+        )
+    exports.append((CONVENTIONS.env_var("BASELINE_STORE"), q(config.baselines.store)))
+    exports.append((CONVENTIONS.env_var("OUTPUT_STORE"), q(config.outputs.store)))
     for tolerance, override in (
         ("ATOL", config.baselines.atol),
         ("RTOL", config.baselines.rtol),
     ):
         if override is not None:
-            exports.append((f"{ENV_PREFIX}BASELINE_{tolerance}", str(override)))
+            exports.append(
+                (CONVENTIONS.env_var(f"baseline_{tolerance}"), str(override))
+            )
+    if config.data.input_search_path:
+        # Where fetch links source-less inputs from (this machine's trees).
+        exports.append(
+            (
+                CONVENTIONS.env_var("INPUT_SEARCH_PATH"),
+                q(search_path_value(config.data.input_search_path)),
+            )
+        )
     exports.append(("PATH", '"$HOME/.local/bin:$PATH"'))
     exports.append(("UV_CACHE_DIR", q(config.uv_cache_dir)))
     if config.runtime is not Runtime.SLURM:
@@ -180,6 +202,10 @@ def _harness(
         pytest_args.append("--publish-baselines")
     if harness.no_suite_update:
         pytest_args.append("--no-suite-update")
+    if harness.record_benchmarks:
+        pytest_args.append("--record-benchmarks")
+    if harness.upload_output:
+        pytest_args.append("--upload-output")
     pytest_args += harness.pytest_args
     return [
         *clean_python_env(section),

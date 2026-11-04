@@ -1,7 +1,7 @@
-"""CeceConfig's newer driver fields — cadence, data_model, log_file,
-amio_worker_threads, grid_name — and build_config's universal log_file
-redirect, against fabricated configs derived from the checked-in maccity
-base config. The external CECE checkout is never required here."""
+"""CeceConfig's newer driver fields — cadence, time_label, data_model,
+log_file, the AMIO input knobs, grid_name, nz — and build_config's universal
+log_file redirect, against fabricated configs derived from the checked-in
+maccity base config. The external CECE checkout is never required here."""
 
 from pathlib import Path
 from typing import Any
@@ -11,7 +11,7 @@ import yaml
 from pydantic import ValidationError
 
 from applications.cece.combos import build_config
-from applications.cece.config import Cadence, CeceConfig, DataModel
+from applications.cece.config import Cadence, CeceConfig, DataModel, TimeLabel
 from applications.cece.suite import CeceSweep
 from applications.registry import get_application
 from combos import enumerate_combos
@@ -35,7 +35,9 @@ def _write_config(tmp_path: Path, content: dict[str, Any]) -> Path:
 # ── Stream: cadence and data_model ───────────────────────────────────────────
 
 
-@pytest.mark.parametrize("cadence", ["hourly", "weekly", "monthly"])
+@pytest.mark.parametrize(
+    "cadence", ["hourly", "daily", "weekly", "monthly", "series", "stepwise"]
+)
 def test_stream_cadence_parses(
     tmp_path: Path, cece_config_path: Path, cadence: str
 ) -> None:
@@ -65,7 +67,14 @@ def test_stream_cadence_and_data_model_default_none(
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    [("cadence", "daily"), ("cadence", "Hourly"), ("data_model", "netcdf4")],
+    [
+        ("cadence", "yearly"),
+        ("cadence", "Hourly"),
+        ("cadence", "step"),  # the driver's alias; canonical values only
+        ("time_label", "Start"),
+        ("time_label", "middle"),
+        ("data_model", "netcdf4"),
+    ],
 )
 def test_non_canonical_stream_values_rejected(
     tmp_path: Path, cece_config_path: Path, field: str, value: str
@@ -102,6 +111,128 @@ def test_amio_worker_threads_below_one_rejected(
     content["driver"]["amio_worker_threads"] = threads
     with pytest.raises(ValidationError, match="amio_worker_threads"):
         CeceConfig.from_yaml(_write_config(tmp_path, content))
+
+
+# ── Stream: time_label ───────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("label", ["auto", "start", "center", "end"])
+def test_stream_time_label_parses(
+    tmp_path: Path, cece_config_path: Path, label: str
+) -> None:
+    content = _config_content(cece_config_path)
+    content["cece_data"]["streams"][0]["time_label"] = label
+    config = CeceConfig.from_yaml(_write_config(tmp_path, content))
+    assert config.cece_data.streams[0].time_label is TimeLabel(label)
+
+
+def test_stream_time_label_defaults_none(cece_config_path: Path) -> None:
+    config = CeceConfig.from_yaml(cece_config_path)
+    assert config.cece_data.streams[0].time_label is None
+
+
+# ── Driver: the AMIO input knobs the driver reads, and the two it does not ──
+
+_AMIO_INPUT_KNOBS = {
+    "amio_staging_buffer_count": 32,
+    "amio_staging_buffer_capacity_bytes": 67108864,
+    "amio_prefetch_depth": 1,
+}
+
+
+def test_driver_amio_input_knobs_parse(tmp_path: Path, cece_config_path: Path) -> None:
+    content = _config_content(cece_config_path)
+    content["driver"].update(_AMIO_INPUT_KNOBS)
+    config = CeceConfig.from_yaml(_write_config(tmp_path, content))
+    assert config.driver.amio_staging_buffer_count == 32
+    assert config.driver.amio_staging_buffer_capacity_bytes == 67108864
+    assert config.driver.amio_prefetch_depth == 1
+
+
+def test_driver_amio_input_knobs_default_none(cece_config_path: Path) -> None:
+    config = CeceConfig.from_yaml(cece_config_path)
+    assert config.driver.amio_staging_buffer_count is None
+    assert config.driver.amio_staging_buffer_capacity_bytes is None
+    assert config.driver.amio_prefetch_depth is None
+
+
+@pytest.mark.parametrize("knob", sorted(_AMIO_INPUT_KNOBS))
+@pytest.mark.parametrize("value", [0, -1])
+def test_driver_amio_input_knobs_below_one_rejected(
+    tmp_path: Path, cece_config_path: Path, knob: str, value: int
+) -> None:
+    # The driver rejects values < 1 for these three (unlike
+    # amio_worker_threads, which it silently corrects); the model agrees.
+    content = _config_content(cece_config_path)
+    content["driver"][knob] = value
+    with pytest.raises(ValidationError, match=knob):
+        CeceConfig.from_yaml(_write_config(tmp_path, content))
+
+
+@pytest.mark.parametrize(
+    ("key", "value"), [("amio_read_timeout_s", 300), ("amio_staging_timeout_ms", 60000)]
+)
+def test_driver_keys_the_driver_never_reads_are_rejected(
+    tmp_path: Path, cece_config_path: Path, key: str, value: int
+) -> None:
+    # Deliberately absent from Driver: CECE develop reads neither at the
+    # driver level (the AMIO manifest hard-codes 120 s / 30000 ms), so a
+    # config carrying them would document settings with no effect
+    # (design/feat/20261019-1447-global-anthro-use-case, TODO 1).
+    content = _config_content(cece_config_path)
+    content["driver"][key] = value
+    with pytest.raises(ValidationError, match=key):
+        CeceConfig.from_yaml(_write_config(tmp_path, content))
+
+
+# ── Grid: nz ─────────────────────────────────────────────────────────────────
+
+
+def test_grid_nz_parses_and_defaults_none(
+    tmp_path: Path, cece_config_path: Path
+) -> None:
+    assert CeceConfig.from_yaml(cece_config_path).driver.grid.nz is None
+    content = _config_content(cece_config_path)
+    content["driver"]["grid"]["nz"] = 72
+    config = CeceConfig.from_yaml(_write_config(tmp_path, content))
+    assert config.driver.grid.nz == 72
+
+
+@pytest.mark.parametrize("nz", [0, -3])
+def test_grid_nz_below_one_rejected(
+    tmp_path: Path, cece_config_path: Path, nz: int
+) -> None:
+    content = _config_content(cece_config_path)
+    content["driver"]["grid"]["nz"] = nz
+    with pytest.raises(ValidationError, match="nz"):
+        CeceConfig.from_yaml(_write_config(tmp_path, content))
+
+
+# ── Round trip: the new fields survive to_yaml/from_yaml; absent stays absent
+
+
+def test_new_fields_round_trip_and_absent_fields_are_not_dumped(
+    tmp_path: Path, cece_config_path: Path
+) -> None:
+    content = _config_content(cece_config_path)
+    content["driver"].update(_AMIO_INPUT_KNOBS)
+    content["driver"]["grid"]["nz"] = 1
+    content["cece_data"]["streams"][0]["cadence"] = "series"
+    content["cece_data"]["streams"][0]["time_label"] = "start"
+    config = CeceConfig.from_yaml(_write_config(tmp_path, content))
+    dumped = tmp_path / "dumped.yaml"
+    config.to_yaml(dumped)
+    assert CeceConfig.from_yaml(dumped) == config
+    raw = yaml.safe_load(dumped.read_text())
+    assert raw["driver"]["grid"]["nz"] == 1
+    assert raw["cece_data"]["streams"][0]["time_label"] == "start"
+    # maccity itself dumps without any of the new keys (exclude_none).
+    plain = tmp_path / "plain.yaml"
+    CeceConfig.from_yaml(cece_config_path).to_yaml(plain)
+    plain_raw = yaml.safe_load(plain.read_text())
+    assert "nz" not in plain_raw["driver"]["grid"]
+    assert "amio_prefetch_depth" not in plain_raw["driver"]
+    assert "time_label" not in plain_raw["cece_data"]["streams"][0]
 
 
 # ── Grid: grid_name pattern and the either/or contract ───────────────────────
@@ -171,12 +302,18 @@ def test_all_newer_fields_at_once_validate(
     grid = content["driver"]["grid"]
     del grid["nx"], grid["ny"]
     grid["grid_name"] = "F360"
+    grid["nz"] = 1
+    content["driver"]["amio_staging_buffer_count"] = 32
+    content["driver"]["amio_staging_buffer_capacity_bytes"] = 67108864
+    content["driver"]["amio_prefetch_depth"] = 1
     stream = content["cece_data"]["streams"][0]
     stream["cadence"] = "monthly"
+    stream["time_label"] = "start"
     stream["data_model"] = "classic"
     config = CeceConfig.from_yaml(_write_config(tmp_path, content))
     assert config.driver.grid.grid_name == "F360"
     assert config.cece_data.streams[0].cadence is Cadence.monthly
+    assert config.cece_data.streams[0].time_label is TimeLabel.start
 
 
 # ── build_config: driver.log_file always lands in the combo directory ────────

@@ -14,6 +14,7 @@ from models.suite_config import (
     Assertions,
     AttributesAssertion,
     InputFile,
+    LaunchRecord,
     RecordedInput,
     RunManifest,
     SpeciesAssertions,
@@ -269,6 +270,31 @@ def test_run_manifest_round_trips_through_yaml(
     assert reloaded_suite.config_path == suite.config_path
 
 
+def test_run_manifest_records_the_launch_under_slurm(suite_path: Path) -> None:
+    # How many ranks, bound how, with which thread exports: null outside
+    # the slurm runtime, the three rendered values under it.
+    suite = load_suite(suite_path)
+    assert _manifest([suite]).launch is None
+    launch = LaunchRecord(
+        sbatch_args="-A epic -q batch -p u1-compute -N 1 -n 4 -c 1 --mem=0",
+        srun_args="--ntasks=4 --cpu-bind=cores",
+        job_env={"OMP_NUM_THREADS": "1", "KOKKOS_NUM_THREADS": "1"},
+    )
+    manifest = _manifest(
+        [suite],
+        platform=Platform.URSA,
+        runtime=Runtime.SLURM,
+        modulefile="cece_ursa.intelllvm",
+        launch=launch,
+    )
+    dumped = manifest.model_dump(mode="json")
+    assert dumped["launch"]["job_env"] == {
+        "OMP_NUM_THREADS": "1",
+        "KOKKOS_NUM_THREADS": "1",
+    }
+    assert RunManifest.model_validate(dumped).launch == launch
+
+
 @pytest.mark.parametrize(
     "missing",
     ["application", "application_commit", "harness_version", "harness_commit"],
@@ -393,6 +419,120 @@ def test_inputs_sha256_must_be_64_lowercase_hex(
                 f"  - url: {_MACCITY_URL}\n    dst: x.nc\n    sha256: '{digest}'\n",
             )
         )
+
+
+# ── Inputs without a remote source (url: null) ───────────────────────────────
+
+
+def test_input_without_source_parses_with_a_digest(
+    tmp_path: Path, cece_config_path: Path
+) -> None:
+    # The gcafs-anthro shape: placed by hand, verified, never fetched.
+    suite = load_suite(
+        _suite_with_inputs(
+            tmp_path,
+            cece_config_path,
+            f"  - url: null\n    dst: gcafs-anthro/x.nc\n    sha256: {_MACCITY_SHA}\n",
+        )
+    )
+    (entry,) = suite.inputs
+    assert entry.url is None
+    assert entry.public is False
+    assert entry.sha256 == _MACCITY_SHA
+
+
+def test_input_without_source_requires_a_digest(
+    tmp_path: Path, cece_config_path: Path
+) -> None:
+    # No source and no digest would accept any non-empty file.
+    with pytest.raises(ValidationError, match="sha256"):
+        load_suite(
+            _suite_with_inputs(
+                tmp_path, cece_config_path, "  - url: null\n    dst: x.nc\n"
+            )
+        )
+
+
+def test_input_without_source_rejects_public(
+    tmp_path: Path, cece_config_path: Path
+) -> None:
+    with pytest.raises(ValidationError, match="public"):
+        load_suite(
+            _suite_with_inputs(
+                tmp_path,
+                cece_config_path,
+                f"  - url: null\n    public: true\n    dst: x.nc\n    sha256: {_MACCITY_SHA}\n",
+            )
+        )
+
+
+def test_input_sources_name_where_the_file_is_per_platform(
+    tmp_path: Path, cece_config_path: Path
+) -> None:
+    suite = load_suite(
+        _suite_with_inputs(
+            tmp_path,
+            cece_config_path,
+            "  - url: null\n    dst: gcafs-anthro/x.nc\n"
+            f"    sha256: {_MACCITY_SHA}\n"
+            "    sources:\n      ursa: /scratch/project/INPUT/x.nc\n",
+        )
+    )
+    (entry,) = suite.inputs
+    assert entry.sources == {
+        Platform.URSA: PurePosixPath("/scratch/project/INPUT/x.nc")
+    }
+
+
+@pytest.mark.parametrize(
+    ("sources", "needle"),
+    [
+        ("      ursa: relative/x.nc", "absolute"),
+        ("      mars: /scratch/x.nc", "mars"),
+    ],
+)
+def test_input_sources_must_be_absolute_and_keyed_by_platform(
+    tmp_path: Path, cece_config_path: Path, sources: str, needle: str
+) -> None:
+    with pytest.raises(ValidationError, match=needle):
+        load_suite(
+            _suite_with_inputs(
+                tmp_path,
+                cece_config_path,
+                "  - url: null\n    dst: x.nc\n"
+                f"    sha256: {_MACCITY_SHA}\n    sources:\n{sources}\n",
+            )
+        )
+
+
+def test_input_sources_refused_with_a_url(
+    tmp_path: Path, cece_config_path: Path
+) -> None:
+    # A URL input has its source already.
+    with pytest.raises(ValidationError, match="sources"):
+        load_suite(
+            _suite_with_inputs(
+                tmp_path,
+                cece_config_path,
+                f"  - url: {_MACCITY_URL}\n    dst: x.nc\n"
+                "    sources:\n      ursa: /scratch/x.nc\n",
+            )
+        )
+
+
+def test_input_without_source_has_no_prefix_or_filename() -> None:
+    entry = InputFile(url=None, dst=PurePosixPath("x.nc"), sha256=_MACCITY_SHA)
+    with pytest.raises(ValueError, match="no remote source"):
+        _ = entry.parent_prefix
+    with pytest.raises(ValueError, match="no remote source"):
+        _ = entry.filename
+
+
+def test_recorded_input_round_trips_a_null_url() -> None:
+    recorded = RecordedInput(
+        suite="s", url=None, path=Path("/data/x.nc"), sha256=_MACCITY_SHA, bytes=None
+    )
+    assert RecordedInput.model_validate(recorded.model_dump()) == recorded
 
 
 def test_inputs_duplicate_dst_rejected(tmp_path: Path, cece_config_path: Path) -> None:

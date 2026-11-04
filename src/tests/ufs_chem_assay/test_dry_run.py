@@ -15,6 +15,8 @@ import pandas as pd
 import pytest
 import yaml
 
+from benchmarks import BENCHMARK_COLUMNS
+
 _RUNNER_ROOT = Path(__file__).resolve().parents[3]  # <repo root>/
 
 
@@ -77,6 +79,7 @@ def test_dry_run_generates_everything_but_never_executes(tmp_path: Path) -> None
         text=True,
     ).stdout.strip()
     assert manifest["harness_commit"] in (head, f"{head}-dirty")
+    assert manifest["launch"] is None  # docker: no job geometry
     # The suite's declared inputs as found: absent in this fabricated checkout.
     assert manifest["inputs"] == [
         {
@@ -105,9 +108,13 @@ def test_dry_run_generates_everything_but_never_executes(tmp_path: Path) -> None
         assert len(combo_id) == 26  # runtime ULID directory names
         assert (root / combo_id / f"{combo_id}.yaml").is_file()
 
-    # The driver never ran: no captured output, no NetCDF, anywhere.
+    # The driver never ran: no captured output, no NetCDF, anywhere; the
+    # per-run benchmarks file exists and says so (header only).
     assert not list(root.rglob("*.out"))
     assert not list(root.rglob("*.nc"))
+    benchmarks = (root / "benchmarks.csv").read_text().splitlines()
+    assert benchmarks == [",".join(BENCHMARK_COLUMNS)]
+    assert not list(root.glob("*/benchmarks.csv"))
 
     report = pd.read_csv(root / "test-report.csv")
     assert list(report.columns) == [
@@ -189,6 +196,8 @@ def test_slurm_dry_run_writes_a_job_script_per_combo(tmp_path: Path) -> None:
     env["ASSAY_PLATFORM"] = "ursa"
     env["ASSAY_RUNTIME"] = "slurm"
     env["ASSAY_SBATCH_ARGS"] = "-A epic -q debug"
+    env["ASSAY_SRUN_ARGS"] = "--ntasks=1 --cpu-bind=cores"
+    env["ASSAY_JOB_ENV"] = "OMP_NUM_THREADS=1"
     env["CECE_MODULEFILE"] = "cece_ursa.intelllvm"
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(
@@ -237,12 +246,19 @@ def test_slurm_dry_run_writes_a_job_script_per_combo(tmp_path: Path) -> None:
         assert f"#SBATCH --output={combo_dir}/{combo_dir.name}.out" in text
         assert "#SBATCH -A epic" in text
         assert "module load cece_ursa.intelllvm" in text
-        assert text.rstrip().endswith(
-            f"srun --ntasks=1 ./build/cece_standalone_driver {combo_dir}/{combo_dir.name}.yaml"
-        )
+        assert (
+            "srun --ntasks=1 --cpu-bind=cores ./build/cece_standalone_driver "
+            f"{combo_dir}/{combo_dir.name}.yaml"
+        ) in text.splitlines()
     manifest = yaml.safe_load((root / "run.yaml").read_text())
     assert manifest["runtime"] == "slurm"
     assert manifest["modulefile"] == "cece_ursa.intelllvm"
+    # The launch geometry is part of the record (and of a baseline's manifest).
+    assert manifest["launch"] == {
+        "sbatch_args": "-A epic -q debug",
+        "srun_args": "--ntasks=1 --cpu-bind=cores",
+        "job_env": {"OMP_NUM_THREADS": "1"},
+    }
     assert not list(root.rglob("*.out"))  # nothing submitted
 
 
@@ -280,6 +296,7 @@ def test_slurm_dry_run_without_a_checkout_writes_no_job_scripts(tmp_path: Path) 
     manifest = yaml.safe_load(next((tmp_path / "bt").rglob("run.yaml")).read_text())
     assert manifest["runtime"] == "slurm"
     assert manifest["application_commit"] is None
+    assert manifest["launch"]["srun_args"] == "--ntasks=1"  # the setting's default
 
 
 @pytest.mark.parametrize("how", ["flag", "env"])

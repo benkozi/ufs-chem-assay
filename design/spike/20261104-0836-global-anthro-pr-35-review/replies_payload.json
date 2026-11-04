@@ -1,0 +1,58 @@
+{
+  "repo": "benkozi/ufs-chem-assay",
+  "pull_number": 35,
+  "in_response_to_review": "PRR_kwDOTbtd2s8AAAABWALxpQ",
+  "note": "Reply bodies drafted by the machine-review design (design/feat/20261019-1447-global-anthro-use-case/20261104-0904-machine-review.md, sections 4 and 6–12). Replace each <commit> with the SHA that landed the change before posting. Post one reply per entry with: gh api -X POST repos/{repo}/pulls/{pull_number}/comments/{in_reply_to}/replies -f body=@-",
+  "replies": [
+    {
+      "in_reply_to": 4469950312,
+      "path": "src/outputs.py",
+      "body": "Agreed — the `finally` removed the shared `.staging/` rather than this run's directory. Fixed as suggested in <commit>: only `dest/.staging/<run_id>` is removed and the parent is `rmdir`ed best-effort; `test_download_cleans_up_only_its_own_staging` keeps another run's staging directory alive across the download and checks the parent disappears once empty."
+    },
+    {
+      "in_reply_to": 4469950349,
+      "path": "src/staging.py",
+      "body": "Agreed — overlapping or repeated search directories (a parent and its child, a symlinked tree) produced the same file twice and a false 'ambiguous'. Fixed as suggested in <commit>: matches are keyed by `resolve()`, first spelling kept; `test_overlapping_search_directories_are_not_ambiguous` covers a parent/child pair, a repeat, and a symlinked alias, and two distinct files of one name are still refused."
+    },
+    {
+      "in_reply_to": 4469950360,
+      "path": "src/tests/config/cece/gcafs-anthro/gcafs-anthro-suite.yaml",
+      "body": "Agreed, and the header was stale in three more places (the override list that became `config/ursa-gcafs-anthro.yaml`, the placeholder digests that are real now, the copy-the-files instruction that became `sources:` links). The whole header is rewritten in <commit> to describe the file as it is; the `rtol` rationale is kept."
+    },
+    {
+      "in_reply_to": 4469950374,
+      "path": "src/outputs.py",
+      "body": "Done in <commit>: the docstring now says S3 downloads stage under `.staging/<run_id>` and replace files individually, a directory store copies with `dirs_exist_ok`, and an existing target is refreshed, never removed."
+    },
+    {
+      "in_reply_to": 4470706315,
+      "path": "src/cli/main.py",
+      "body": "Moved in <commit>: the name is now `CONVENTIONS.benchmarks` on a new harness-wide conventions model (`src/models/conventions.py`, frozen, every field described), which `settings` re-exports (`from settings import CONVENTIONS`). It sits there rather than on `Settings` itself because nothing on `Settings` is fixed — every field is environment-overridable — while the file name, like `run.yaml` and `.staging`, must never vary; the same model now also supplies `settings.py`'s own prefixes, `.env` name and default stores."
+    },
+    {
+      "in_reply_to": 4470719056,
+      "path": "src/cli/main.py",
+      "body": "Yes — in <commit> `cli.main.Command` is a `@unique` `StrEnum` (`run`, `fetch`, `publish-baselines`, `record-benchmarks`, `upload-output`, `download-output`); `_parser` registers each subparser by its member and `main` dispatches through one `HANDLERS: dict[Command, Callable]` table, no string comparisons. `test_commands_are_the_parsers_subcommands` pins the enum to the parser's choices and `test_every_command_has_a_handler` fails on a member without a handler."
+    },
+    {
+      "in_reply_to": 4470842648,
+      "path": "src/benchmarks.py",
+      "body": "Done in <commit>: `BenchmarkConventions`/`BENCHMARK_CONVENTIONS` (frozen, described) carries the `tic`/`toc` regexes, the `sacct` column list, the retry delay and the `MaxRSS` units; the clock format moved to the shared `CONVENTIONS.clock_format`, which also replaces the duplicate `runner.CLOCK_FORMAT`, and `BENCHMARK_FILENAME` became `CONVENTIONS.benchmarks`."
+    },
+    {
+      "in_reply_to": 4470853195,
+      "path": "src/outputs.py",
+      "body": "Done in <commit>: the three module constants are gone; `outputs.py` reads `CONVENTIONS.upload_record`, `CONVENTIONS.run_manifest` and `CONVENTIONS.staging_dirname` from the shared conventions model — the last being the one spelling of `.staging` now shared by inputs, baselines and output downloads."
+    },
+    {
+      "in_reply_to": 4470892524,
+      "path": "src/settings.py",
+      "body": "Done in <commit>: `ENV_PREFIX`, `LEGACY_ENV_PREFIX`, `_ENV_FILE` and the two default stores are fields of `models.conventions.Conventions` (`CONVENTIONS`, re-exported from `settings`); `Settings`' `model_config`, its legacy sources and its store defaults read them, `cli/run_config.py` takes the store defaults from the same place, and `CONVENTIONS.env_var(\"input_search_path\")` spells a harness variable so `cli/stages.py`, `cli/main.py` and `staging.py` no longer build `ASSAY_*` names by hand."
+    },
+    {
+      "in_reply_to": 4470903746,
+      "path": "src/staging.py",
+      "body": "Done in <commit>: `STAGING_DIRNAME`, `_CHUNK` and `ENV_INPUT_SEARCH_PATH` are gone in favour of `CONVENTIONS.staging_dirname`, `CONVENTIONS.digest_chunk` and `CONVENTIONS.env_var(\"input_search_path\")`. The repeats you suspected were real and are collapsed in the same change: `.staging` was spelled in three modules, the digest chunk in two, the clock format in two, `run.yaml` as a literal in seven places, and the `ASSAY_INPUT_SEARCH_PATH` name by hand in one; `BaselineConventions` keeps only its baseline-specific names (as `BASELINE_CONVENTIONS`) and `run.yaml`/`combos.csv`/`test-report.csv`/`descriptive_stats.csv`/`stats-comparison.csv` are read and written through the model in `conftest.py`, `baselines/plan.py` and `cli/main.py`. The constants left in place are single-module, single-use values (column lists, separators, regexes, the adapter's own `CECE_` prefix); the design doc lists them."
+    }
+  ]
+}

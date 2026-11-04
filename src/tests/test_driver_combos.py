@@ -120,6 +120,8 @@ def test_baseline_comparison(
     request.getfixturevalue("dask_client")
 
     staged = baseline_states.get(entry.ulid)
+    if staged is not None and staged.state == "unpublished":
+        pytest.skip(f"no baseline published yet: {staged.detail}")
     if staged is not None and staged.state == "failed":
         pytest.fail(f"baseline {entry.ulid} unavailable: {staged.detail}")
     baseline_dir = (settings.baseline_root_dir or Path.cwd()) / entry.ulid

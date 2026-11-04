@@ -7,7 +7,7 @@ import yaml
 
 from applications.registry import load_suite
 from models.suite_config import RunManifest
-from platforms import Platform, Runtime, detect_platform
+from platforms import ACCOUNTING, Accounting, Platform, Runtime, detect_platform
 from settings import Settings
 
 
@@ -121,3 +121,11 @@ def test_explicit_local_platform_beats_an_ursa_hostname(
         PurePosixPath("/work/x.yaml"),
     )
     assert command[:3] == ["docker", "run", "--rm"]
+
+
+def test_accounting_is_known_per_platform() -> None:
+    # Memory and queue numbers are recorded only where the harness knows how
+    # to ask: Ursa through sacct; a laptop records nothing of the kind.
+    assert ACCOUNTING[Platform.URSA] is Accounting.SACCT
+    assert Platform.LOCAL not in ACCOUNTING
+    assert set(ACCOUNTING) <= set(Platform)

@@ -8,7 +8,7 @@ import hashlib
 import subprocess
 from pathlib import Path
 
-from baselines.models import CONVENTIONS
+from models.conventions import CONVENTIONS
 
 
 def is_s3(store: str) -> bool:

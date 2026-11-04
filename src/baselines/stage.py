@@ -2,8 +2,9 @@
 baseline root — a present directory is used as is (no network); an absent
 one is synced from the store, S3 through the wrapper into a staging
 directory and moved into place only when it holds NetCDF, a directory
-store by copy. Called by `fetch` (the login node's pre-warm) and at
-session start."""
+store by copy; the placeholder ULID a suite pins before its first publish
+is `unpublished`, never looked for. Called by `fetch` (the login node's
+pre-warm) and at session start."""
 
 from __future__ import annotations
 
@@ -13,9 +14,10 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
-from baselines.models import CONVENTIONS, BaselineState, StagedBaseline
+from baselines.models import BASELINE_CONVENTIONS, BaselineState, StagedBaseline
 from baselines.store import error_detail, is_s3, location
 from logs import get_logger
+from models.conventions import CONVENTIONS
 from models.suite_config import SuiteConfig
 from s3_sync import S3SyncConfig, check_reachable, sync
 
@@ -150,6 +152,11 @@ def _stage_one(
     root_set: bool,
     dry_run: bool,
 ) -> tuple[BaselineState, str]:
+    if ulid == BASELINE_CONVENTIONS.unpublished_ulid:
+        # A suite shipped before its first publish: nothing to look for.
+        return "unpublished", (
+            "the entry pins the placeholder ULID; publish-baselines fills it in"
+        )
     if path.is_dir():
         return "local", "present"
     if not root_set:

@@ -9,6 +9,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+import yaml
+
 _RUNNER_ROOT = Path(__file__).resolve().parents[3]  # <repo root>/
 _INTEGRATION_TESTS = _RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"
 _USAGE_ERROR = 4  # pytest.ExitCode.USAGE_ERROR
@@ -110,15 +113,108 @@ def test_env_root_dir_satisfies_requirement(tmp_path: Path) -> None:
     assert (tmp_path / "combo_runs" / "run.yaml").is_file()
 
 
-def test_non_git_root_dir_is_usage_error(tmp_path: Path) -> None:
-    # A configured root that is not a git checkout is fatal at sessionstart:
-    # the run must record the application commit it ran against.
+@pytest.mark.parametrize("root", ["missing", "not-a-checkout"])
+def test_harness_only_session_never_touches_the_checkout(
+    tmp_path: Path, root: str
+) -> None:
+    # The harness suite shares the session conftest with the driver tests,
+    # but collects none of them: a set-but-missing (or non-git) CECE_ROOT_DIR
+    # must not fail it — the setup script exports the root before CECE is
+    # cloned, and the harness suite is the first thing it runs.
+    root_dir = tmp_path / root
+    if root == "not-a-checkout":
+        root_dir.mkdir()
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CECE_", "ASSAY_"))}
+    env["ASSAY_PLATFORM"] = "local"
+    env["CECE_ROOT_DIR"] = str(root_dir)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(
+                _RUNNER_ROOT / "src" / "tests" / "ufs_chem_assay" / "test_platforms.py"
+            ),
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        check=False,
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "cannot determine the application commit" not in result.stderr
+
+
+def test_upload_output_is_refused_at_start_without_network(tmp_path: Path) -> None:
+    # The endpoint probe (check_reachable) follows AWS_ENDPOINT_URL: point it
+    # at a closed local port and the session must refuse the flag before any
+    # work, naming the post-hoc command.
+    result = _run_pytest(
+        ["--dry-run", "--upload-output"],
+        tmp_path,
+        {
+            "ASSAY_OUTPUT_STORE": "s3://ufs-chem/assay-output",
+            "AWS_ENDPOINT_URL": "http://127.0.0.1:9",
+        },
+    )
+    assert result.returncode == _USAGE_ERROR, result.stdout + result.stderr
+    assert "--upload-output" in result.stderr
+    assert "upload-output --output-root=" in result.stderr
+
+
+def test_dry_run_with_upload_output_uploads_nothing(tmp_path: Path) -> None:
+    # A directory store needs no network; a dry-run session still has
+    # nothing worth keeping and says so.
+    store = tmp_path / "store"
+    result = _run_pytest(
+        ["--dry-run", "--upload-output", "--basetemp", str(tmp_path / "bt")],
+        tmp_path,
+        {"ASSAY_OUTPUT_STORE": str(store)},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "output not uploaded" in result.stdout + result.stderr
+    assert not store.exists()
+    assert not list((tmp_path / "bt").rglob("upload.yaml"))
+
+
+def test_non_git_root_dir_is_usage_error_for_a_real_run(tmp_path: Path) -> None:
+    # A configured root that is not a git checkout is fatal at collection
+    # when the driver is going to run: the run must record the application
+    # commit it ran against. (Before any input or root-dir check.)
     plain = tmp_path / "not-a-checkout"
     plain.mkdir()
-    result = _run_pytest(["--dry-run"], tmp_path, {"CECE_ROOT_DIR": str(plain)})
+    result = _run_pytest([], tmp_path, {"CECE_ROOT_DIR": str(plain)})
     assert result.returncode == _USAGE_ERROR, result.stdout + result.stderr
     assert str(plain) in result.stderr
     assert "git" in result.stderr
+
+
+@pytest.mark.parametrize("root", ["missing", "not-a-checkout"])
+def test_dry_run_never_requires_a_checkout(tmp_path: Path, root: str) -> None:
+    # A dry run reads nothing from the application: a configured root that
+    # yields no commit (not cloned yet, not a git checkout) records null with
+    # a warning instead of failing — the setup order is harness suite, dry
+    # run, then clone and build.
+    root_dir = tmp_path / root
+    if root == "not-a-checkout":
+        root_dir.mkdir()
+    result = _run_pytest(
+        ["--dry-run", "--basetemp", str(tmp_path / "bt")],
+        tmp_path,
+        {"CECE_ROOT_DIR": str(root_dir)},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = result.stdout + result.stderr
+    assert "WARNING" in output
+    assert str(root_dir) in output
+    assert "application_commit: null" in output
+    manifest = yaml.safe_load(next((tmp_path / "bt").rglob("run.yaml")).read_text())
+    assert manifest["application_commit"] is None
 
 
 def test_clean_root_refuses_a_directory_that_is_not_a_harness_root(

@@ -82,6 +82,7 @@ def test_template_is_shipped_and_strict() -> None:
             modulefile=None,
             env={},
             command="",
+            srun_args="--ntasks=1",
             extra={"unused": 1},
             template_text="{{ missing }}",
         )
@@ -97,6 +98,7 @@ def test_render_job_script_golden() -> None:
         modulefile="cece_ursa.intelllvm",
         env={"I_MPI_FABRICS": "shm", "FI_PROVIDER": "tcp"},
         command="./build/cece_standalone_driver /host/out/01ABC/01ABC.yaml",
+        srun_args="--ntasks=1",
     )
     lines = text.splitlines()
     assert lines[0] == "#!/bin/bash"
@@ -120,10 +122,19 @@ def test_render_job_script_golden() -> None:
     assert "module load cece_ursa.intelllvm" in body
     assert "export I_MPI_FABRICS=shm" in body
     assert "export FI_PROVIDER=tcp" in body
-    # The PMI fix: MPI programs inside a batch job must be launched by srun.
+    # The PMI fix: MPI programs inside a batch job must be launched by srun;
+    # the srun options are the ASSAY_SRUN_ARGS setting, rendered verbatim.
+    launch = body.index(
+        "srun --ntasks=1 ./build/cece_standalone_driver /host/out/01ABC/01ABC.yaml"
+    )
+    # Wall time and memory in the .out (the author's cece_job.sh): tic/toc
+    # around the launch, then RDHPCS's report-mem, guarded so the script runs
+    # (and exits 0) on any Slurm machine.
+    assert body[launch - 1] == 'echo "tic: $(date -u +%Y-%m-%dT%H:%M:%SZ)"'
+    assert body[launch + 1] == 'echo "toc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"'
     assert (
         body[-1]
-        == "srun --ntasks=1 ./build/cece_standalone_driver /host/out/01ABC/01ABC.yaml"
+        == "if command -v report-mem >/dev/null 2>&1; then report-mem || true; fi"
     )
     assert body.index("module load cece_ursa.intelllvm") < body.index(
         "export I_MPI_FABRICS=shm"
@@ -140,10 +151,11 @@ def test_render_job_script_without_modules_or_env() -> None:
         modulefile=None,
         env={},
         command="ctest --test-dir /r/build",
+        srun_args="--ntasks=1",
     )
     assert "module" not in text
     assert "export" not in text
-    assert text.rstrip().endswith("srun --ntasks=1 ctest --test-dir /r/build")
+    assert "srun --ntasks=1 ctest --test-dir /r/build" in text.splitlines()
 
 
 def test_driver_command_and_job_script_path() -> None:
@@ -165,8 +177,28 @@ def test_write_job_script_renders_from_settings(tmp_path: Path) -> None:
     assert "#SBATCH --time=2" in text
     assert "#SBATCH -A epic" in text
     assert "#SBATCH --job-name=ufs-chem-assay-x" in text
-    assert text.rstrip().endswith(
+    assert (
         f"srun --ntasks=1 ./build/cece_standalone_driver {tmp_path}/x.yaml"
+        in text.splitlines()
+    )
+
+
+def test_write_job_script_renders_the_srun_args_setting(tmp_path: Path) -> None:
+    # Four MPI tasks, bound to cores: the setting is the whole srun option
+    # list, so sbatch -n and srun --ntasks agree because the run config
+    # renders both from one ntasks value.
+    settings = _slurm(
+        sbatch_args="-A epic -q batch -p u1-compute -N 1 -n 4 -c 1 --mem=0",
+        srun_args="--ntasks=4 --cpu-bind=cores",
+    )
+    script = write_job_script(
+        settings, _CECE, PurePosixPath(str(tmp_path / "x.yaml")), tmp_path / "x.out", 60
+    )
+    lines = script.read_text().splitlines()
+    assert "#SBATCH --mem=0" in lines
+    assert (
+        f"srun --ntasks=4 --cpu-bind=cores ./build/cece_standalone_driver {tmp_path}/x.yaml"
+        in lines
     )
 
 
@@ -209,7 +241,7 @@ def test_slurm_run_driver_writes_the_script_and_submits_it(
     out_path = tmp_path / "x.out"
     out_path.write_bytes(b"driver ok\n")  # Slurm wrote the job's output
 
-    run_driver(
+    execution = run_driver(
         _slurm(),
         _APP,
         _CECE,
@@ -218,6 +250,7 @@ def test_slurm_run_driver_writes_the_script_and_submits_it(
         timeout_s=10,
     )
 
+    assert execution.job_id == "12345"  # from sbatch --parsable, for accounting
     script = tmp_path / "x.sbatch"
     assert script.is_file()
     assert "srun --ntasks=1" in script.read_text()

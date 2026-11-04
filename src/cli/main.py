@@ -20,30 +20,47 @@ from __future__ import annotations
 
 import argparse
 import os
-from pathlib import Path
+import subprocess
+from collections.abc import Callable
+from enum import StrEnum, unique
+from pathlib import Path, PurePosixPath
 
 import yaml
 
 from applications.base import Application, Stage
 from applications.registry import get_application
 from baselines import default_selector, ensure_baselines, load_run, plan, publish
+from benchmarks import append_benchmarks, read_benchmarks_csv
 from cli.run_config import RunConfig
 from cli.shell import run_bash, write_script
 from cli.stages import render_stage
 from logs import configure_logging, get_logger
+from models.conventions import CONVENTIONS
 from models.suite_config import RunManifest
+from outputs import download_output, upload_output
 from platforms import Platform
 from s3_sync import check_reachable
 from selection import resolve_suites
-from settings import ENV_PREFIX, LEGACY_ENV_PREFIX, Settings
-from staging import merge_inputs, stage_inputs
+from settings import Settings
+from staging import merge_inputs, rewrite_suite_digests, stage_inputs
 
 logger = get_logger("cli")
 
 # Script file numbering: fixed slots in the canonical order, so the harness
 # stage is always 05 (slot 04 is held for the application's own tests, issue #9).
 _INDEX = {Stage.SOURCE: 1, Stage.BUILD: 2, Stage.DATA: 3, Stage.HARNESS: 5}
-EFFECTIVE_CONFIG_NAME = "run-config.yaml"
+
+
+@unique
+class Command(StrEnum):
+    """The subcommands, each the name `argparse` sees and the key of its handler."""
+
+    RUN = "run"
+    FETCH = "fetch"
+    PUBLISH_BASELINES = "publish-baselines"
+    RECORD_BENCHMARKS = "record-benchmarks"
+    UPLOAD_OUTPUT = "upload-output"
+    DOWNLOAD_OUTPUT = "download-output"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -57,7 +74,9 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    run = subparsers.add_parser("run", help="render the stage scripts and execute them")
+    run = subparsers.add_parser(
+        Command.RUN, help="render the stage scripts and execute them"
+    )
     run.add_argument(
         "--config-file",
         required=True,
@@ -122,7 +141,7 @@ def _parser() -> argparse.ArgumentParser:
         help="write every script under <root_dir>/scripts/ and stop: nothing executes",
     )
     fetch = subparsers.add_parser(
-        "fetch",
+        Command.FETCH,
         help=(
             "stage the inputs the selected suites declare into the application "
             "checkout's data directory (present, verified files are skipped)"
@@ -149,8 +168,17 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="report what is present and what would be fetched; transfer nothing",
     )
+    fetch.add_argument(
+        "--record-digests",
+        action="store_true",
+        help=(
+            "for every source-less input (url null) present whose digest differs "
+            "from the declared one, write the on-disk sha256 into the suite file(s) "
+            "declaring it — then review the diff and commit"
+        ),
+    )
     publish_parser = subparsers.add_parser(
-        "publish-baselines",
+        Command.PUBLISH_BASELINES,
         help=(
             "publish a finished run's compared combinations (the suites' "
             "baseline_comparisons entries) as new baselines in the S3 store and "
@@ -199,6 +227,88 @@ def _parser() -> argparse.ArgumentParser:
         "--no-suite-update",
         action="store_true",
         help="publish, but leave the suite files alone (the ULIDs are logged)",
+    )
+    record = subparsers.add_parser(
+        Command.RECORD_BENCHMARKS,
+        help=(
+            "append a finished run's benchmark rows (<output root>/benchmarks.csv, "
+            "one per executed combination) to each suite's committed configuration "
+            "benchmarks.csv; review the diff and commit"
+        ),
+    )
+    record.add_argument(
+        "--output-root",
+        required=True,
+        type=Path,
+        help="the run's output root (the directory holding run.yaml and benchmarks.csv)",
+    )
+    record.add_argument(
+        "--application",
+        default=None,
+        metavar="NAME",
+        help="the run's application (overrides ASSAY_APPLICATION), as for pytest",
+    )
+    record.add_argument(
+        "--suite-config",
+        default=None,
+        metavar="SELECTOR",
+        help=(
+            "suite selector, exactly as pytest's --suite-config; default: the "
+            "suites run.yaml records, by the <name>-suite.yaml convention"
+        ),
+    )
+    record.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="log the rows that would be appended to which file; write nothing",
+    )
+    upload = subparsers.add_parser(
+        Command.UPLOAD_OUTPUT,
+        help=(
+            "copy a finished run's whole output root to the output store under "
+            "its run ULID (<store>/<run_id>/); resumable, nothing deleted"
+        ),
+    )
+    upload.add_argument(
+        "--output-root",
+        required=True,
+        type=Path,
+        help="the run's output root (the directory holding run.yaml), as a host path",
+    )
+    upload.add_argument(
+        "--store",
+        default=None,
+        metavar="STORE",
+        help="override ASSAY_OUTPUT_STORE: an s3://bucket/prefix or a local directory",
+    )
+    upload.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="the wrapper's own --dryrun plan (or a file count for a directory store); nothing written",
+    )
+    download = subparsers.add_parser(
+        Command.DOWNLOAD_OUTPUT,
+        help="copy a run's output root back from the output store by its run ULID",
+    )
+    download.add_argument(
+        "--ulid", required=True, metavar="RUN_ID", help="the run ULID"
+    )
+    download.add_argument(
+        "--dest",
+        required=True,
+        type=Path,
+        help="the directory to download into; the root lands at <dest>/<run ULID>/",
+    )
+    download.add_argument(
+        "--store",
+        default=None,
+        metavar="STORE",
+        help="override ASSAY_OUTPUT_STORE: an s3://bucket/prefix or a local directory",
+    )
+    download.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="the wrapper's own --dryrun plan (or a file count for a directory store); nothing written",
     )
     return parser
 
@@ -270,7 +380,7 @@ def _run(args: argparse.Namespace) -> int:
     # The effective configuration — the file plus every override, as
     # validated — beside the scripts it produced: re-runs the same run with
     # no override list.
-    effective = scripts_dir / EFFECTIVE_CONFIG_NAME
+    effective = scripts_dir / CONVENTIONS.effective_config
     config.to_yaml(effective)
     logger.info("wrote %s", effective)
 
@@ -304,6 +414,9 @@ def _fetch(args: argparse.Namespace) -> int:
     and .env exactly as in a pytest session (the flag wins over
     ASSAY_APPLICATION, as there); every failure is one ERROR line and exit 1,
     and a failed transfer never hides the others' outcomes."""
+    if args.record_digests and args.dry_run:
+        logger.error("--record-digests writes the suite files; drop --dry-run")
+        return 1
     settings = (
         Settings()
         if args.application is None
@@ -339,13 +452,53 @@ def _fetch(args: argparse.Namespace) -> int:
         ", ".join(suite.name for _, suite in resolved.suites),
         data_dir,
     )
-    results = stage_inputs(inputs, data_dir, dry_run=args.dry_run)
+    results = stage_inputs(
+        inputs,
+        data_dir,
+        dry_run=args.dry_run,
+        search_path=settings.input_search_path,
+        record_digests=args.record_digests,
+        platform=settings.platform,
+    )
     failed = [result for result in results if result.action == "failed"]
     for result in failed:
         logger.error("%s: %s", result.path, result.detail)
+    # The recorded digests go into every selected suite that declares the
+    # dst (identical entries across suites); a failed rewrite is an error.
+    recorded = {
+        PurePosixPath(result.path.relative_to(data_dir)): result.sha256
+        for result in results
+        if result.action == "recorded" and result.sha256 is not None
+    }
+    rewrite_failed = False
+    for suite_path, suite in resolved.suites:
+        updates = {
+            entry.dst: recorded[entry.dst]
+            for entry in suite.inputs
+            if entry.url is None and entry.dst in recorded
+        }
+        if not updates:
+            continue
+        try:
+            rewrite_suite_digests(suite_path, updates)
+        except ValueError as exc:
+            logger.error("%s", exc)
+            rewrite_failed = True
+            continue
+        for dst, digest in updates.items():
+            logger.info("%s: recorded sha256 %s for %s", suite_path, digest, dst)
+        logger.info("%s: review the diff and commit it", suite_path)
     counts = {
         action: sum(1 for r in results if r.action == action)
-        for action in ("skipped", "downloaded", "would-fetch", "failed")
+        for action in (
+            "skipped",
+            "downloaded",
+            "would-fetch",
+            "linked",
+            "would-link",
+            "recorded",
+            "failed",
+        )
     }
     logger.info(
         "fetch summary: %s",
@@ -364,7 +517,7 @@ def _fetch(args: argparse.Namespace) -> int:
         )
         # ensure_baselines logs the states itself, grouped by state and reason.
         failed_baselines = sum(1 for r in staged if r.state == "failed")
-    return 1 if failed or failed_baselines else 0
+    return 1 if failed or rewrite_failed or failed_baselines else 0
 
 
 def _publish_baselines(args: argparse.Namespace) -> int:
@@ -373,9 +526,13 @@ def _publish_baselines(args: argparse.Namespace) -> int:
     the shared plan/publish do the rest. Every failure is one ERROR line
     and exit 1; one baseline's failure never hides the others' outcomes."""
     output_root = args.output_root.resolve()
-    run_yaml = output_root / "run.yaml"
+    run_yaml = output_root / CONVENTIONS.run_manifest
     if not run_yaml.is_file():
-        logger.error("%s is not a run's output root: no run.yaml", output_root)
+        logger.error(
+            "%s is not a run's output root: no %s",
+            output_root,
+            CONVENTIONS.run_manifest,
+        )
         return 1
     with open(run_yaml) as f:
         run = RunManifest.model_validate(yaml.safe_load(f))
@@ -444,16 +601,188 @@ def _publish_baselines(args: argparse.Namespace) -> int:
     return 1 if any(r.action == "failed" for r in results) else 0
 
 
+def _record_benchmarks(args: argparse.Namespace) -> int:
+    """Append a finished run's rows to the committed per-configuration
+    files: run.yaml names the application and suites, the per-run
+    benchmarks.csv holds the rows, and each suite's rows go to
+    <suite dir>/benchmarks.csv; rows already there are left alone. Every failure is
+    one ERROR line and exit 1."""
+    output_root = args.output_root.resolve()
+    run_yaml = output_root / CONVENTIONS.run_manifest
+    per_run = output_root / CONVENTIONS.benchmarks
+    if not run_yaml.is_file():
+        logger.error(
+            "%s is not a run's output root: no %s",
+            output_root,
+            CONVENTIONS.run_manifest,
+        )
+        return 1
+    if not per_run.is_file():
+        logger.error(
+            "%s has no %s (a run older than benchmarking, or a dry run); re-run "
+            "the session to produce one",
+            output_root,
+            CONVENTIONS.benchmarks,
+        )
+        return 1
+    with open(run_yaml) as f:
+        run = RunManifest.model_validate(yaml.safe_load(f))
+    try:
+        rows = read_benchmarks_csv(per_run)
+        settings = (
+            Settings()
+            if args.application is None
+            else Settings(application=args.application)
+        )
+        resolved = resolve_suites(settings, args.suite_config or default_selector(run))
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 1
+    if resolved.application.name != run.application:
+        logger.error(
+            "run %s is a %s run, but the selected suites are %s suites",
+            run.run_id,
+            run.application,
+            resolved.application.name,
+        )
+        return 1
+    if not rows:
+        logger.info("%s holds no rows (nothing executed); nothing to record", per_run)
+        return 0
+    paths = {suite.name: path for path, suite in resolved.suites}
+    failed = False
+    for suite_name in sorted({row.suite for row in rows}):
+        mine = [row for row in rows if row.suite == suite_name]
+        if suite_name not in paths:
+            logger.error(
+                "suite %r of run %s is not in the selection; its %s row(s) were not recorded",
+                suite_name,
+                run.run_id,
+                len(mine),
+            )
+            failed = True
+            continue
+        target = paths[suite_name].parent / CONVENTIONS.benchmarks
+        if args.dry_run:
+            for row in mine:
+                logger.info(
+                    "dry run: would append %s %s to %s", row.combo_id, row.combo, target
+                )
+            continue
+        try:
+            result = append_benchmarks(target, mine)
+        except ValueError as exc:
+            logger.error("%s", exc)
+            failed = True
+            continue
+        logger.info(
+            "%s: %s appended, %s already recorded; review the diff and commit it",
+            target,
+            result.appended,
+            result.skipped,
+        )
+    return 1 if failed else 0
+
+
+def _output_store(args: argparse.Namespace) -> str | None:
+    """The output store for the two output subcommands: the --store override
+    as an init kwarg (validated like the setting), else the setting. None
+    with the error logged when the store is unreachable or invalid."""
+    try:
+        settings = (
+            Settings() if args.store is None else Settings(output_store=args.store)
+        )
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return None
+    store = settings.output_store
+    if store.startswith("s3://"):
+        try:
+            check_reachable(store)
+        except ConnectionError as exc:
+            logger.error("%s; run this from a node with network", exc)
+            return None
+    return store
+
+
+def _upload_output(args: argparse.Namespace) -> int:
+    """Upload a finished run's output root under its run ULID. Every failure
+    is one ERROR line and exit 1."""
+    output_root = args.output_root.resolve()
+    if not (output_root / CONVENTIONS.run_manifest).is_file():
+        logger.error(
+            "%s is not a run's output root: no %s",
+            output_root,
+            CONVENTIONS.run_manifest,
+        )
+        return 1
+    store = _output_store(args)
+    if store is None:
+        return 1
+    try:
+        record = upload_output(output_root, store, dry_run=args.dry_run)
+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
+        logger.error("upload of %s failed: %s", output_root, _transfer_detail(exc))
+        return 1
+    logger.info(
+        "%srun %s -> %s (%s file(s), %s bytes)",
+        "dry run: " if args.dry_run else "uploaded ",
+        record.run_id,
+        record.destination,
+        record.files,
+        record.bytes,
+    )
+    return 0
+
+
+def _download_output(args: argparse.Namespace) -> int:
+    """Download a run's output root by ULID into --dest. Every failure is one
+    ERROR line and exit 1."""
+    store = _output_store(args)
+    if store is None:
+        return 1
+    try:
+        target = download_output(
+            args.ulid, store, args.dest.resolve(), dry_run=args.dry_run
+        )
+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
+        logger.error("download of %s failed: %s", args.ulid, _transfer_detail(exc))
+        return 1
+    logger.info(
+        "%srun %s -> %s",
+        "dry run: " if args.dry_run else "downloaded ",
+        args.ulid,
+        target,
+    )
+    return 0
+
+
+def _transfer_detail(exc: Exception) -> str:
+    if isinstance(exc, subprocess.CalledProcessError):
+        output = (exc.output or "").strip()
+        tail = output.splitlines()[-1] if output else ""
+        return f"aws s3 sync exited {exc.returncode}: {tail}"
+    return str(exc)
+
+
 def main(argv: list[str] | None = None) -> int:
     # The harness's namespace logger, level from the same variable pytest
     # honours (settings.log_level, with the legacy spelling as fallback).
-    level = os.environ.get(f"{ENV_PREFIX}LOG_LEVEL") or os.environ.get(
-        f"{LEGACY_ENV_PREFIX}LOG_LEVEL", "INFO"
+    level = os.environ.get(CONVENTIONS.env_var("log_level")) or os.environ.get(
+        CONVENTIONS.env_var("log_level", legacy=True), "INFO"
     )
     configure_logging(level)
     args = _parser().parse_args(argv)
-    if args.command == "fetch":
-        return _fetch(args)
-    if args.command == "publish-baselines":
-        return _publish_baselines(args)
-    return _run(args)
+    return HANDLERS[Command(args.command)](args)
+
+
+# One handler per subcommand; `argparse` makes an unknown name unreachable and
+# the test suite makes a member without a handler a failure.
+HANDLERS: dict[Command, Callable[[argparse.Namespace], int]] = {
+    Command.RUN: _run,
+    Command.FETCH: _fetch,
+    Command.PUBLISH_BASELINES: _publish_baselines,
+    Command.RECORD_BENCHMARKS: _record_benchmarks,
+    Command.UPLOAD_OUTPUT: _upload_output,
+    Command.DOWNLOAD_OUTPUT: _download_output,
+}

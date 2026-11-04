@@ -19,7 +19,7 @@ manifest, probe, sync, cache, suite repoint), `stage` (the download half),
 """
 
 from baselines.models import (
-    CONVENTIONS,
+    BASELINE_CONVENTIONS,
     Action,
     BaselineConventions,
     BaselineFile,
@@ -44,7 +44,7 @@ from baselines.stage import ensure_baselines
 from baselines.suite import rewrite_suite_ulid
 
 __all__ = [
-    "CONVENTIONS",
+    "BASELINE_CONVENTIONS",
     "Action",
     "BaselineConventions",
     "BaselineFile",

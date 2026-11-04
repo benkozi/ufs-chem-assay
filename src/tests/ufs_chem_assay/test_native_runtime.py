@@ -58,7 +58,7 @@ def test_native_run_driver_uses_checkout_as_cwd(
     run_driver(
         _native(), _APP, _CECE, PurePosixPath("/host/out/x.yaml"), out_path, timeout_s=5
     )
-    assert out_path.read_bytes() == b"ok\n"
+    assert out_path.read_text().splitlines()[1] == "ok"  # between tic and toc
     assert check_output.call_args.kwargs["cwd"] == Path("/host/cece")
     assert check_output.call_args.kwargs["stderr"] == subprocess.STDOUT
 

@@ -19,8 +19,10 @@ def rewrite_suite_ulid(path: Path, old: str, new: str) -> None:
     from applications.registry import load_suite
 
     original = path.read_text()
+    # The value may be quoted (the all-zero placeholder must be, or YAML
+    # reads it as the integer 0); the new ULID keeps the line's quoting.
     pattern = re.compile(
-        rf"^(?P<head>[ \t]*(?:-[ \t]+)?ulid:[ \t]*){re.escape(old)}(?P<tail>[ \t]*(?:#.*)?)$",
+        rf"^(?P<head>[ \t]*(?:-[ \t]+)?ulid:[ \t]*)(?P<quote>['\"]?){re.escape(old)}(?P=quote)(?P<tail>[ \t]*(?:#.*)?)$",
         re.MULTILINE,
     )
     matches = list(pattern.finditer(original))
@@ -38,7 +40,9 @@ def rewrite_suite_ulid(path: Path, old: str, new: str) -> None:
     path.write_text(
         original[: match.start()]
         + match["head"]
+        + match["quote"]
         + new
+        + match["quote"]
         + match["tail"]
         + original[match.end() :]
     )

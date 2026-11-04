@@ -65,6 +65,11 @@ analysis:
 plotting:
   enabled: true  # default; spatial plots per NetCDF in <combo>/plots/
   gif_enabled: true  # default; per-variable animated GIF from those plots
+  scale: log  # default; log (zeros grey), symlog (zeros on the colorbar), or linear (exact min/max)
+  decades: 5  # default; log/symlog floor = suite-wide max / 10**decades, never below the smallest positive value
+  floor:  # default null; an explicit log/symlog floor in data units, overriding decades
+  bias_scale: linear  # default; bias maps symmetric at the exact max |diff|; symlog shows ULP-level structure
+  bias_decades: 5  # default; bias symlog linthresh = max |diff| / 10**bias_decades
 sweep:
   cece_data:
     streams:

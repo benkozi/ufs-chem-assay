@@ -25,10 +25,13 @@ applications:  # one section per application in the run, keyed by adapter name
       - cece_standalone_driver
 data:  # the data stage runs `ufs-chem-assay fetch` for the selected suites' inputs, then:
   warm_cartopy: true  # fetch Natural Earth coastlines on the login node
+  input_search_path: []  # ASSAY_INPUT_SEARCH_PATH: dirs fetch links url-null inputs from, by basename
 baselines:
   root_dir:  # ASSAY_BASELINE_ROOT_DIR
   enabled: false  # ASSAY_ENABLE_BASELINE_COMPARISONS; no public store yet
   store: s3://ufs-chem/baselines  # ASSAY_BASELINE_STORE: an s3://bucket/prefix or a local directory
+outputs:
+  store: s3://ufs-chem/assay-output  # ASSAY_OUTPUT_STORE: an s3://bucket/prefix or a local directory
 harness:
   suite_config: simple-maccity-suite.yaml  # regex over *-suite.yaml names; every match runs
   output_root: ufs-chem-assay-output  # relative: under the checkout; absolute: anywhere writable
@@ -37,6 +40,8 @@ harness:
   pytest_args: []  # e.g. [-x, -k, map-consd]
   publish_baselines: false  # pytest --publish-baselines: publish passing compared combos at session end
   no_suite_update: false  # pytest --no-suite-update: publish without repointing the suite files
+  record_benchmarks: true  # pytest --record-benchmarks: append the run's rows to the suites' benchmarks.csv; commit
+  upload_output: false  # pytest --upload-output: copy the whole output root to outputs.store/<run ULID> at session end
   runtime:  # ASSAY_RUNTIME; null = the platform's default (slurm here)
   launcher: ''  # ASSAY_LAUNCHER; ignored under slurm
   env:  # exported inside every driver job (ASSAY_JOB_ENV); the single-node MPI hints CECE's ctest uses
@@ -52,6 +57,9 @@ slurm:  # the per-driver job (ASSAY_SBATCH_ARGS); time limit = the suite timeout
   qos: debug  # 30 min cap per job; `batch` (8 h) for long drivers
   queue_wait_s: 3600  # queue allowance per job before the harness cancels it; hours on `batch`
   partition: u1-compute
-  cpus: 8
+  ntasks: 1  # sbatch -n and srun --ntasks: MPI tasks per driver job (the driver splits latitude bands across them)
+  cpus: 8  # sbatch -c: cores per task; the driver uses them all as threads unless env says otherwise
+  srun_args: ''  # extra srun options for the driver launch, e.g. --cpu-bind=cores
+  extra_args: ''  # extra sbatch directives, verbatim, e.g. --mem=0
 uv:
   cache_dir:  # UV_CACHE_DIR; default <root_dir>/uv-cache

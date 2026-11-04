@@ -17,7 +17,7 @@ import shlex
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
@@ -27,13 +27,11 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
+from models.conventions import CONVENTIONS, Conventions
 from platforms import Platform, Runtime, default_runtime, detect_platform
 from s3_sync import S3_URI_PATTERN
 
-ENV_PREFIX = "ASSAY_"
-LEGACY_ENV_PREFIX = "CECE_"  # accepted as a fallback for every harness setting
-_ENV_FILE = ".env"
-DEFAULT_BASELINE_STORE = "s3://ufs-chem/baselines"
+__all__ = ["CONVENTIONS", "Conventions", "Settings"]
 
 
 class Settings(BaseSettings):
@@ -43,7 +41,10 @@ class Settings(BaseSettings):
     # extra="ignore": the .env file also carries the applications' keys
     # (cece_root_dir, ...), which are not this model's business.
     model_config = SettingsConfigDict(
-        env_prefix=ENV_PREFIX, frozen=True, env_file=_ENV_FILE, extra="ignore"
+        env_prefix=CONVENTIONS.env_prefix,
+        frozen=True,
+        env_file=CONVENTIONS.env_file,
+        extra="ignore",
     )
 
     application: str | None = Field(
@@ -85,6 +86,15 @@ class Settings(BaseSettings):
             "the time limit comes from the suite timeout"
         ),
     )
+    srun_args: str = Field(
+        default="--ntasks=1",
+        description=(
+            "slurm runtime: options for the srun that launches the driver inside "
+            "each job, word-split like a shell (e.g. '--ntasks=4 --cpu-bind=cores'); "
+            "the task count is never derived from sbatch_args — the run config "
+            "renders both from its slurm.ntasks"
+        ),
+    )
     slurm_queue_wait_s: int = Field(
         default=3600,
         gt=0,
@@ -117,11 +127,19 @@ class Settings(BaseSettings):
         description="Global switch for baseline comparisons; false skips every test_baseline_comparison regardless of suite config",
     )
     baseline_store: str = Field(
-        DEFAULT_BASELINE_STORE,
+        CONVENTIONS.default_baseline_store,
         description=(
             "Where baselines are published, append-only, as <store>/<ulid>/: an "
             "S3 prefix (s3://bucket/prefix, never a bucket root) or a local "
             "directory (a Dropbox folder, a scratch area)"
+        ),
+    )
+    output_store: str = Field(
+        CONVENTIONS.default_output_store,
+        description=(
+            "Where upload-output copies a run's whole output root as "
+            "<store>/<run_id>/ (resumable, never deleting): an S3 prefix "
+            "(s3://bucket/prefix, never a bucket root) or a local directory"
         ),
     )
     baseline_atol: float | None = Field(
@@ -162,6 +180,15 @@ class Settings(BaseSettings):
             "directory is always searched last"
         ),
     )
+    input_search_path: Annotated[list[Path], NoDecode] = Field(
+        default_factory=list,
+        description=(
+            "Directories `fetch` searches recursively, by basename, for a "
+            "source-less input (url null) absent from the data directory, "
+            "linking the one match into place; os.pathsep-separated in the "
+            "environment; per-machine, never in a suite"
+        ),
+    )
 
     @classmethod
     def settings_customise_sources(
@@ -178,10 +205,12 @@ class Settings(BaseSettings):
         return (
             init_settings,
             env_settings,
-            EnvSettingsSource(settings_cls, env_prefix=LEGACY_ENV_PREFIX),
+            EnvSettingsSource(settings_cls, env_prefix=CONVENTIONS.legacy_env_prefix),
             dotenv_settings,
             DotEnvSettingsSource(
-                settings_cls, env_file=_ENV_FILE, env_prefix=LEGACY_ENV_PREFIX
+                settings_cls,
+                env_file=CONVENTIONS.env_file,
+                env_prefix=CONVENTIONS.legacy_env_prefix,
             ),
             file_secret_settings,
         )
@@ -210,18 +239,18 @@ class Settings(BaseSettings):
             name, sep, value = token.partition("=")
             if not sep or not name:
                 raise ValueError(
-                    f"{ENV_PREFIX}JOB_ENV entries must be NAME=VALUE, got {token!r}"
+                    f"{CONVENTIONS.env_var('job_env')} entries must be NAME=VALUE, got {token!r}"
                 )
             pairs[name] = value
         return pairs
 
-    @field_validator("baseline_store", mode="after")
+    @field_validator("baseline_store", "output_store", mode="after")
     @classmethod
-    def _store_is_a_prefix_or_directory(cls, value: str) -> str:
+    def _store_is_a_prefix_or_directory(cls, value: str, info: ValidationInfo) -> str:
         # An S3 prefix: normalised (no trailing slash) and never a bucket
-        # root, so the store stays apart from anything else the bucket holds.
+        # root, so a store stays apart from anything else the bucket holds.
         # Anything else is a local directory (a Dropbox folder, a scratch
-        # area): kept absolute; it need not exist until publication.
+        # area): kept absolute; it need not exist until used.
         if value.startswith("s3://"):
             value = value.rstrip("/")
             if (
@@ -229,18 +258,18 @@ class Settings(BaseSettings):
                 or not value[len("s3://") :].partition("/")[2]
             ):
                 raise ValueError(
-                    f"baseline_store must be an s3://bucket/prefix (a key prefix, "
+                    f"{info.field_name} must be an s3://bucket/prefix (a key prefix, "
                     f"not a bucket root) or a local directory, got {value!r}"
                 )
             return value
         if "://" in value or not value.strip():
             raise ValueError(
-                f"baseline_store must be an s3://bucket/prefix or a local directory, "
+                f"{info.field_name} must be an s3://bucket/prefix or a local directory, "
                 f"got {value!r}"
             )
         return str(Path(value).expanduser().resolve())
 
-    @field_validator("suite_config_search_path", mode="before")
+    @field_validator("suite_config_search_path", "input_search_path", mode="before")
     @classmethod
     def _split_search_path(cls, value: object) -> object:
         if isinstance(value, str):
