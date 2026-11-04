@@ -14,8 +14,8 @@ import pytest
 import yaml
 from pytest_mock import MockerFixture
 
+from models.conventions import CONVENTIONS
 from outputs import (
-    UPLOAD_RECORD,
     OutputUploadRecord,
     download_output,
     output_location,
@@ -72,7 +72,6 @@ def test_output_location_for_s3_and_directory_stores(tmp_path: Path) -> None:
 def test_record_fields_are_described() -> None:
     for field in OutputUploadRecord.model_fields.values():
         assert field.description, field
-    assert UPLOAD_RECORD == "upload.yaml"
 
 
 # ── upload ───────────────────────────────────────────────────────────────────
@@ -101,7 +100,7 @@ def test_upload_syncs_the_whole_root_under_its_run_id(
     assert record.uploaded_at.tzinfo is not None
     # The record was written into the root before the sync, so it went up too.
     saved = OutputUploadRecord.model_validate(
-        yaml.safe_load((root / UPLOAD_RECORD).read_text())
+        yaml.safe_load((root / CONVENTIONS.upload_record).read_text())
     )
     assert saved == record
 
@@ -115,7 +114,7 @@ def test_upload_dry_run_plans_and_writes_nothing(
     config = sync.call_args.args[0]
     assert config.dry_run
     assert not config.only_show_errors
-    assert not (root / UPLOAD_RECORD).exists()
+    assert not (root / CONVENTIONS.upload_record).exists()
     assert record.run_id == _RUN_ID
 
 
@@ -140,7 +139,7 @@ def test_upload_to_a_directory_store_copies_and_resumes(tmp_path: Path) -> None:
     assert (
         copy / "01JCOMBOCOMBOCOMBOCOMBOCOM" / "cece_20100101_010000.nc"
     ).read_bytes() == b"netcdf"
-    assert (copy / UPLOAD_RECORD).is_file()
+    assert (copy / CONVENTIONS.upload_record).is_file()
     assert record.destination == str(copy)
     # A re-upload after a change refreshes the copy; nothing is refused.
     (root / "test-report.csv").write_text("pytest_name,result\nx,passed\n")
@@ -156,7 +155,7 @@ def test_upload_to_a_directory_store_dry_run_counts_only(
     store = tmp_path / "store"
     upload_output(root, str(store), dry_run=True)
     assert not store.exists()
-    assert not (root / UPLOAD_RECORD).exists()
+    assert not (root / CONVENTIONS.upload_record).exists()
     assert any("4 file(s)" in r.getMessage() for r in caplog.records)
 
 
@@ -189,7 +188,7 @@ def test_download_syncs_into_dest_under_the_ulid(
     tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
     root = _root(tmp_path)
-    (root / UPLOAD_RECORD).write_text(
+    (root / CONVENTIONS.upload_record).write_text(
         yaml.safe_dump(
             {
                 "run_id": _RUN_ID,
@@ -331,9 +330,9 @@ def test_private_bucket_output_round_trip(tmp_path: Path) -> None:
     prefix = f"{store}/{run_id}/"
     try:
         upload_output(root, store, dry_run=True)
-        assert not (root / UPLOAD_RECORD).exists()
+        assert not (root / CONVENTIONS.upload_record).exists()
         record = upload_output(root, store)
-        assert (root / UPLOAD_RECORD).is_file()
+        assert (root / CONVENTIONS.upload_record).is_file()
         target = download_output(run_id, store, tmp_path / "back")
         assert _files(target) == _files(root)
         again = upload_output(root, store)

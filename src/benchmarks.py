@@ -27,30 +27,47 @@ from pydantic import ConfigDict, Field
 
 from logs import get_logger
 from models.base import StrictModel
+from models.conventions import CONVENTIONS
 from models.suite_config import RunManifest
 from platforms import Platform, Runtime
 from report import TestResult
 
 logger = get_logger("benchmarks")
 
-BENCHMARK_FILENAME = "benchmarks.csv"
 DriverResult = Literal["passed", "failed", "timeout"]
 
-_TIC = re.compile(r"^tic: (\S+)$", re.MULTILINE)
-_TOC = re.compile(r"^toc: (\S+)$", re.MULTILINE)
-_CLOCK_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-_SACCT_FIELDS = [
-    "JobID",
-    "Submit",
-    "Start",
-    "End",
-    "Elapsed",
-    "MaxRSS",
-    "State",
-    "ExitCode",
-]
-_SACCT_RETRY_DELAY_S = 2.0
-_RSS_UNITS = {"K": 1, "M": 1024, "G": 1024**2, "T": 1024**3}
+
+class BenchmarkConventions(StrictModel):
+    """How the timings and memory are read: the clock lines in a job's
+    output and the `sacct` query. The file name and the clock format are the
+    harness-wide `CONVENTIONS`."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tic_pattern: str = Field(
+        r"^tic: (\S+)$",
+        description="Regex (multiline) of the clock line written before the driver starts",
+    )
+    toc_pattern: str = Field(
+        r"^toc: (\S+)$",
+        description="Regex (multiline) of the clock line written after the driver exits",
+    )
+    sacct_fields: tuple[str, ...] = Field(
+        ("JobID", "Submit", "Start", "End", "Elapsed", "MaxRSS", "State", "ExitCode"),
+        description="The `sacct -o` columns, in order; a row with another count is not ours",
+    )
+    sacct_retry_delay_s: float = Field(
+        2.0,
+        ge=0,
+        description="Pause between `sacct` attempts while the job row is incomplete",
+    )
+    rss_units: Mapping[str, int] = Field(
+        {"K": 1, "M": 1024, "G": 1024**2, "T": 1024**3},
+        description="Multipliers to KiB of the suffix `sacct` puts on MaxRSS",
+    )
+
+
+BENCHMARK_CONVENTIONS = BenchmarkConventions()
 
 
 # ── Slurm accounting ─────────────────────────────────────────────────────────
@@ -105,11 +122,11 @@ def _parse_rss(text: str) -> int | None:
     if match is None:
         return None
     value, unit = match.groups()
-    return int(float(value) * _RSS_UNITS.get(unit, 1))
+    return int(float(value) * BENCHMARK_CONVENTIONS.rss_units.get(unit, 1))
 
 
 def parse_sacct(output: str, job_id: str) -> SlurmAccounting | None:
-    """`sacct -P -n -o <_SACCT_FIELDS>` output for one job: the row whose
+    """`sacct -P -n -o <sacct_fields>` output for one job: the row whose
     JobID is the job supplies the times, state and exit code; MaxRSS is the
     maximum over every row that reports one (the steps). None when the
     job's row is absent (accounting not yet written, or a wrong id)."""
@@ -117,7 +134,7 @@ def parse_sacct(output: str, job_id: str) -> SlurmAccounting | None:
     rss: list[int] = []
     for line in output.splitlines():
         parts = line.split("|")
-        if len(parts) != len(_SACCT_FIELDS):
+        if len(parts) != len(BENCHMARK_CONVENTIONS.sacct_fields):
             continue
         if parts[0] == job_id:
             job_row = parts
@@ -145,7 +162,15 @@ def slurm_accounting(job_id: str) -> SlurmAccounting | None:
     """Ask `sacct` for a finished job, retrying once after a short pause
     (accounting can trail completion by seconds). None, logged once, when
     sacct is missing, fails, or has no row for the job — never an error."""
-    argv = ["sacct", "-j", job_id, "-P", "-n", "-o", ",".join(_SACCT_FIELDS)]
+    argv = [
+        "sacct",
+        "-j",
+        job_id,
+        "-P",
+        "-n",
+        "-o",
+        ",".join(BENCHMARK_CONVENTIONS.sacct_fields),
+    ]
     for attempt in (1, 2):
         try:
             completed = subprocess.run(
@@ -166,7 +191,7 @@ def slurm_accounting(job_id: str) -> SlurmAccounting | None:
         if accounting is not None:
             return accounting
         if attempt == 1:
-            time.sleep(_SACCT_RETRY_DELAY_S)
+            time.sleep(BENCHMARK_CONVENTIONS.sacct_retry_delay_s)
     logger.warning(
         "sacct has no record of job %s yet; accounting columns left empty "
         "(sacct -j %s by hand)",
@@ -183,12 +208,17 @@ def parse_tic_toc(out_text: str) -> float | None:
     """toc - tic in seconds from the two lines the launch writes around the
     driver (`tic: <ISO UTC>` / `toc: <ISO UTC>`); None when either is absent
     or unreadable — a job killed by its time limit has tic and no toc."""
-    tic, toc = _TIC.search(out_text), _TOC.search(out_text)
+    tic = re.search(BENCHMARK_CONVENTIONS.tic_pattern, out_text, re.MULTILINE)
+    toc = re.search(BENCHMARK_CONVENTIONS.toc_pattern, out_text, re.MULTILINE)
     if tic is None or toc is None:
         return None
     try:
-        start = datetime.strptime(tic.group(1), _CLOCK_FORMAT).replace(tzinfo=UTC)
-        end = datetime.strptime(toc.group(1), _CLOCK_FORMAT).replace(tzinfo=UTC)
+        start = datetime.strptime(tic.group(1), CONVENTIONS.clock_format).replace(
+            tzinfo=UTC
+        )
+        end = datetime.strptime(toc.group(1), CONVENTIONS.clock_format).replace(
+            tzinfo=UTC
+        )
     except ValueError:
         return None
     return (end - start).total_seconds()

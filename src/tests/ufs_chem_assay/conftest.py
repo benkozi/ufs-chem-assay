@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from settings import ENV_PREFIX, LEGACY_ENV_PREFIX
+from settings import CONVENTIONS
 
 
 @pytest.fixture(autouse=True)
@@ -18,7 +18,7 @@ def hermetic_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     another hostname patches it itself — a test-level setattr overrides
     this one."""
     monkeypatch.setattr("platforms.socket.gethostname", lambda: "localhost")
-    for prefix in (ENV_PREFIX, LEGACY_ENV_PREFIX):
+    for prefix in (CONVENTIONS.env_prefix, CONVENTIONS.legacy_env_prefix):
         for key in ("PLATFORM", "RUNTIME", "LAUNCHER", "APPLICATION"):
             monkeypatch.delenv(f"{prefix}{key}", raising=False)
 

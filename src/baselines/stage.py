@@ -14,9 +14,10 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
-from baselines.models import CONVENTIONS, BaselineState, StagedBaseline
+from baselines.models import BASELINE_CONVENTIONS, BaselineState, StagedBaseline
 from baselines.store import error_detail, is_s3, location
 from logs import get_logger
+from models.conventions import CONVENTIONS
 from models.suite_config import SuiteConfig
 from s3_sync import S3SyncConfig, check_reachable, sync
 
@@ -151,7 +152,7 @@ def _stage_one(
     root_set: bool,
     dry_run: bool,
 ) -> tuple[BaselineState, str]:
-    if ulid == CONVENTIONS.unpublished_ulid:
+    if ulid == BASELINE_CONVENTIONS.unpublished_ulid:
         # A suite shipped before its first publish: nothing to look for.
         return "unpublished", (
             "the entry pins the placeholder ULID; publish-baselines fills it in"

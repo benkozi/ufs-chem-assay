@@ -19,7 +19,7 @@ from pathlib import Path
 import yaml
 
 from baselines.models import (
-    CONVENTIONS,
+    BASELINE_CONVENTIONS,
     BaselineFile,
     BaselineManifest,
     PublishRecord,
@@ -44,7 +44,7 @@ def _files(source_dir: Path) -> list[BaselineFile]:
         path
         for path in source_dir.rglob("*")
         if path.is_file()
-        and path.relative_to(source_dir).as_posix() != CONVENTIONS.manifest
+        and path.relative_to(source_dir).as_posix() != BASELINE_CONVENTIONS.manifest
     )
     return [
         BaselineFile(
@@ -79,7 +79,7 @@ def _manifest(
         # nothing.
         superseded_ulid=(
             None
-            if record.previous_ulid == CONVENTIONS.unpublished_ulid
+            if record.previous_ulid == BASELINE_CONVENTIONS.unpublished_ulid
             else record.previous_ulid
         ),
         parameters=read_parameters(output_root, record.ulid),
@@ -97,7 +97,7 @@ def _local_manifest(record: PublishRecord) -> tuple[bool, str | None]:
     """(resume, error): no manifest -> a fresh publish; one naming this ULID
     and store -> a resume (a previous attempt wrote it); anything else is
     the error to report (only a hand copy can produce it)."""
-    path = record.source_dir / CONVENTIONS.manifest
+    path = record.source_dir / BASELINE_CONVENTIONS.manifest
     if not path.is_file():
         return False, None
     with open(path) as f:
@@ -232,7 +232,7 @@ def _publish_one(
         if dry_run:
             logger.info("DRY RUN manifest for %s:\n%s", record.combo, text)
         else:
-            (record.source_dir / CONVENTIONS.manifest).write_text(text)
+            (record.source_dir / BASELINE_CONVENTIONS.manifest).write_text(text)
     if not occupied:
         error = _upload(record, dry_run=dry_run)
         if error is not None:

@@ -14,7 +14,7 @@ import yaml
 
 from applications.base import Application
 from baselines.models import (
-    CONVENTIONS,
+    BASELINE_CONVENTIONS,
     Action,
     BaselineParameter,
     PublishRecord,
@@ -22,6 +22,7 @@ from baselines.models import (
 )
 from combos import enumerate_combos
 from comparison import resolve_baseline_comparisons
+from models.conventions import CONVENTIONS
 from models.suite_config import RunManifest, SuiteConfig
 from report import TestReportRow
 
@@ -35,16 +36,19 @@ def publishable(rows: Sequence[TestReportRow]) -> tuple[bool, str]:
     against the old baseline failed. Skips are allowed (a suite with stats
     off, a dry run) — a dry run publishes nothing because its driver test
     skipped, with no special case."""
-    driver = [row for row in rows if _test_name(row) == CONVENTIONS.driver_test]
+    driver = [
+        row for row in rows if _test_name(row) == BASELINE_CONVENTIONS.driver_test
+    ]
     if not driver:
-        return False, f"{CONVENTIONS.driver_test} did not run"
+        return False, f"{BASELINE_CONVENTIONS.driver_test} did not run"
     if driver[0].result != "passed":
-        return False, f"{CONVENTIONS.driver_test} {driver[0].result}"
+        return False, f"{BASELINE_CONVENTIONS.driver_test} {driver[0].result}"
     failed = sorted(
         {
             _test_name(row)
             for row in rows
-            if row.result == "failed" and _test_name(row) != CONVENTIONS.comparison_test
+            if row.result == "failed"
+            and _test_name(row) != BASELINE_CONVENTIONS.comparison_test
         }
     )
     if failed:
@@ -118,17 +122,17 @@ def default_selector(run: RunManifest) -> str:
 
 
 def read_run(output_root: Path) -> RunManifest:
-    with open(output_root / "run.yaml") as f:
+    with open(output_root / CONVENTIONS.run_manifest) as f:
         return RunManifest.model_validate(yaml.safe_load(f))
 
 
 def read_test_report(output_root: Path) -> list[TestReportRow]:
-    frame = pd.read_csv(output_root / "test-report.csv", dtype=str)
+    frame = pd.read_csv(output_root / CONVENTIONS.test_report, dtype=str)
     return [TestReportRow.model_validate(row) for row in frame.to_dict("records")]
 
 
 def read_parameters(output_root: Path, combo_id: str) -> list[BaselineParameter]:
-    frame = pd.read_csv(output_root / "combos.csv", dtype=str)
+    frame = pd.read_csv(output_root / CONVENTIONS.combos_csv, dtype=str)
     mine = frame[frame["combo_id"] == combo_id]
     return [
         BaselineParameter(
@@ -179,7 +183,7 @@ def load_run(
     combos.csv for the run's ids. A suite the run did not execute, or one
     whose entries differ from the recorded ones, is a ValueError."""
     run = read_run(output_root)
-    combos_csv = pd.read_csv(output_root / "combos.csv", dtype=str)
+    combos_csv = pd.read_csv(output_root / CONVENTIONS.combos_csv, dtype=str)
     inputs: list[SuiteInput] = []
     for path, suite in suites:
         _entries_as_run(run, path, suite)

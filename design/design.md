@@ -668,6 +668,28 @@ AWS credentials are deliberately **not** a settings class: the AWS CLI
 resolves its own chain (credentials file, profiles, environment, SSO) and
 the harness knows nothing about it. See S3 data sync.
 
+### Conventions
+
+What is *not* a setting — the names every module agrees on and nobody
+overrides — lives on one frozen, described pydantic model,
+`models.conventions.Conventions`, instance `CONVENTIONS` (also importable
+from `settings`): the environment prefixes and the `.env` file name, the
+default stores, a run's files (`run.yaml`, `test-report.csv`, `combos.csv`,
+`descriptive_stats.csv`, `stats-comparison.csv`, `benchmarks.csv`,
+`upload.yaml`, `run-config.yaml`), the `.staging` directory and the digest
+read size shared by inputs, baselines, and output downloads, and the
+`tic:`/`toc:` clock format the runner writes and benchmarks parses.
+`CONVENTIONS.env_var("input_search_path")` spells a harness variable, so
+no module writes `ASSAY_…` by hand. Domain-only names stay beside their
+domain, on the same pattern: `baselines.models.BASELINE_CONVENTIONS` (the
+manifest, the gate's test names, the unpublished-ULID placeholder) and
+`benchmarks.BENCHMARK_CONVENTIONS` (the clock-line regexes, the `sacct`
+columns and retry, the `MaxRSS` units). Module-level constants are for a
+module's private, single-use values only (a column list, a separator, a
+regex); a name a second module needs goes on a conventions model. The CLI
+dispatches on `cli.main.Command`, a `@unique` `StrEnum` of the
+subcommands, through one handler table — never on string comparisons.
+
 ## S3 data sync
 
 `s3_sync.py` (2026-10-07, full design in
@@ -1042,8 +1064,11 @@ All code under `src/`; the project is `uv`-managed with its own
       suite_config.py     # generic SuiteConfig, InputFile, Assertions, Analysis, Plotting,
                           #   BaselineComparison, RecordedInput, RunManifest
       strict_yaml.py      # the YAML-1.2-boolean loader (configs, override values)
+      conventions.py      # CONVENTIONS: the harness-wide names (files, .staging, prefixes,
+                          #   default stores, clock format) — frozen, described, never overridden
     cli/                  # `ufs-chem-assay run`: run config model (applications map),
-                          #   overrides, per-application stage scripts, bash execution;
+                          #   overrides, per-application stage scripts, bash execution
+                          #   (main.Command, the StrEnum of subcommands, keys the handlers);
                           #   `ufs-chem-assay fetch`: stage the selected suites' inputs;
                           #   `ufs-chem-assay publish-baselines`: a finished run -> the store
     identity.py           # HARNESS_NAME, HARNESS_ROOT, harness_version/commit

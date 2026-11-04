@@ -29,18 +29,13 @@ from ulid import ULID
 
 from logs import get_logger
 from models.base import StrictModel
+from models.conventions import CONVENTIONS
 from models.suite_config import InputFile, SuiteConfig
 from platforms import Platform
 from s3_sync import S3SyncConfig, check_reachable, sync
 
 logger = get_logger("staging")
 
-# Per-fetch staging directories live here, under the data directory, so the
-# final move is a rename on one filesystem; a leftover from a killed run is
-# removed at the start of the next staging pass.
-STAGING_DIRNAME = ".staging"
-_CHUNK = 1024 * 1024
-ENV_INPUT_SEARCH_PATH = "ASSAY_INPUT_SEARCH_PATH"
 
 Action = Literal[
     "skipped", "downloaded", "would-fetch", "linked", "would-link", "recorded", "failed"
@@ -102,7 +97,7 @@ def missing_inputs(inputs: Sequence[InputFile], data_dir: Path) -> list[Path]:
 def _digest(path: Path) -> str:
     sha = hashlib.sha256()
     with open(path, "rb") as f:
-        while chunk := f.read(_CHUNK):
+        while chunk := f.read(CONVENTIONS.digest_chunk):
             sha.update(chunk)
     return sha.hexdigest()
 
@@ -226,7 +221,7 @@ def _link_source_less(
         search = ", ".join(str(d) for d in search_path)
         if not search_path:
             return (
-                f"absent and no input search path is set ({ENV_INPUT_SEARCH_PATH}); "
+                f"absent and no input search path is set ({CONVENTIONS.env_var('input_search_path')}); "
                 f"place or link the file at {target}"
             ), ""
         found = _find_source(target.name, search_path)
@@ -329,7 +324,9 @@ def stage_inputs(
     declared one is reported `recorded` with its digest instead of failed.
     A dry run classifies, plans links, and passes the wrapper's own dry run
     through for the files it would fetch; it writes nothing."""
-    staging_root = data_dir / STAGING_DIRNAME
+    # Under the data directory, so the final move is a rename on one filesystem;
+    # a leftover from a killed run is removed at the start of the next pass.
+    staging_root = data_dir / CONVENTIONS.staging_dirname
     if staging_root.exists():
         logger.info("removing stale staging directory %s", staging_root)
         shutil.rmtree(staging_root)

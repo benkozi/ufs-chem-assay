@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from platforms import Platform, Runtime
-from settings import ENV_PREFIX, LEGACY_ENV_PREFIX, Settings
+from settings import CONVENTIONS, Settings
 
 _SCRUBBED = (
     "APPLICATION",
@@ -30,7 +30,7 @@ _SCRUBBED = (
 
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> pytest.MonkeyPatch:
-    for prefix in (ENV_PREFIX, LEGACY_ENV_PREFIX):
+    for prefix in (CONVENTIONS.env_prefix, CONVENTIONS.legacy_env_prefix):
         for key in _SCRUBBED:
             monkeypatch.delenv(f"{prefix}{key}", raising=False)
     monkeypatch.delenv("CECE_ROOT_DIR", raising=False)
@@ -39,8 +39,8 @@ def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> pytest.MonkeyP
 
 
 def test_prefixes() -> None:
-    assert ENV_PREFIX == "ASSAY_"
-    assert LEGACY_ENV_PREFIX == "CECE_"
+    assert CONVENTIONS.env_prefix == "ASSAY_"
+    assert CONVENTIONS.legacy_env_prefix == "CECE_"
 
 
 def test_no_application_settings_on_the_harness_model(
@@ -147,7 +147,8 @@ def test_input_search_path_defaults_empty_and_splits_on_pathsep(
     # directories, never in a suite.
     assert Settings().input_search_path == []
     clean_env.setenv(
-        f"{ENV_PREFIX}INPUT_SEARCH_PATH", os.pathsep.join(["/data/a", "/data/b"])
+        f"{CONVENTIONS.env_prefix}INPUT_SEARCH_PATH",
+        os.pathsep.join(["/data/a", "/data/b"]),
     )
     assert Settings().input_search_path == [Path("/data/a"), Path("/data/b")]
 
@@ -164,8 +165,8 @@ def test_baseline_tolerance_overrides_default_to_none_and_read_from_env(
     clean_env: pytest.MonkeyPatch,
 ) -> None:
     assert (Settings().baseline_atol, Settings().baseline_rtol) == (None, None)
-    clean_env.setenv(f"{ENV_PREFIX}BASELINE_ATOL", "1e-24")
-    clean_env.setenv(f"{ENV_PREFIX}BASELINE_RTOL", "1e-12")
+    clean_env.setenv(f"{CONVENTIONS.env_prefix}BASELINE_ATOL", "1e-24")
+    clean_env.setenv(f"{CONVENTIONS.env_prefix}BASELINE_RTOL", "1e-12")
     assert (Settings().baseline_atol, Settings().baseline_rtol) == (1e-24, 1e-12)
     assert (
         Settings(baseline_rtol=0.0).baseline_rtol == 0.0
@@ -187,11 +188,11 @@ def test_output_store_defaults_and_shares_the_store_validator(
     clean_env: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     assert Settings().output_store == "s3://ufs-chem/assay-output"
-    clean_env.setenv(f"{ENV_PREFIX}OUTPUT_STORE", "s3://other/outputs/")
+    clean_env.setenv(f"{CONVENTIONS.env_prefix}OUTPUT_STORE", "s3://other/outputs/")
     assert Settings().output_store == "s3://other/outputs"
-    clean_env.setenv(f"{ENV_PREFIX}OUTPUT_STORE", str(tmp_path / "outputs"))
+    clean_env.setenv(f"{CONVENTIONS.env_prefix}OUTPUT_STORE", str(tmp_path / "outputs"))
     assert Settings().output_store == str(tmp_path / "outputs")
-    clean_env.setenv(f"{ENV_PREFIX}OUTPUT_STORE", "s3://bucket-root")
+    clean_env.setenv(f"{CONVENTIONS.env_prefix}OUTPUT_STORE", "s3://bucket-root")
     with pytest.raises(ValidationError, match="output_store"):
         Settings()
 
@@ -200,7 +201,9 @@ def test_srun_args_defaults_to_one_task_and_reads_from_env(
     clean_env: pytest.MonkeyPatch,
 ) -> None:
     assert Settings(platform=Platform.LOCAL).srun_args == "--ntasks=1"
-    clean_env.setenv(f"{ENV_PREFIX}SRUN_ARGS", "--ntasks=4 --cpu-bind=cores")
+    clean_env.setenv(
+        f"{CONVENTIONS.env_prefix}SRUN_ARGS", "--ntasks=4 --cpu-bind=cores"
+    )
     assert Settings(platform=Platform.LOCAL).srun_args == "--ntasks=4 --cpu-bind=cores"
 
 

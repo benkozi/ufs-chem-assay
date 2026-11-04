@@ -21,6 +21,8 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
+from collections.abc import Callable
+from enum import StrEnum, unique
 from pathlib import Path, PurePosixPath
 
 import yaml
@@ -28,17 +30,18 @@ import yaml
 from applications.base import Application, Stage
 from applications.registry import get_application
 from baselines import default_selector, ensure_baselines, load_run, plan, publish
-from benchmarks import BENCHMARK_FILENAME, append_benchmarks, read_benchmarks_csv
+from benchmarks import append_benchmarks, read_benchmarks_csv
 from cli.run_config import RunConfig
 from cli.shell import run_bash, write_script
 from cli.stages import render_stage
 from logs import configure_logging, get_logger
+from models.conventions import CONVENTIONS
 from models.suite_config import RunManifest
 from outputs import download_output, upload_output
 from platforms import Platform
 from s3_sync import check_reachable
 from selection import resolve_suites
-from settings import ENV_PREFIX, LEGACY_ENV_PREFIX, Settings
+from settings import Settings
 from staging import merge_inputs, rewrite_suite_digests, stage_inputs
 
 logger = get_logger("cli")
@@ -46,7 +49,18 @@ logger = get_logger("cli")
 # Script file numbering: fixed slots in the canonical order, so the harness
 # stage is always 05 (slot 04 is held for the application's own tests, issue #9).
 _INDEX = {Stage.SOURCE: 1, Stage.BUILD: 2, Stage.DATA: 3, Stage.HARNESS: 5}
-EFFECTIVE_CONFIG_NAME = "run-config.yaml"
+
+
+@unique
+class Command(StrEnum):
+    """The subcommands, each the name `argparse` sees and the key of its handler."""
+
+    RUN = "run"
+    FETCH = "fetch"
+    PUBLISH_BASELINES = "publish-baselines"
+    RECORD_BENCHMARKS = "record-benchmarks"
+    UPLOAD_OUTPUT = "upload-output"
+    DOWNLOAD_OUTPUT = "download-output"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -60,7 +74,9 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    run = subparsers.add_parser("run", help="render the stage scripts and execute them")
+    run = subparsers.add_parser(
+        Command.RUN, help="render the stage scripts and execute them"
+    )
     run.add_argument(
         "--config-file",
         required=True,
@@ -125,7 +141,7 @@ def _parser() -> argparse.ArgumentParser:
         help="write every script under <root_dir>/scripts/ and stop: nothing executes",
     )
     fetch = subparsers.add_parser(
-        "fetch",
+        Command.FETCH,
         help=(
             "stage the inputs the selected suites declare into the application "
             "checkout's data directory (present, verified files are skipped)"
@@ -162,7 +178,7 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     publish_parser = subparsers.add_parser(
-        "publish-baselines",
+        Command.PUBLISH_BASELINES,
         help=(
             "publish a finished run's compared combinations (the suites' "
             "baseline_comparisons entries) as new baselines in the S3 store and "
@@ -213,7 +229,7 @@ def _parser() -> argparse.ArgumentParser:
         help="publish, but leave the suite files alone (the ULIDs are logged)",
     )
     record = subparsers.add_parser(
-        "record-benchmarks",
+        Command.RECORD_BENCHMARKS,
         help=(
             "append a finished run's benchmark rows (<output root>/benchmarks.csv, "
             "one per executed combination) to each suite's committed configuration "
@@ -247,7 +263,7 @@ def _parser() -> argparse.ArgumentParser:
         help="log the rows that would be appended to which file; write nothing",
     )
     upload = subparsers.add_parser(
-        "upload-output",
+        Command.UPLOAD_OUTPUT,
         help=(
             "copy a finished run's whole output root to the output store under "
             "its run ULID (<store>/<run_id>/); resumable, nothing deleted"
@@ -271,7 +287,7 @@ def _parser() -> argparse.ArgumentParser:
         help="the wrapper's own --dryrun plan (or a file count for a directory store); nothing written",
     )
     download = subparsers.add_parser(
-        "download-output",
+        Command.DOWNLOAD_OUTPUT,
         help="copy a run's output root back from the output store by its run ULID",
     )
     download.add_argument(
@@ -364,7 +380,7 @@ def _run(args: argparse.Namespace) -> int:
     # The effective configuration — the file plus every override, as
     # validated — beside the scripts it produced: re-runs the same run with
     # no override list.
-    effective = scripts_dir / EFFECTIVE_CONFIG_NAME
+    effective = scripts_dir / CONVENTIONS.effective_config
     config.to_yaml(effective)
     logger.info("wrote %s", effective)
 
@@ -510,9 +526,13 @@ def _publish_baselines(args: argparse.Namespace) -> int:
     the shared plan/publish do the rest. Every failure is one ERROR line
     and exit 1; one baseline's failure never hides the others' outcomes."""
     output_root = args.output_root.resolve()
-    run_yaml = output_root / "run.yaml"
+    run_yaml = output_root / CONVENTIONS.run_manifest
     if not run_yaml.is_file():
-        logger.error("%s is not a run's output root: no run.yaml", output_root)
+        logger.error(
+            "%s is not a run's output root: no %s",
+            output_root,
+            CONVENTIONS.run_manifest,
+        )
         return 1
     with open(run_yaml) as f:
         run = RunManifest.model_validate(yaml.safe_load(f))
@@ -588,17 +608,21 @@ def _record_benchmarks(args: argparse.Namespace) -> int:
     <suite dir>/benchmarks.csv; rows already there are left alone. Every failure is
     one ERROR line and exit 1."""
     output_root = args.output_root.resolve()
-    run_yaml = output_root / "run.yaml"
-    per_run = output_root / BENCHMARK_FILENAME
+    run_yaml = output_root / CONVENTIONS.run_manifest
+    per_run = output_root / CONVENTIONS.benchmarks
     if not run_yaml.is_file():
-        logger.error("%s is not a run's output root: no run.yaml", output_root)
+        logger.error(
+            "%s is not a run's output root: no %s",
+            output_root,
+            CONVENTIONS.run_manifest,
+        )
         return 1
     if not per_run.is_file():
         logger.error(
             "%s has no %s (a run older than benchmarking, or a dry run); re-run "
             "the session to produce one",
             output_root,
-            BENCHMARK_FILENAME,
+            CONVENTIONS.benchmarks,
         )
         return 1
     with open(run_yaml) as f:
@@ -638,7 +662,7 @@ def _record_benchmarks(args: argparse.Namespace) -> int:
             )
             failed = True
             continue
-        target = paths[suite_name].parent / BENCHMARK_FILENAME
+        target = paths[suite_name].parent / CONVENTIONS.benchmarks
         if args.dry_run:
             for row in mine:
                 logger.info(
@@ -685,8 +709,12 @@ def _upload_output(args: argparse.Namespace) -> int:
     """Upload a finished run's output root under its run ULID. Every failure
     is one ERROR line and exit 1."""
     output_root = args.output_root.resolve()
-    if not (output_root / "run.yaml").is_file():
-        logger.error("%s is not a run's output root: no run.yaml", output_root)
+    if not (output_root / CONVENTIONS.run_manifest).is_file():
+        logger.error(
+            "%s is not a run's output root: no %s",
+            output_root,
+            CONVENTIONS.run_manifest,
+        )
         return 1
     store = _output_store(args)
     if store is None:
@@ -740,19 +768,21 @@ def _transfer_detail(exc: Exception) -> str:
 def main(argv: list[str] | None = None) -> int:
     # The harness's namespace logger, level from the same variable pytest
     # honours (settings.log_level, with the legacy spelling as fallback).
-    level = os.environ.get(f"{ENV_PREFIX}LOG_LEVEL") or os.environ.get(
-        f"{LEGACY_ENV_PREFIX}LOG_LEVEL", "INFO"
+    level = os.environ.get(CONVENTIONS.env_var("log_level")) or os.environ.get(
+        CONVENTIONS.env_var("log_level", legacy=True), "INFO"
     )
     configure_logging(level)
     args = _parser().parse_args(argv)
-    if args.command == "fetch":
-        return _fetch(args)
-    if args.command == "record-benchmarks":
-        return _record_benchmarks(args)
-    if args.command == "upload-output":
-        return _upload_output(args)
-    if args.command == "download-output":
-        return _download_output(args)
-    if args.command == "publish-baselines":
-        return _publish_baselines(args)
-    return _run(args)
+    return HANDLERS[Command(args.command)](args)
+
+
+# One handler per subcommand; `argparse` makes an unknown name unreachable and
+# the test suite makes a member without a handler a failure.
+HANDLERS: dict[Command, Callable[[argparse.Namespace], int]] = {
+    Command.RUN: _run,
+    Command.FETCH: _fetch,
+    Command.PUBLISH_BASELINES: _publish_baselines,
+    Command.RECORD_BENCHMARKS: _record_benchmarks,
+    Command.UPLOAD_OUTPUT: _upload_output,
+    Command.DOWNLOAD_OUTPUT: _download_output,
+}

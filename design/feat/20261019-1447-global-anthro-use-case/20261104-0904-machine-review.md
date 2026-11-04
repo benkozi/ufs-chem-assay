@@ -141,6 +141,59 @@ None: the four comments are unambiguous and all accepted.
 - A batch `download-output` (several ULIDs) would make the concurrent-staging property load-bearing; the fix here already supports it.
 - The machine review's spike (`design/spike/20261104-0836-…`) could be re-run after the four commits to confirm it finds nothing new; that is the user's call.
 
+## Second round: the human review (2026-11-04)
+
+Six inline comments by the repository owner on the same PR (read 2026-11-04, after the four machine comments were answered in `09cac10`): ids 4470706315, 4470719056, 4470842648, 4470853195, 4470892524, 4470903746. They are one theme — module-level constants scattered across modules, some duplicated, when the repository's own pattern (`BaselineConventions`/`CONVENTIONS` in `src/baselines/models.py`) is a frozen pydantic model with described fields — plus one CLI nit. All six are accepted.
+
+### Audit (2026-11-04, checkout at `09cac10`)
+
+- `src/cli/main.py:31` — "benchmark_filename should be part of settings": `BENCHMARK_FILENAME` is a bare string in `benchmarks.py`, imported by `cli/main.py`, `tests/conftest.py`, and three test modules. `EFFECTIVE_CONFIG_NAME = "run-config.yaml"` sits beside it in `cli/main.py`; `"run.yaml"` is spelled as a literal three times in `cli/main.py`, twice in `tests/conftest.py`, once in `baselines/plan.py`, and once as `RUN_MANIFEST` in `outputs.py`; `"combos.csv"`, `"test-report.csv"`, `"descriptive_stats.csv"`, `"stats-comparison.csv"` are literals in `tests/conftest.py` and `baselines/plan.py`.
+- `src/cli/main.py:757` — "can args.command be compared to a unique strenum?": `main` dispatches with five `if args.command == "<literal>"` lines and a fall-through to `_run`; the subcommand names are typed a second time in `_parser`'s `add_parser` calls. The repository already uses `@unique class X(StrEnum)` for `Platform`, `Runtime`, and the suite enums.
+- `src/benchmarks.py:53` — `_TIC`, `_TOC`, `_CLOCK_FORMAT`, `_SACCT_FIELDS`, `_SACCT_RETRY_DELAY_S`, `_RSS_UNITS` are six module globals. `_CLOCK_FORMAT` duplicates `runner.CLOCK_FORMAT` (the writer and the parser of the same `tic:`/`toc:` lines; the sbatch template spells the same format for `date -u`, which cannot share a Python constant).
+- `src/outputs.py:33` — `UPLOAD_RECORD`, `RUN_MANIFEST`, `_STAGING_DIRNAME`; the last is the third spelling of `.staging` (`staging.STAGING_DIRNAME`, `BaselineConventions.staging_dirname`).
+- `src/settings.py:37` — `ENV_PREFIX`, `LEGACY_ENV_PREFIX`, `_ENV_FILE`, `DEFAULT_BASELINE_STORE`, `DEFAULT_OUTPUT_STORE`; the prefixes are imported by `cli/main.py`, `cli/stages.py`, and two test conftests, the defaults by `cli/run_config.py`.
+- `src/staging.py:43` — `STAGING_DIRNAME`, `_CHUNK` (duplicates `BaselineConventions.digest_chunk`), `ENV_INPUT_SEARCH_PATH` (the prefix spelled out by hand: `"ASSAY_INPUT_SEARCH_PATH"`, while `cli/stages.py` builds the same name from `ENV_PREFIX`).
+- **Left where they are, deliberately** (single-owner, single-use, not conventions of the harness as a whole): `cli/override.KEY_SEPARATOR`, `combos.NAME_SEPARATOR`, `cli/stages._DRIVER_COMBOS/_SHEBANG/SETTINGS_NOT_MIRRORED/LMOD_INIT`, `report._RESULT_PRECEDENCE/_REPORT_COLUMNS`, `analysis._STATS_PER_VARIABLE`, `comparison._COMPARISON_COLUMNS`, `s3_sync.S3_URI_PATTERN/_S3_SCHEME/_S3_ARN_PREFIX/_INSTALL_HINT`, `selection.BUILTIN_CONFIG_DIR`, `plotting.PLOTS_DIRNAME/BIAS_PLOTS_DIRNAME/_FRAME_DURATION_MS/_FOOTER/ZERO_COLOR`, `models/suite_config.IGNORE_VALUE/S3_OBJECT_URI_PATTERN/SHA256_PATTERN`, `identity.HARNESS_NAME/HARNESS_ROOT`, `logs.LOGGER_NAME/_FORMAT`, `cli/main._INDEX`, and the adapter's own `applications/cece/settings.ENV_PREFIX = "CECE_"` (the application's prefix; that it equals the harness's legacy prefix is history, not a shared convention). The baseline-only names (`manifest`, `driver_test`, `comparison_test`, `unpublished_ulid`) stay on `BaselineConventions`.
+
+### 6. One harness-wide conventions model — `src/models/conventions.py` (new)
+
+`class Conventions(StrictModel)`, frozen, every field `Field(default, description=...)`, one module instance `CONVENTIONS`. The names every module agrees on, grouped by what they are:
+
+- **Environment**: `env_prefix = "ASSAY_"`, `legacy_env_prefix = "CECE_"`, `env_file = ".env"`; a method `env_var(name) -> str` (`CONVENTIONS.env_var("input_search_path") == "ASSAY_INPUT_SEARCH_PATH"`) so no module spells a variable name by hand again.
+- **Default stores**: `default_baseline_store = "s3://ufs-chem/baselines"`, `default_output_store = "s3://ufs-chem/assay-output"` (`Settings` field defaults and the run config's `baselines.store`/`outputs.store` defaults read these).
+- **A run's files** (written by the pytest session, read by publish/record/upload): `run_manifest = "run.yaml"`, `test_report = "test-report.csv"`, `combos_csv = "combos.csv"`, `descriptive_stats = "descriptive_stats.csv"`, `stats_comparison = "stats-comparison.csv"`, `benchmarks = "benchmarks.csv"`, `upload_record = "upload.yaml"`, `effective_config = "run-config.yaml"`.
+- **Transfers**: `staging_dirname = ".staging"` (inputs, baselines, output downloads — one spelling), `digest_chunk = 1 MiB` (the SHA-256 read size for inputs and baselines).
+- **Clock**: `clock_format = "%Y-%m-%dT%H:%M:%SZ"` (the `tic:`/`toc:` lines `runner` writes and `benchmarks` parses).
+
+`BaselineConventions` loses `staging_dirname` and `digest_chunk` (they were the duplicates) and its instance is renamed `BASELINE_CONVENTIONS`, so the two models are never confused at an import site. `settings.py` imports `CONVENTIONS` for its `SettingsConfigDict` (`env_prefix`, `env_file`), the legacy sources, and the two store defaults, and re-exports it so `from settings import CONVENTIONS` works — the answer to "part of settings": the file name is not an environment-derived, overridable value (nothing on `Settings` is fixed), so it is a convention beside `run.yaml` and `.staging`, reachable from `settings`.
+
+### 7. The benchmarking knobs — `src/benchmarks.py`
+
+`class BenchmarkConventions(StrictModel)`, frozen, instance `BENCHMARK_CONVENTIONS`: `tic_pattern`, `toc_pattern` (the regex sources; compiled at the use site — `re` caches), `sacct_fields` (the `-o` list, a tuple), `sacct_retry_delay_s`, `rss_units` (the `MaxRSS` suffix multipliers). The clock format comes from the shared model; `runner.CLOCK_FORMAT` goes.
+
+### 8. The output-upload names — `src/outputs.py`
+
+The three module constants go; the module reads `CONVENTIONS.upload_record`, `CONVENTIONS.run_manifest`, `CONVENTIONS.staging_dirname`.
+
+### 9. The input-staging names — `src/staging.py`
+
+`STAGING_DIRNAME`, `_CHUNK`, `ENV_INPUT_SEARCH_PATH` go; the module reads `CONVENTIONS.staging_dirname`, `CONVENTIONS.digest_chunk`, `CONVENTIONS.env_var("input_search_path")`.
+
+### 10. The CLI dispatch — `src/cli/main.py`
+
+`@unique class Command(StrEnum)`: `RUN = "run"`, `FETCH = "fetch"`, `PUBLISH_BASELINES = "publish-baselines"`, `RECORD_BENCHMARKS = "record-benchmarks"`, `UPLOAD_OUTPUT = "upload-output"`, `DOWNLOAD_OUTPUT = "download-output"`. `_parser` registers each subparser by its member, and `main` resolves `Command(args.command)` and dispatches through one `dict[Command, Callable[[Namespace], int]]` — no string comparisons, and a member without a handler is a test failure (`test_every_command_has_a_handler`). `EFFECTIVE_CONFIG_NAME` becomes `CONVENTIONS.effective_config`; the `run.yaml` and `benchmarks.csv` literals become the model's fields.
+
+### 11. Tests
+
+- New `test_conventions.py`: every field described; the model frozen and `extra="forbid"`; `env_var` builds `ASSAY_*` names; the values pinned (`run.yaml`, `.staging`, the prefixes, the stores) so a change is a deliberate one.
+- `test_benchmarks.py`: `BENCHMARK_CONVENTIONS` fields described; the `BENCHMARK_FILENAME` assertion moves to the shared model; `sacct` tests keep their field list through the model.
+- `test_cli.py`: `Command` is unique, its values are exactly the parser's subcommands, and every member dispatches.
+- The modules that imported the moved names (`tests/conftest.py`, `tests/ufs_chem_assay/conftest.py`, `test_settings.py`, `test_staging.py`, `test_outputs.py`, `test_cli.py`, `test_benchmarks.py`, `test_baselines.py`) import from the models instead. Literal file names in tests stay literal where they pin the on-disk name on purpose.
+
+### 12. Documentation and replies
+
+`design.md` gets a short "Conventions" paragraph (the model, where it lives, what belongs on it and what does not). README is unchanged (no user-facing surface moves). The six replies are drafted in the Implementation notes and appended to `replies_payload.json`.
+
 ## Implementation notes (2026-11-04)
 
 Implemented as designed, red → green, one change per comment; the user commits (one commit per comment is the suggested shape) and fills the SHAs into `design/spike/20261104-0836-global-anthro-pr-35-review/replies_payload.json` before posting.
@@ -152,6 +205,21 @@ Implemented as designed, red → green, one change per comment; the user commits
 - `design.md`: the output-upload paragraph notes the per-run cleanup.
 
 **Gates**: harness suite passed at 100 % coverage, hooks green, every suite dry-runs. The reply payload has the four bodies with `<commit>` placeholders.
+
+## Implementation notes, second round (2026-11-04)
+
+Implemented as designed in sections 6–12, red → green; the user commits (one commit for the consolidation is the natural shape — the six comments are one change — and fills its SHA into the six new entries of `replies_payload.json` before posting).
+
+- **`src/models/conventions.py`** (new): `Conventions`/`CONVENTIONS` — the prefixes and `.env` name, the default stores, the eight run-file names, `.staging`, the digest chunk, the clock format, and `env_var(name, legacy=False)`. Every field described; frozen; `extra="forbid"`.
+- **`src/baselines/models.py`**: `BaselineConventions` keeps `manifest`, `driver_test`, `comparison_test`, `unpublished_ulid`; the instance is `BASELINE_CONVENTIONS` (`baselines/__init__.py`, `plan.py`, `publish.py`, `stage.py` follow); `stage.py` and `store.py` read `.staging` and the digest chunk from the shared model; `plan.py` reads `run.yaml`, `test-report.csv`, `combos.csv` through it.
+- **`src/settings.py`**: the five module constants are gone; `SettingsConfigDict`, the legacy sources, the store defaults, and the `JOB_ENV` error read `CONVENTIONS`; `__all__` re-exports `CONVENTIONS` and `Conventions`. `cli/run_config.py` takes the store defaults from the model; `cli/stages.py` spells every export with `CONVENTIONS.env_var(...)`.
+- **`src/cli/main.py`**: `Command` (`@unique` `StrEnum`), the subparsers registered by member, `HANDLERS` (one entry per member), `main` → `HANDLERS[Command(args.command)](args)`; `EFFECTIVE_CONFIG_NAME` and the `run.yaml`/`benchmarks.csv` literals → the model; the log-level lookup → `env_var("log_level")` and its legacy twin.
+- **`src/benchmarks.py`**: `BenchmarkConventions`/`BENCHMARK_CONVENTIONS` (`tic_pattern`, `toc_pattern`, `sacct_fields`, `sacct_retry_delay_s`, `rss_units`); the clock format from the shared model. **`src/runner.py`**: `CLOCK_FORMAT` gone, the clock line uses `CONVENTIONS.clock_format`. **`src/outputs.py`**, **`src/staging.py`**: their constants gone, the model read instead. **`src/tests/conftest.py`**: `benchmarks.csv`, `run.yaml`, `test-report.csv`, `descriptive_stats.csv`, `stats-comparison.csv`, `combos.csv` written through the model.
+- **Tests**: `test_conventions.py` (descriptions, frozen/strict, the pinned values, `env_var`, the baseline model's narrowed fields, the `settings` re-export); `test_cli.py` (`test_commands_are_the_parsers_subcommands`, `test_every_command_has_a_handler`); `test_benchmarks.py` (the benchmark model's descriptions and two values); the importers of the moved names repointed (`tests/ufs_chem_assay/conftest.py`, `test_settings.py`, `test_staging.py`, `test_outputs.py`, `test_cli.py`, `test_baselines.py`). Literal file names in tests that pin an on-disk name stay literal.
+- **`design.md`**: a "Conventions" subsection under Settings (what belongs on the model and what does not; the `Command` enum) and the layout tree (`models/conventions.py`, `cli/`).
+- **Unchanged on purpose**: the constants listed under "Left where they are" in the audit; the sbatch template's `date -u +%Y-%m-%dT%H:%M:%SZ` (shell, the same format by convention — `test_slurm_runtime` would catch a drift through `parse_tic_toc`); README (no user-facing surface moved).
+
+**Gates**: harness suite 788 passed at 100 % coverage; all hooks green (ruff, mypy strict, vulture, codespell, yamllint, yamlfix); every suite dry-runs (2907 combinations skipped). One test, `test_analysis.py::test_compute_file_stats_min_positive_is_null_for_an_all_zero_field`, fails in this session's sandbox with `PermissionError` from netCDF4 writing its temporary `zeros.nc`; it fails identically on an export of the committed tree (`09cac10`), touches nothing this change touched, and passed in the earlier sessions of this branch — an environment matter to re-check outside the sandbox, not a regression. The docker `simple-maccity` run (no `--dry-run`, default output root): 21 passed; the output root carries `run.yaml`, `combos.csv`, `test-report.csv`, `descriptive_stats.csv`, `stats-comparison.csv`, `benchmarks.csv` (3 rows, one per combination, each also in its combo directory) and the `.out` files' `tic:`/`toc:` lines parse — every renamed name round-trips through the real session.
 
 # appendix: original notes
 
@@ -203,3 +271,4 @@ The review as read on 2026-11-04 (one machine-generated review, four inline comm
 
 - 2026-11-04 (refinement, no user input beyond the requirement): the four comments were checked against the code; all four are valid and accepted. Beyond them, the audit found three more stale passages in the suite header (the override list, the placeholder digests, the copy instruction), so the header is rewritten whole. The reply texts are drafted in section 4 for the user to post with the commit SHAs; one commit per comment is the suggested shape. No files other than this document were created or changed.
 - 2026-11-04 (user: how would we auto-respond to comments? create a payload like the review one; then: implement): replies have no draft state in GitHub's REST API (one `POST …/comments/{id}/replies` per thread), so the human step is reviewing the payload before posting; `replies_payload.json` sits beside the review payload with the four bodies, the comment ids, and `<commit>` placeholders. The four changes are implemented (Implementation notes); the user commits, fills the SHAs, posts the replies.
+- 2026-11-04 (user: read the six new human comments on PR 35 and respond/implement): all six accepted — the scattered module constants (`benchmarks.py`, `outputs.py`, `settings.py`, `staging.py`) consolidate into one frozen `Conventions` model in `src/models/conventions.py` (plus a `BenchmarkConventions` for the `sacct`/`tic`/`toc` knobs), which also removes the repeats the last comment pointed at (`.staging` ×3, the digest chunk ×2, the clock format ×2, `run.yaml` ×7, the hand-spelled `ASSAY_INPUT_SEARCH_PATH`); `BaselineConventions` keeps only its baseline-specific names as `BASELINE_CONVENTIONS`; the CLI dispatches on a `@unique` `Command` `StrEnum`. Sections 6–12 above; replies in the Implementation notes.

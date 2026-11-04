@@ -27,14 +27,11 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
+from models.conventions import CONVENTIONS, Conventions
 from platforms import Platform, Runtime, default_runtime, detect_platform
 from s3_sync import S3_URI_PATTERN
 
-ENV_PREFIX = "ASSAY_"
-LEGACY_ENV_PREFIX = "CECE_"  # accepted as a fallback for every harness setting
-_ENV_FILE = ".env"
-DEFAULT_BASELINE_STORE = "s3://ufs-chem/baselines"
-DEFAULT_OUTPUT_STORE = "s3://ufs-chem/assay-output"
+__all__ = ["CONVENTIONS", "Conventions", "Settings"]
 
 
 class Settings(BaseSettings):
@@ -44,7 +41,10 @@ class Settings(BaseSettings):
     # extra="ignore": the .env file also carries the applications' keys
     # (cece_root_dir, ...), which are not this model's business.
     model_config = SettingsConfigDict(
-        env_prefix=ENV_PREFIX, frozen=True, env_file=_ENV_FILE, extra="ignore"
+        env_prefix=CONVENTIONS.env_prefix,
+        frozen=True,
+        env_file=CONVENTIONS.env_file,
+        extra="ignore",
     )
 
     application: str | None = Field(
@@ -127,7 +127,7 @@ class Settings(BaseSettings):
         description="Global switch for baseline comparisons; false skips every test_baseline_comparison regardless of suite config",
     )
     baseline_store: str = Field(
-        DEFAULT_BASELINE_STORE,
+        CONVENTIONS.default_baseline_store,
         description=(
             "Where baselines are published, append-only, as <store>/<ulid>/: an "
             "S3 prefix (s3://bucket/prefix, never a bucket root) or a local "
@@ -135,7 +135,7 @@ class Settings(BaseSettings):
         ),
     )
     output_store: str = Field(
-        DEFAULT_OUTPUT_STORE,
+        CONVENTIONS.default_output_store,
         description=(
             "Where upload-output copies a run's whole output root as "
             "<store>/<run_id>/ (resumable, never deleting): an S3 prefix "
@@ -205,10 +205,12 @@ class Settings(BaseSettings):
         return (
             init_settings,
             env_settings,
-            EnvSettingsSource(settings_cls, env_prefix=LEGACY_ENV_PREFIX),
+            EnvSettingsSource(settings_cls, env_prefix=CONVENTIONS.legacy_env_prefix),
             dotenv_settings,
             DotEnvSettingsSource(
-                settings_cls, env_file=_ENV_FILE, env_prefix=LEGACY_ENV_PREFIX
+                settings_cls,
+                env_file=CONVENTIONS.env_file,
+                env_prefix=CONVENTIONS.legacy_env_prefix,
             ),
             file_secret_settings,
         )
@@ -237,7 +239,7 @@ class Settings(BaseSettings):
             name, sep, value = token.partition("=")
             if not sep or not name:
                 raise ValueError(
-                    f"{ENV_PREFIX}JOB_ENV entries must be NAME=VALUE, got {token!r}"
+                    f"{CONVENTIONS.env_var('job_env')} entries must be NAME=VALUE, got {token!r}"
                 )
             pairs[name] = value
         return pairs

@@ -15,7 +15,7 @@ from pytest_mock import MockerFixture
 
 from benchmarks import (
     BENCHMARK_COLUMNS,
-    BENCHMARK_FILENAME,
+    BENCHMARK_CONVENTIONS,
     AppendResult,
     BenchmarkRow,
     SlurmAccounting,
@@ -27,6 +27,7 @@ from benchmarks import (
     slurm_accounting,
     write_benchmarks_csv,
 )
+from models.conventions import CONVENTIONS
 from models.suite_config import LaunchRecord, RunManifest
 from platforms import Platform, Runtime
 
@@ -111,9 +112,11 @@ def test_columns_are_the_model_fields_in_order() -> None:
         "baseline_state",
         "comparison_result",
     ]
-    assert BENCHMARK_FILENAME == "benchmarks.csv"
-    for field in BenchmarkRow.model_fields.values():
-        assert field.description, field
+    for model in (BenchmarkRow, type(BENCHMARK_CONVENTIONS)):
+        for field in model.model_fields.values():
+            assert field.description, field
+    assert BENCHMARK_CONVENTIONS.sacct_fields[0] == "JobID"
+    assert BENCHMARK_CONVENTIONS.rss_units["G"] == 1024**2
 
 
 def test_row_rejects_unknown_results_and_extra_keys() -> None:
@@ -234,7 +237,7 @@ def test_slurm_accounting_is_none_when_sacct_is_missing_or_fails(
 
 def test_write_and_read_round_trip_with_empty_cells_as_none(tmp_path: Path) -> None:
     rows = [_row(), _row(combo_id="01JOTHEROTHEROTHEROTHEROTH", wall_s=12.5)]
-    path = tmp_path / BENCHMARK_FILENAME
+    path = tmp_path / CONVENTIONS.benchmarks
     frame = write_benchmarks_csv(rows, path)
     assert list(frame.columns) == BENCHMARK_COLUMNS
     with open(path, newline="") as f:
@@ -248,21 +251,21 @@ def test_write_and_read_round_trip_with_empty_cells_as_none(tmp_path: Path) -> N
 
 
 def test_write_an_empty_file_is_the_header_only(tmp_path: Path) -> None:
-    path = tmp_path / BENCHMARK_FILENAME
+    path = tmp_path / CONVENTIONS.benchmarks
     write_benchmarks_csv([], path)
     assert path.read_text().splitlines() == [",".join(BENCHMARK_COLUMNS)]
     assert read_benchmarks_csv(path) == []
 
 
 def test_read_refuses_a_foreign_header(tmp_path: Path) -> None:
-    path = tmp_path / BENCHMARK_FILENAME
+    path = tmp_path / CONVENTIONS.benchmarks
     path.write_text("run_id,combo_id\nx,y\n")
     with pytest.raises(ValueError, match="header"):
         read_benchmarks_csv(path)
 
 
 def test_append_creates_appends_and_skips_duplicates(tmp_path: Path) -> None:
-    repo = tmp_path / "cece" / "gcafs-anthro" / BENCHMARK_FILENAME
+    repo = tmp_path / "cece" / "gcafs-anthro" / CONVENTIONS.benchmarks
     first = _row()
     result = append_benchmarks(repo, [first])
     assert result == AppendResult(appended=1, skipped=0)
@@ -283,7 +286,7 @@ def test_append_creates_appends_and_skips_duplicates(tmp_path: Path) -> None:
 
 
 def test_append_to_a_file_without_a_trailing_newline(tmp_path: Path) -> None:
-    repo = tmp_path / BENCHMARK_FILENAME
+    repo = tmp_path / CONVENTIONS.benchmarks
     write_benchmarks_csv([_row()], repo)
     repo.write_text(repo.read_text().rstrip("\n"))  # hand-edited: no final newline
     result = append_benchmarks(repo, [_row(run_id="01JRUN2RUN2RUN2RUN2RUN2RUN")])
@@ -294,7 +297,7 @@ def test_append_to_a_file_without_a_trailing_newline(tmp_path: Path) -> None:
 def test_append_refuses_a_foreign_header_and_restores_on_a_bad_reload(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    repo = tmp_path / BENCHMARK_FILENAME
+    repo = tmp_path / CONVENTIONS.benchmarks
     repo.write_text("run_id,combo_id\nx,y\n")
     with pytest.raises(ValueError, match="header"):
         append_benchmarks(repo, [_row()])

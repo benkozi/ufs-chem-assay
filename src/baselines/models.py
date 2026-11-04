@@ -23,7 +23,9 @@ BaselineState = Literal["local", "synced", "would-sync", "unpublished", "failed"
 
 
 class BaselineConventions(StrictModel):
-    """The names the baseline machinery relies on, in one place."""
+    """The names only the baseline machinery relies on, in one place; the
+    shared ones (staging directory, digest chunk, run files) are on
+    `models.conventions.CONVENTIONS`."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -39,13 +41,6 @@ class BaselineConventions(StrictModel):
         "test_baseline_comparison",
         description="The combo test the publishing gate ignores (the old baseline is expected red)",
     )
-    staging_dirname: str = Field(
-        ".staging",
-        description="Where a baseline is synced to before it is moved into the baseline root",
-    )
-    digest_chunk: int = Field(
-        1024 * 1024, gt=0, description="Read size for the manifest's SHA-256 digests"
-    )
     unpublished_ulid: str = Field(
         "0" * 26,
         description=(
@@ -56,7 +51,7 @@ class BaselineConventions(StrictModel):
     )
 
 
-CONVENTIONS = BaselineConventions()
+BASELINE_CONVENTIONS = BaselineConventions()
 
 
 class BaselineFile(StrictModel):

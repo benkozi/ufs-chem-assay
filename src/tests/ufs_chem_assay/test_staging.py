@@ -11,11 +11,11 @@ import pytest
 from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
+from models.conventions import CONVENTIONS
 from models.suite_config import InputFile, SuiteConfig
 from platforms import Platform
 from s3_sync import S3SyncConfig, S3SyncResult
 from staging import (
-    STAGING_DIRNAME,
     StagedInput,
     merge_inputs,
     missing_inputs,
@@ -542,11 +542,13 @@ def test_fetch_is_one_filtered_sync_of_the_parent_prefix(
     assert config.only_show_errors is True
     assert config.dry_run is False
     assert isinstance(config.destination, Path)
-    assert config.destination.parent == tmp_path / STAGING_DIRNAME
+    assert config.destination.parent == tmp_path / CONVENTIONS.staging_dirname
     assert result.action == "downloaded"
     assert result.sha256 == _DIGEST
     assert (tmp_path / "sub" / "MACCity_4x5.nc").read_bytes() == _PAYLOAD
-    assert not (tmp_path / STAGING_DIRNAME).exists()  # staging gone afterwards
+    assert not (
+        tmp_path / CONVENTIONS.staging_dirname
+    ).exists()  # staging gone afterwards
 
 
 def test_private_input_signs_requests(tmp_path: Path, mocker: MockerFixture) -> None:
@@ -566,7 +568,7 @@ def test_digest_mismatch_is_refetched_then_fails_if_still_wrong(
     assert _DIGEST in result.detail  # expected digest named
     # Nothing replaced the stale file; nothing staged is left behind.
     assert (tmp_path / "MACCity_4x5.nc").read_bytes() == b"stale"
-    assert not (tmp_path / STAGING_DIRNAME).exists()
+    assert not (tmp_path / CONVENTIONS.staging_dirname).exists()
 
 
 def test_digest_mismatch_refetch_succeeds_when_the_store_is_right(
@@ -644,19 +646,19 @@ def test_dry_run_classifies_and_writes_nothing(
     assert config.dry_run is True
     assert config.only_show_errors is False
     assert not (tmp_path / "absent.nc").exists()
-    assert not (tmp_path / STAGING_DIRNAME).exists()
+    assert not (tmp_path / CONVENTIONS.staging_dirname).exists()
 
 
 def test_stale_staging_directory_is_removed_first(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    leftover = tmp_path / STAGING_DIRNAME / "01OLD"
+    leftover = tmp_path / CONVENTIONS.staging_dirname / "01OLD"
     leftover.mkdir(parents=True)
     (leftover / "half.nc").write_bytes(b"partial")
     mocker.patch("staging.sync")
     (tmp_path / "MACCity_4x5.nc").write_bytes(_PAYLOAD)
     stage_inputs([_input()], tmp_path)
-    assert not (tmp_path / STAGING_DIRNAME).exists()
+    assert not (tmp_path / CONVENTIONS.staging_dirname).exists()
 
 
 def test_results_are_frozen_models() -> None:

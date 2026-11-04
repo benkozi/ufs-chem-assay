@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, InstanceOf
 from applications.base import Application, ApplicationSettings, DriverConfig
 from combos import Combo
 from identity import HARNESS_NAME
+from models.conventions import CONVENTIONS
 from platforms import Runtime
 from settings import Settings
 
@@ -147,15 +148,12 @@ def write_job_script(
     return script
 
 
-# The two clock lines the launch writes around the driver, in every runtime:
-# the slurm template echoes them in the job; docker and native get them from
-# the runner around the subprocess. ISO-8601 UTC to the second, parseable by
-# benchmarks.parse_tic_toc.
-CLOCK_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-
-
 def _clock_line(label: str) -> bytes:
-    return f"{label}: {datetime.now(UTC).strftime(CLOCK_FORMAT)}\n".encode()
+    # The two clock lines the launch writes around the driver, in every
+    # runtime: the slurm template echoes them in the job; docker and native
+    # get them from the runner around the subprocess (CONVENTIONS.clock_format,
+    # which benchmarks.parse_tic_toc reads back).
+    return f"{label}: {datetime.now(UTC).strftime(CONVENTIONS.clock_format)}\n".encode()
 
 
 class SlurmJobError(subprocess.CalledProcessError):

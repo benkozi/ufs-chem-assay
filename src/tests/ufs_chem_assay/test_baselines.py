@@ -19,7 +19,7 @@ from pytest_mock import MockerFixture
 
 from applications.registry import load_suite
 from baselines import (
-    CONVENTIONS,
+    BASELINE_CONVENTIONS,
     BaselineManifest,
     PublishRecord,
     default_selector,
@@ -280,7 +280,9 @@ def test_publish_probes_writes_the_manifest_syncs_and_repoints(
     assert not upload.delete
 
     manifest = BaselineManifest.model_validate(
-        yaml.safe_load((bilinear.source_dir / CONVENTIONS.manifest).read_text())
+        yaml.safe_load(
+            (bilinear.source_dir / BASELINE_CONVENTIONS.manifest).read_text()
+        )
     )
     assert manifest.ulid == bilinear.ulid
     assert manifest.store == _STORE
@@ -308,7 +310,7 @@ def test_publish_probes_writes_the_manifest_syncs_and_repoints(
     assert f"{bilinear.ulid}.yaml" in paths
     assert "cece.log" in paths
     assert "plots-overview/co.gif" in paths
-    assert CONVENTIONS.manifest not in paths
+    assert BASELINE_CONVENTIONS.manifest not in paths
     first = next(f for f in manifest.files if f.path == "cece_20100101_010000.nc")
     payload = (bilinear.source_dir / "cece_20100101_010000.nc").read_bytes()
     assert first.bytes == len(payload)
@@ -332,7 +334,7 @@ def test_publish_primes_the_local_cache_when_configured(
     records = _publish(run, _plan(run), baseline_root=cache)
     for record in records:
         cached = cache / record.ulid
-        assert (cached / CONVENTIONS.manifest).is_file()
+        assert (cached / BASELINE_CONVENTIONS.manifest).is_file()
         assert (cached / "plots-overview" / "co.gif").is_file()
         assert sorted(p.name for p in cached.glob("*.nc")) == sorted(
             p.name for p in record.source_dir.glob("*.nc")
@@ -348,7 +350,7 @@ def test_publish_refuses_an_occupied_prefix_on_a_fresh_publish(
     results = _publish(run, records)
     assert [r.action for r in results] == ["published", "failed", "published"]
     assert "append-only" in results[1].detail
-    assert not (results[1].source_dir / CONVENTIONS.manifest).exists()
+    assert not (results[1].source_dir / BASELINE_CONVENTIONS.manifest).exists()
     uploads = [
         c for c in (call.args[0] for call in sync.call_args_list) if not c.dry_run
     ]
@@ -371,14 +373,16 @@ def test_publish_resumes_when_the_directory_was_published_before(
         "baselines.publish.sync",
         side_effect=fake_sync(frozenset(r.destination for r in first)),
     )
-    manifest_before = (first[0].source_dir / CONVENTIONS.manifest).read_text()
+    manifest_before = (first[0].source_dir / BASELINE_CONVENTIONS.manifest).read_text()
     results = _publish(run, _plan(run))
     assert [r.action for r in results] == ["published"] * 3
     assert all("already in the store" in r.detail for r in results)
     calls = [call.args[0] for call in sync.call_args_list]
     assert len(calls) == 3
     assert all(c.dry_run for c in calls)
-    assert (first[0].source_dir / CONVENTIONS.manifest).read_text() == manifest_before
+    assert (
+        first[0].source_dir / BASELINE_CONVENTIONS.manifest
+    ).read_text() == manifest_before
     assert all(f"ulid: {r.ulid}\n" in run.suite_path.read_text() for r in results)
 
 
@@ -387,7 +391,7 @@ def test_publish_fails_a_directory_carrying_another_manifest(
 ) -> None:
     sync = mocker.patch("baselines.publish.sync", side_effect=fake_sync())
     records = _plan(run)
-    foreign = records[0].source_dir / CONVENTIONS.manifest
+    foreign = records[0].source_dir / BASELINE_CONVENTIONS.manifest
     foreign.write_text("ulid: 01KXNXCJ858EE6R4FPF39BC8V2\nstore: s3://elsewhere/b\n")
     results = _publish(run, records[:1])
     assert results[0].action == "failed"
@@ -411,7 +415,9 @@ def test_publish_dry_run_writes_nothing(
     assert all(c.dry_run for c in calls)
     uploads = [c for c in calls if isinstance(c.source, Path)]
     assert all(not c.only_show_errors for c in uploads)
-    assert not any((r.source_dir / CONVENTIONS.manifest).exists() for r in results)
+    assert not any(
+        (r.source_dir / BASELINE_CONVENTIONS.manifest).exists() for r in results
+    )
     assert not cache.exists()
     assert run.suite_path.read_text() == original
     assert any("superseded_ulid" in rec.getMessage() for rec in caplog.records)
@@ -427,7 +433,7 @@ def test_publish_without_suite_update_leaves_the_file_alone(
     assert not any(r.suite_updated for r in results)
     assert run.suite_path.read_text() == original
     manifest = yaml.safe_load(
-        (results[0].source_dir / CONVENTIONS.manifest).read_text()
+        (results[0].source_dir / BASELINE_CONVENTIONS.manifest).read_text()
     )
     assert manifest["superseded_ulid"] == PREVIOUS_ULIDS[0]
 
@@ -448,7 +454,7 @@ def test_publish_sync_failure_is_recorded_not_raised(
     assert [r.action for r in results] == ["published", "failed", "published"]
     assert "fatal: no" in results[1].detail
     # The manifest stays as the record of the attempt (the next run resumes).
-    assert (results[1].source_dir / CONVENTIONS.manifest).is_file()
+    assert (results[1].source_dir / BASELINE_CONVENTIONS.manifest).is_file()
     assert PREVIOUS_ULIDS[1] in run.suite_path.read_text()
 
 
@@ -478,7 +484,9 @@ def test_publish_session_reads_run_yaml_and_publishes(
     )
     assert [r.action for r in results] == ["published"] * 3
     assert sync.call_count == 6
-    assert all((cache / r.ulid / CONVENTIONS.manifest).is_file() for r in results)
+    assert all(
+        (cache / r.ulid / BASELINE_CONVENTIONS.manifest).is_file() for r in results
+    )
     assert all(f"ulid: {r.ulid}\n" in run.suite_path.read_text() for r in results)
 
 
@@ -500,7 +508,7 @@ def test_publish_to_a_directory_store_copies_and_repoints(
     for record in results:
         published = store / record.ulid
         manifest = BaselineManifest.model_validate(
-            yaml.safe_load((published / CONVENTIONS.manifest).read_text())
+            yaml.safe_load((published / BASELINE_CONVENTIONS.manifest).read_text())
         )
         assert manifest.store == str(store)
         assert manifest.ulid == record.ulid
@@ -556,7 +564,7 @@ def test_directory_store_must_exist_and_dry_run_writes_nothing(
 
 # ── the placeholder ULID: "not published yet" ─────────────────────────────────
 
-_PLACEHOLDER = CONVENTIONS.unpublished_ulid
+_PLACEHOLDER = BASELINE_CONVENTIONS.unpublished_ulid
 
 
 def _pin_placeholder(run: Run) -> Run:
@@ -599,7 +607,7 @@ def test_publish_of_a_placeholder_entry_supersedes_nothing_and_keeps_the_quotes(
     first = next(r for r in records if r.previous_ulid == _PLACEHOLDER)
     assert first.action == "published"
     manifest = BaselineManifest.model_validate(
-        yaml.safe_load((first.source_dir / CONVENTIONS.manifest).read_text())
+        yaml.safe_load((first.source_dir / BASELINE_CONVENTIONS.manifest).read_text())
     )
     assert manifest.superseded_ulid is None
     text = run.suite_path.read_text()
@@ -662,7 +670,9 @@ def _store_dir_with(tmp_path: Path, ulids: list[str]) -> Path:
     for ulid in ulids:
         (store / ulid / "plots-overview").mkdir(parents=True)
         (store / ulid / "cece_20100101_010000.nc").write_bytes(b"nc " + ulid.encode())
-        (store / ulid / CONVENTIONS.manifest).write_text(f"ulid: {ulid}\nstore: x\n")
+        (store / ulid / BASELINE_CONVENTIONS.manifest).write_text(
+            f"ulid: {ulid}\nstore: x\n"
+        )
     return store
 
 
@@ -693,7 +703,7 @@ def test_absent_baselines_are_synced_from_s3_into_place(
         assert config.destination.parent == root / ".staging"
         config.destination.mkdir(parents=True, exist_ok=True)
         (config.destination / "cece_a.nc").write_bytes(b"nc")
-        (config.destination / CONVENTIONS.manifest).write_text("ulid: x\n")
+        (config.destination / BASELINE_CONVENTIONS.manifest).write_text("ulid: x\n")
         return S3SyncResult(argv=config.argv, returncode=0, output="", dry_run=False)
 
     sync = mocker.patch("baselines.stage.sync", side_effect=fake)
@@ -835,7 +845,7 @@ def test_directory_store_baselines_are_copied(
     assert results[2].detail == f"not in the store {store}"
     for ulid in ulids[:2]:
         assert (root / ulid / "plots-overview").is_dir()
-        assert (root / ulid / CONVENTIONS.manifest).is_file()
+        assert (root / ulid / BASELINE_CONVENTIONS.manifest).is_file()
     probe.assert_not_called()
     sync.assert_not_called()
 

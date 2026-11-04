@@ -24,13 +24,10 @@ from pydantic import ConfigDict, Field
 from baselines.store import is_s3, location
 from logs import get_logger
 from models.base import StrictModel
+from models.conventions import CONVENTIONS
 from s3_sync import S3SyncConfig, sync
 
 logger = get_logger("outputs")
-
-UPLOAD_RECORD = "upload.yaml"
-RUN_MANIFEST = "run.yaml"
-_STAGING_DIRNAME = ".staging"
 
 
 class OutputUploadRecord(StrictModel):
@@ -60,9 +57,11 @@ def output_location(store: str, run_id: str) -> str:
 
 
 def _run_id(output_root: Path) -> str:
-    manifest = output_root / RUN_MANIFEST
+    manifest = output_root / CONVENTIONS.run_manifest
     if not manifest.is_file():
-        raise ValueError(f"{output_root} is not a run's output root: no {RUN_MANIFEST}")
+        raise ValueError(
+            f"{output_root} is not a run's output root: no {CONVENTIONS.run_manifest}"
+        )
     with open(manifest) as f:
         raw = yaml.safe_load(f)
     run_id = raw.get("run_id") if isinstance(raw, dict) else None
@@ -75,7 +74,8 @@ def _inventory(output_root: Path) -> tuple[int, int]:
     files = [
         path
         for path in output_root.rglob("*")
-        if path.is_file() and path.relative_to(output_root).as_posix() != UPLOAD_RECORD
+        if path.is_file()
+        and path.relative_to(output_root).as_posix() != CONVENTIONS.upload_record
     ]
     return len(files), sum(path.stat().st_size for path in files)
 
@@ -102,7 +102,7 @@ def upload_output(
     if dry_run:
         logger.info("DRY RUN would record %s", record.model_dump(mode="json"))
     else:
-        with open(output_root / UPLOAD_RECORD, "w") as f:
+        with open(output_root / CONVENTIONS.upload_record, "w") as f:
             yaml.safe_dump(record.model_dump(mode="json"), f, sort_keys=False)
     if is_s3(store):
         sync(
@@ -165,7 +165,7 @@ def download_output(
         if dry_run:
             sync(S3SyncConfig(source=source, destination=target, dry_run=True))
             return target
-        staging = dest / _STAGING_DIRNAME / run_id
+        staging = dest / CONVENTIONS.staging_dirname / run_id
         if staging.exists():
             shutil.rmtree(staging)
         staging.parent.mkdir(parents=True, exist_ok=True)
@@ -173,7 +173,7 @@ def download_output(
             sync(
                 S3SyncConfig(source=source, destination=staging, only_show_errors=True)
             )
-            if not (staging / RUN_MANIFEST).is_file():
+            if not (staging / CONVENTIONS.run_manifest).is_file():
                 raise ValueError(
                     f"no output for {run_id} under {store} (nothing downloaded)"
                 )
@@ -188,8 +188,8 @@ def download_output(
             # may be mid-transfer in its own; the shared parent goes once empty.
             shutil.rmtree(staging, ignore_errors=True)
             with contextlib.suppress(OSError):
-                (dest / _STAGING_DIRNAME).rmdir()
-    record_path = target / UPLOAD_RECORD
+                (dest / CONVENTIONS.staging_dirname).rmdir()
+    record_path = target / CONVENTIONS.upload_record
     if record_path.is_file():
         with open(record_path) as f:
             record = OutputUploadRecord.model_validate(yaml.safe_load(f))

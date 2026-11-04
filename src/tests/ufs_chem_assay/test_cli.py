@@ -3,6 +3,7 @@ overrides, dry-run, the effective-config artifact — through the CLI's
 main() in-process and through `python -m cli` once. The CLI speaks through
 the harness logger (`ufs-chem-assay.cli`), never print."""
 
+import argparse
 import hashlib
 import logging
 import os
@@ -19,14 +20,14 @@ from applications.base import Application
 from applications.registry import REGISTRY
 from baselines import BaselineState, StagedBaseline
 from benchmarks import (
-    BENCHMARK_FILENAME,
     BenchmarkRow,
     collect_row,
     read_benchmarks_csv,
     write_benchmarks_csv,
 )
-from cli.main import main
+from cli.main import Command, main
 from logs import LOGGER_NAME
+from models.conventions import CONVENTIONS
 from platforms import Platform
 from s3_sync import S3SyncConfig
 from staging import Action, StagedInput
@@ -911,14 +912,14 @@ def recorded_run(
         monkeypatch.delenv(key, raising=False)
     run = fabricate_run(tmp_path, suite_dir, name="recorded")
     monkeypatch.setenv("ASSAY_SUITE_CONFIG_SEARCH_PATH", str(run.suite_path.parent))
-    write_benchmarks_csv(_benchmark_rows_for(run), run.root / BENCHMARK_FILENAME)
+    write_benchmarks_csv(_benchmark_rows_for(run), run.root / CONVENTIONS.benchmarks)
     return run
 
 
 def test_record_benchmarks_appends_to_the_suites_configuration_file(
     recorded_run: Run, caplog: pytest.LogCaptureFixture
 ) -> None:
-    target = recorded_run.suite_path.parent / BENCHMARK_FILENAME
+    target = recorded_run.suite_path.parent / CONVENTIONS.benchmarks
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(["record-benchmarks", f"--output-root={recorded_run.root}"])
     assert code == 0
@@ -932,7 +933,7 @@ def test_record_benchmarks_appends_to_the_suites_configuration_file(
 
 
 def test_record_benchmarks_dry_run_writes_nothing(recorded_run: Run) -> None:
-    target = recorded_run.suite_path.parent / BENCHMARK_FILENAME
+    target = recorded_run.suite_path.parent / CONVENTIONS.benchmarks
     assert (
         main(["record-benchmarks", f"--output-root={recorded_run.root}", "--dry-run"])
         == 0
@@ -945,7 +946,7 @@ def test_record_benchmarks_clean_errors(
 ) -> None:
     with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
         assert main(["record-benchmarks", f"--output-root={tmp_path / 'nope'}"]) == 1
-        (recorded_run.root / BENCHMARK_FILENAME).unlink()
+        (recorded_run.root / CONVENTIONS.benchmarks).unlink()
         assert main(["record-benchmarks", f"--output-root={recorded_run.root}"]) == 1
     messages = [r.getMessage() for r in caplog.records]
     assert any("no run.yaml" in m for m in messages)
@@ -967,7 +968,7 @@ def test_record_benchmarks_empty_run_and_unselected_suite(
     assert code == 1
     assert any("not in the selection" in r.getMessage() for r in caplog.records)
     # Nothing executed (a dry run's header-only file): nothing to record, exit 0.
-    write_benchmarks_csv([], recorded_run.root / BENCHMARK_FILENAME)
+    write_benchmarks_csv([], recorded_run.root / CONVENTIONS.benchmarks)
     assert main(["record-benchmarks", f"--output-root={recorded_run.root}"]) == 0
 
 
@@ -985,7 +986,7 @@ def test_record_benchmarks_selection_and_append_errors(
         )
     assert code == 1
     # A committed file with a foreign header refuses the append, exit 1.
-    target = recorded_run.suite_path.parent / BENCHMARK_FILENAME
+    target = recorded_run.suite_path.parent / CONVENTIONS.benchmarks
     target.write_text("run_id,combo_id\nx,y\n")
     with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
         code = main(["record-benchmarks", f"--output-root={recorded_run.root}"])
@@ -1249,3 +1250,39 @@ def test_publish_baselines_refuses_a_suite_edited_since_the_run(
     assert code == 1
     sync.assert_not_called()
     assert any("edited since the run" in r.getMessage() for r in caplog.records)
+
+
+# ── the subcommands ──────────────────────────────────────────────────────────
+
+
+def test_commands_are_the_parsers_subcommands() -> None:
+    from cli.main import _parser
+
+    subparsers = next(
+        action
+        for action in _parser()._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    assert set(subparsers.choices) == {command.value for command in Command}
+    assert len({command.value for command in Command}) == len(Command)  # unique
+
+
+def test_every_command_has_a_handler(mocker: MockerFixture) -> None:
+    from cli import main as cli_main
+
+    assert set(cli_main.HANDLERS) == set(Command)
+    handlers = {command: mocker.Mock(return_value=7) for command in Command}
+    mocker.patch.dict(cli_main.HANDLERS, handlers)
+    for command in Command:
+        parse = mocker.patch.object(
+            cli_main,
+            "_parser",
+            return_value=mocker.Mock(
+                parse_args=mocker.Mock(
+                    return_value=argparse.Namespace(command=command.value)
+                )
+            ),
+        )
+        assert main([command.value]) == 7, command
+        parse.assert_called_once()
+        handlers[command].assert_called_once()

@@ -22,8 +22,8 @@ from applications.base import Application, ApplicationRunSection
 from cli.override import apply_overrides
 from identity import HARNESS_ROOT
 from models.base import StrictModel
+from models.conventions import CONVENTIONS
 from platforms import Platform, Runtime, default_runtime, detect_platform
-from settings import DEFAULT_BASELINE_STORE, DEFAULT_OUTPUT_STORE
 
 __all__ = ["HARNESS_ROOT", "ResolveApplication", "RunConfig"]
 
@@ -57,7 +57,7 @@ class BaselinesSection(StrictModel):
         default=False, description="ASSAY_ENABLE_BASELINE_COMPARISONS for the session"
     )
     store: str = Field(
-        default=DEFAULT_BASELINE_STORE,
+        default=CONVENTIONS.default_baseline_store,
         description=(
             "ASSAY_BASELINE_STORE: where publish-baselines writes <store>/<ulid>/ "
             "(append-only): an s3://bucket/prefix or a local directory"
@@ -77,7 +77,7 @@ class BaselinesSection(StrictModel):
 
 class OutputsSection(StrictModel):
     store: str = Field(
-        default=DEFAULT_OUTPUT_STORE,
+        default=CONVENTIONS.default_output_store,
         description=(
             "ASSAY_OUTPUT_STORE: where upload-output (and --upload-output) copies a "
             "run's whole output root as <store>/<run_id>/: an s3://bucket/prefix or "

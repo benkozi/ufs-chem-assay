@@ -16,7 +16,6 @@ from applications.base import Application, ApplicationSettings, DriverConfig
 from baselines import StagedBaseline, SuiteInput, ensure_baselines, publish_session
 from baselines.plan import read_run
 from benchmarks import (
-    BENCHMARK_FILENAME,
     BenchmarkRow,
     SlurmAccounting,
     append_benchmarks,
@@ -28,6 +27,7 @@ from combos import Combo, ParameterRow, enumerate_combos, write_combos_csv
 from comparison import concatenate_comparison_csvs, resolve_baseline_comparisons
 from identity import harness_commit, harness_version
 from logs import configure_logging, get_logger
+from models.conventions import CONVENTIONS
 from models.suite_config import (
     Analysis,
     Assertions,
@@ -368,7 +368,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
             # ever removed: an absolute output root under native/slurm can
             # point anywhere, and --combo-clean-root must not be a way to
             # delete an arbitrary directory.
-            if not (host_root / "run.yaml").is_file():
+            if not (host_root / CONVENTIONS.run_manifest).is_file():
                 raise pytest.UsageError(
                     f"output root {host_root} exists but is not a previous harness "
                     "output root (no run.yaml); refusing --combo-clean-root — move it aside"
@@ -512,7 +512,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     report_rows = config.stash.get(_REPORT_ROWS, {})
     if report_rows:
         write_test_report_csv(
-            list(report_rows.values()), roots.host / "test-report.csv"
+            list(report_rows.values()), roots.host / CONVENTIONS.test_report
         )
 
     # Benchmarks: the per-run file (header only after a dry run), each
@@ -523,10 +523,10 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     try:
         benchmark_rows = _benchmark_rows(config, roots, contexts, report_rows)
         write_benchmarks_csv(
-            list(benchmark_rows.values()), roots.host / BENCHMARK_FILENAME
+            list(benchmark_rows.values()), roots.host / CONVENTIONS.benchmarks
         )
         for combo_id, row in benchmark_rows.items():
-            write_benchmarks_csv([row], roots.host / combo_id / BENCHMARK_FILENAME)
+            write_benchmarks_csv([row], roots.host / combo_id / CONVENTIONS.benchmarks)
         if benchmark_rows and config.getoption("--record-benchmarks"):
             _record_benchmarks(contexts, benchmark_rows)
     except Exception as exc:  # the hook must not fail the session
@@ -579,7 +579,9 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     # already gated; per-suite plot gates apply to each suite's slice.
     combo_csvs = sorted(roots.host.glob("*/*-stats.csv"))
     if combo_csvs:
-        stats = concatenate_stats_csvs(combo_csvs, roots.host / "descriptive_stats.csv")
+        stats = concatenate_stats_csvs(
+            combo_csvs, roots.host / CONVENTIONS.descriptive_stats
+        )
         for context in contexts:
             if not context.suite.plotting.enabled:
                 continue
@@ -590,7 +592,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     comparison_csvs = sorted(roots.host.glob("*/*-stats-comparison.csv"))
     if comparison_csvs:
         comparison_stats = concatenate_comparison_csvs(
-            comparison_csvs, roots.host / "stats-comparison.csv"
+            comparison_csvs, roots.host / CONVENTIONS.stats_comparison
         )
         settings = config.stash[_SETTINGS]
         baseline_root = settings.baseline_root_dir or Path.cwd()
@@ -704,10 +706,10 @@ def _record_benchmarks(
             rows[combo.combo_id] for combo in context.combos if combo.combo_id in rows
         ]
         if mine:
-            append_benchmarks(context.path.parent / BENCHMARK_FILENAME, mine)
+            append_benchmarks(context.path.parent / CONVENTIONS.benchmarks, mine)
             logger.info(
                 "%s: review the diff and commit it",
-                context.path.parent / BENCHMARK_FILENAME,
+                context.path.parent / CONVENTIONS.benchmarks,
             )
 
 
@@ -902,7 +904,7 @@ def combo_roots(
             for staged in request.config.stash[_BASELINE_STATES].values()
         ],
     )
-    manifest.to_yaml(roots.host / "run.yaml")
+    manifest.to_yaml(roots.host / CONVENTIONS.run_manifest)
     return roots
 
 
@@ -959,7 +961,7 @@ def generated_combos(
         entries,
         run_id=request.config.stash[_RUN_ID],
         application=app.name,
-        csv_path=combo_roots.host / "combos.csv",
+        csv_path=combo_roots.host / CONVENTIONS.combos_csv,
     )
     return generated
 
