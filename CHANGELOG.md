@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.1.0-rc.9 (2026-11-04)
+
+### Chores
+
+- **ci**: Bump astral-sh/setup-uv from 10.3.0 to 10.3.2 in the actions group
+  ([#37](https://github.com/benkozi/ufs-chem-assay/pull/37),
+  [`96982c4`](https://github.com/benkozi/ufs-chem-assay/commit/96982c48d610f9123c73abee185019af4153ac4e))
+
+- **deps**: Bump the python group across 1 directory with 6 updates
+  ([#36](https://github.com/benkozi/ufs-chem-assay/pull/36),
+  [`8a047ef`](https://github.com/benkozi/ufs-chem-assay/commit/8a047efa00bd2d53ff0067cea14aa9ed19cea08c))
+
+### Features
+
+- Global anthropogenic CECE use case integration
+  ([#35](https://github.com/benkozi/ufs-chem-assay/pull/35),
+  [`6f50083`](https://github.com/benkozi/ufs-chem-assay/commit/6f50083b6683536152d7e61d27afb43a443820df))
+
+
 ## v0.1.0-rc.8 (2026-10-16)
 
 ### Bug Fixes
