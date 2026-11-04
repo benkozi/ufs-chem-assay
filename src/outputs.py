@@ -10,6 +10,7 @@ the copy was taken. Generic: nothing here knows the application.
 
 from __future__ import annotations
 
+import contextlib
 import getpass
 import os
 import shutil
@@ -135,11 +136,15 @@ def upload_output(
 def download_output(
     run_id: str, store: str, dest: Path, *, dry_run: bool = False
 ) -> Path:
-    """<store>/<run_id>/ into <dest>/<run_id>/: S3 through a staging directory
-    moved into place only when run.yaml arrived (an absent prefix syncs
-    nothing — a ValueError naming the ULID and the store), a directory store
-    by copy. An existing target is synced into, never removed. A dry run
-    plans and writes nothing. Returns the target path."""
+    """<store>/<run_id>/ into <dest>/<run_id>/. S3: one sync into
+    <dest>/.staging/<run_id>/, moved into place file by file (os.replace)
+    only when run.yaml arrived — an absent prefix syncs nothing, a ValueError
+    naming the ULID and the store — so an existing target is refreshed in
+    place, never removed, and files it holds that the store lacks stay; only
+    this run's staging directory is cleaned up (concurrent downloads into one
+    dest do not disturb each other). A directory store copies with
+    dirs_exist_ok. A dry run plans and writes nothing. Returns the target
+    path."""
     target = dest / run_id
     source = output_location(store, run_id)
     if not is_s3(store):
@@ -179,7 +184,11 @@ def download_output(
                     final.parent.mkdir(parents=True, exist_ok=True)
                     os.replace(path, final)
         finally:
-            shutil.rmtree(dest / _STAGING_DIRNAME, ignore_errors=True)
+            # This run's staging only: another download into the same dest
+            # may be mid-transfer in its own; the shared parent goes once empty.
+            shutil.rmtree(staging, ignore_errors=True)
+            with contextlib.suppress(OSError):
+                (dest / _STAGING_DIRNAME).rmdir()
     record_path = target / UPLOAD_RECORD
     if record_path.is_file():
         with open(record_path) as f:

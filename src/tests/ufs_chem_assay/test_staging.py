@@ -256,6 +256,24 @@ def test_ambiguous_link_target_is_refused(tmp_path: Path) -> None:
     assert not (data_dir / "placed.nc").exists()
 
 
+def test_overlapping_search_directories_are_not_ambiguous(tmp_path: Path) -> None:
+    # A parent and its child, a repeated entry, and a symlinked alias all reach
+    # the one physical file: one match, not an "ambiguous" refusal.
+    originals = _originals(tmp_path, "placed.nc")  # originals/tree0/deep/placed.nc
+    alias = tmp_path / "alias"
+    alias.symlink_to(originals, target_is_directory=True)
+    data_dir = tmp_path / "data"
+    (result,) = stage_inputs(
+        [_input(url=None, dst="placed.nc")],
+        data_dir,
+        search_path=[originals, originals / "tree0", originals, alias],
+    )
+    assert result.action == "linked"
+    assert (data_dir / "placed.nc").resolve() == (
+        originals / "tree0" / "deep" / "placed.nc"
+    ).resolve()
+
+
 def test_dangling_link_counts_as_absent_and_is_replaced(tmp_path: Path) -> None:
     originals = _originals(tmp_path, "placed.nc")
     data_dir = tmp_path / "data"

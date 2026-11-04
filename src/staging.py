@@ -189,13 +189,17 @@ def _fetch(entry: InputFile, target: Path, staging_root: Path) -> StagedInput:
 
 
 def _find_source(name: str, search_path: Sequence[Path]) -> list[Path]:
-    """Every file called `name` under the search-path directories (recursive,
-    sorted): the one link target, or the ambiguity to report."""
-    found: list[Path] = []
+    """Every distinct file called `name` under the search-path directories
+    (recursive, sorted; one entry per physical file however many listed
+    directories — a parent and its child, a repeat, a symlinked alias —
+    reach it): the one link target, or the ambiguity to report."""
+    found: dict[Path, Path] = {}
     for directory in search_path:
         if directory.is_dir():
-            found += sorted(p for p in directory.rglob(name) if p.is_file())
-    return found
+            for path in sorted(directory.rglob(name)):
+                if path.is_file():
+                    found.setdefault(path.resolve(), path)
+    return list(found.values())
 
 
 def _link_source_less(

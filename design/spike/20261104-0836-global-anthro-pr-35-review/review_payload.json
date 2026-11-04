@@ -1,0 +1,30 @@
+{
+  "commit_id": "c80954c452b0e6d1ce181d2b49c9d95501215494",
+  "body": "Machine-generated comments by [ufs-chem-pr-review-mcp](https://github.com/benkozi/ufs-chem-pr-review-mcp) @ 0e1088e68c488bc449668a4b6d07ccf5058378d6\n\nPending code review (4 inline diff comment(s), 0 file/out-of-diff finding(s)).",
+  "comments": [
+    {
+      "path": "src/outputs.py",
+      "line": 181,
+      "side": "RIGHT",
+      "body": "**[P1 - Major] Scope staging cleanup in `download_output` to specific run directory**\n\n**Resource Management: Staging directory rmtree deletes shared staging root across concurrent downloads**\n\nIn `download_output`, the `finally` block unconditionally calls `shutil.rmtree(dest / _STAGING_DIRNAME, ignore_errors=True)`. If multiple downloads run concurrently into the same destination directory with different run ULIDs, one download finishing or failing will remove the entire shared `.staging/` directory, corrupting or aborting active transfers of concurrent runs.\n\nCleaning up only the run-specific staging directory (`staging = dest / _STAGING_DIRNAME / run_id`) isolates cleanup to the active transfer and prevents cross-process data races.\n\n**Suggested fix:** Remove `staging` in the `finally` block instead of the whole `dest / _STAGING_DIRNAME` directory, and attempt non-blocking `rmdir()` on the parent.\n\n**Test:** Run concurrent downloads of two distinct run ULIDs into the same `dest` directory with `_fake_sync` and verify neither download fails with missing staging paths.\n\n````suggestion\n        finally:\n            if staging.exists():\n                shutil.rmtree(staging, ignore_errors=True)\n            try:\n                (dest / _STAGING_DIRNAME).rmdir()\n            except OSError:\n                pass\n````"
+    },
+    {
+      "path": "src/staging.py",
+      "line": 194,
+      "side": "RIGHT",
+      "body": "**[P1 - Major] Canonicalize resolved paths in `_find_source` to prevent false ambiguity**\n\n**Input Resolution: Un-deduplicated search path results report false ambiguity for duplicate or nested directories**\n\n`_find_source` iterates over `search_path` and appends every matching `Path` to `found`. If `ASSAY_INPUT_SEARCH_PATH` contains redundant directories, nested paths (e.g. `/scratch/data` and `/scratch/data/inputs`), or symlinked directory trees, `found` contains multiple paths that resolve to the exact same physical file on disk. `_link_source_less` checks `len(found) > 1` and aborts with an \"ambiguous source under the input search path\" error even when all matches point to the same file.\n\nDeduplicating candidates by `p.resolve()` ensures that distinct paths pointing to the same file are treated as a single match.\n\n**Suggested fix:** Deduplicate discovered paths by resolved canonical path using a dictionary or set before returning.\n\n**Test:** In `test_staging.py`, invoke `_link_source_less` with `search_path=[tmp_dir, tmp_dir / \"nested\"]` where `nested` symlinks to `tmp_dir` or is a subdirectory containing the file, and assert it links successfully without raising ambiguity errors.\n\n````suggestion\n    found: dict[Path, Path] = {}\n    for directory in search_path:\n        if directory.is_dir():\n            for p in sorted(directory.rglob(name)):\n                if p.is_file():\n                    found.setdefault(p.resolve(), p)\n    return list(found.values())\n````"
+    },
+    {
+      "path": "src/tests/config/cece/gcafs-anthro/gcafs-anthro-suite.yaml",
+      "line": 71,
+      "side": "RIGHT",
+      "body": "**[P2 - Moderate] Ponytail: Update outdated placeholder ULID comment in gcafs-anthro suite**\n\n**Simplification: Outdated template comment explains all-zero ULID placeholder on a suite that already pins a published baseline**\n\nLines 71–75 explain that `\"The all-zero ULID means 'not published yet' ... and publish-baselines replaces it (keeping the quotes, which YAML needs for 26 zeros)\"`. However, line 78 already pins the published baseline `01M5JV8MBW0XE9TPE0BDCGSFJZ` without quotes. The comment is stale template boilerplate that no longer matches the file contents.\n\nReplacing the comment with a concise 2-line explanation of the single sweep-less combination and published baseline eliminates confusion and saves lines.\n\n**Suggested fix:** Replace the placeholder explanation with a brief comment documenting the published baseline and tolerance.\n\n**Test:** Run `uv run pytest src/tests/ufs_chem_assay/applications/cece/test_gcafs_anthro.py` to verify YAML suite validation passes.\n\n````suggestion\n# One entry: empty selector matches the single combination of the sweep-less suite.\n# Published baseline on Ursa; rtol set to 1.0e-15 (a few float64 ULPs).\n````"
+    },
+    {
+      "path": "src/outputs.py",
+      "line": 138,
+      "side": "RIGHT",
+      "body": "**[P3 - Minor] Clarify `download_output` docstring regarding directory vs S3 store target handling**\n\n**Documentation: Docstring states target is synced into never removed but omits S3 atomic staging move mechanism**\n\nThe docstring notes that `<store>/<run_id>/` is downloaded into `<dest>/<run_id>/` and that \"an existing target is synced into, never removed.\" In the implementation, S3 downloads sync into an isolated `.staging/<run_id>` directory and atomically replace existing files using `os.replace`, while directory stores invoke `shutil.copytree(dirs_exist_ok=True)`. Clarifying that S3 replaces files individually via staging provides clearer technical guidance for callers inspecting partial runs.\n\n**Suggested fix:** Update docstring summary to mention atomic file replacement via staging for S3 transfers.\n\n**Test:** Run `pytest src/tests/ufs_chem_assay/test_outputs.py` to confirm docstring change passes tests."
+    }
+  ]
+}

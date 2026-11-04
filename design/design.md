@@ -843,7 +843,8 @@ destination, uploaded_at, uploaded_by, files, bytes) is written into the
 root before the sync and uploaded with it. `download-output --ulid --dest`
 syncs `<store>/<run_id>/` into `<dest>/<run_id>/` through a staging
 directory moved into place only when `run.yaml` arrived (an absent prefix
-syncs nothing and exits 0), never deleting local files. Both subcommands
+syncs nothing and exits 0), never deleting local files, and cleaning up
+only its own staging directory (PR 35's machine review, 2026-11-04). Both subcommands
 pass `--dry-run` to the wrapper. The live `data_integration` round trip
 uses the test prefix of the private bucket.
 

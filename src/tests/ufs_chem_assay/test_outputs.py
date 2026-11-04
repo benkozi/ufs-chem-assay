@@ -5,6 +5,7 @@ runs that write nothing, and the upload.yaml record."""
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -272,6 +273,27 @@ def test_download_replaces_a_stale_staging_directory(
     assert (target / "run.yaml").is_file()
     assert not (target / "leftover").exists()
     assert not (dest / ".staging").exists()
+
+
+def test_download_cleans_up_only_its_own_staging(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    # Another run's download may be in flight into the same dest: its staging
+    # directory must survive this one's cleanup; the shared parent goes only
+    # once it is empty.
+    root = _root(tmp_path)
+    mocker.patch("outputs.sync", side_effect=_fake_sync(downloads=_arrives(root)))
+    dest = tmp_path / "back"
+    other = dest / ".staging" / "01JOTHEROTHEROTHEROTHEROTH"
+    other.mkdir(parents=True)
+    (other / "partial.nc").write_bytes(b"in flight")
+    download_output(_RUN_ID, _STORE, dest)
+    assert (other / "partial.nc").read_bytes() == b"in flight"
+    assert not (dest / ".staging" / _RUN_ID).exists()
+    assert (dest / ".staging").is_dir()  # not empty: left alone
+    shutil.rmtree(other)
+    download_output(_RUN_ID, _STORE, dest)
+    assert not (dest / ".staging").exists()  # empty: removed
 
 
 def test_download_into_an_existing_target_resumes(

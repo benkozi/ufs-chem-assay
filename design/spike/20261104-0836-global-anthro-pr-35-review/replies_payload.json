@@ -1,0 +1,28 @@
+{
+  "repo": "benkozi/ufs-chem-assay",
+  "pull_number": 35,
+  "in_response_to_review": "PRR_kwDOTbtd2s8AAAABWALxpQ",
+  "note": "Reply bodies drafted by the machine-review design (design/feat/20261019-1447-global-anthro-use-case/20261104-0904-machine-review.md, section 4). Replace each <commit> with the SHA that landed the change before posting. Post one reply per entry with: gh api -X POST repos/{repo}/pulls/{pull_number}/comments/{in_reply_to}/replies -f body=@-",
+  "replies": [
+    {
+      "in_reply_to": 4469950312,
+      "path": "src/outputs.py",
+      "body": "Agreed — the `finally` removed the shared `.staging/` rather than this run's directory. Fixed as suggested in <commit>: only `dest/.staging/<run_id>` is removed and the parent is `rmdir`ed best-effort; `test_download_cleans_up_only_its_own_staging` keeps another run's staging directory alive across the download and checks the parent disappears once empty."
+    },
+    {
+      "in_reply_to": 4469950349,
+      "path": "src/staging.py",
+      "body": "Agreed — overlapping or repeated search directories (a parent and its child, a symlinked tree) produced the same file twice and a false 'ambiguous'. Fixed as suggested in <commit>: matches are keyed by `resolve()`, first spelling kept; `test_overlapping_search_directories_are_not_ambiguous` covers a parent/child pair, a repeat, and a symlinked alias, and two distinct files of one name are still refused."
+    },
+    {
+      "in_reply_to": 4469950360,
+      "path": "src/tests/config/cece/gcafs-anthro/gcafs-anthro-suite.yaml",
+      "body": "Agreed, and the header was stale in three more places (the override list that became `config/ursa-gcafs-anthro.yaml`, the placeholder digests that are real now, the copy-the-files instruction that became `sources:` links). The whole header is rewritten in <commit> to describe the file as it is; the `rtol` rationale is kept."
+    },
+    {
+      "in_reply_to": 4469950374,
+      "path": "src/outputs.py",
+      "body": "Done in <commit>: the docstring now says S3 downloads stage under `.staging/<run_id>` and replace files individually, a directory store copies with `dirs_exist_ok`, and an existing target is refreshed, never removed."
+    }
+  ]
+}

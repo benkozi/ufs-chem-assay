@@ -1,23 +1,17 @@
 # The global anthropogenic use case (issue 33): one configuration, no sweep —
-# the base config is the single combination. Ursa only: the inputs are not in
-# any bucket and the run takes hours; run it through config/ursa.yaml with the
-# override list in docs/gcafs-anthro-runbook.md (the batch QOS, the raised
-# timeout cap, the author's single-task single-thread geometry).
+# the base config is the single combination. Ursa only (the inputs live on
+# Ursa; a run takes hours): run it with config/ursa-gcafs-anthro.yaml, the
+# Ursa template with this suite, the QOS, the timeout cap and the author's
+# single-task single-thread geometry baked in (docs/gcafs-anthro-runbook.md).
 name: gcafs-anthro
 config_path: gcafs-anthro.yaml
 timeout_s: 1800  # per combination; deliberately short (the author saw up to 3 h): see it time out, then raise
 # Inputs the base config reads, expected at <CECE_ROOT_DIR>/data/gcafs-anthro/.
-# No remote source yet (url: null): the files are copied there from the
-# existing staging area on Ursa, and `uv run ufs-chem-assay fetch
-# --suite-config=gcafs-anthro-suite.yaml` verifies each by sha256 and names any
-# that is missing — it never downloads these. On Ursa each entry's `sources`
-# names the file's known location (the author's staging area) and fetch links
-# it from there; elsewhere ASSAY_INPUT_SEARCH_PATH is searched by basename.
-# Filling in the url lines (after a one-time upload) makes them fetchable; the
-# digests stay.
-# The all-zero digests are placeholders: replace them with `sha256sum` of the
-# placed files (runbook step 5) before the first run — until then fetch fails
-# naming each file, which is the point.
+# No remote source (url null): on Ursa `ufs-chem-assay fetch` links each file
+# from its `sources.ursa` location (the author's staging area) and verifies the
+# digest recorded here (`fetch --record-digests`, 2026-10-22); elsewhere,
+# ASSAY_INPUT_SEARCH_PATH is searched by basename. Nothing is ever downloaded
+# for these; filling in a url (after a one-time upload) would make one fetchable.
 # The Ursa source paths below exceed the line limit:
 # yamllint disable rule:line-length
 inputs:
@@ -69,10 +63,9 @@ plotting:
   decades: 5  # the floor five decades below the suite-wide maximum
   bias_scale: linear  # the default
 # One entry: the empty selector matches the single combination of a sweep-less
-# suite. The all-zero ULID means "not published yet": the harness never looks
-# for it, the comparison test skips, and publish-baselines replaces it (keeping
-# the quotes, which YAML needs for 26 zeros). rtol as for maccity: a few
-# float64 ULPs at any magnitude.
+# suite. The ULID is the baseline published from Ursa on 2026-10-22
+# (publish-baselines repoints this line on every publish); rtol as for
+# maccity: a few float64 ULPs at any magnitude.
 baseline_comparisons:
   - sweep_selector: {}
     ulid: 01M5JV8MBW0XE9TPE0BDCGSFJZ
