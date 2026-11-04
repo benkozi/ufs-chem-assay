@@ -37,7 +37,28 @@ from tests.ufs_chem_assay.stubs import stub_application
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI_LOGGER = f"{LOGGER_NAME}.cli"
+# The Ursa template: two sessions, each a harness script and (submit_only)
+# a resume script; `run` renders the resume scripts but executes them only
+# when --stage resume asks. Sorted, as _scripts lists them.
 _CECE_SCRIPTS = [
+    "01-source-cece.sh",
+    "02-build-cece.sh",
+    "03-data-cece.sh",
+    "05-harness-cece-gcafs-anthro.sh",
+    "05-harness-cece-simple-maccity.sh",
+    "06-resume-cece-gcafs-anthro.sh",
+    "06-resume-cece-simple-maccity.sh",
+]
+# What a plain `run` executes, in order (sessions in config order).
+_CECE_RUN_ORDER = [
+    "01-source-cece.sh",
+    "02-build-cece.sh",
+    "03-data-cece.sh",
+    "05-harness-cece-simple-maccity.sh",
+    "05-harness-cece-gcafs-anthro.sh",
+]
+# The local template: one nameless session, no resume.
+_LOCAL_SCRIPTS = [
     "01-source-cece.sh",
     "02-build-cece.sh",
     "03-data-cece.sh",
@@ -109,7 +130,9 @@ def test_effective_config_records_overrides(
     assert effective["slurm"]["qos"] == "batch"
     assert effective["harness"]["suite_config"] == "ex3-suite.yaml"
     assert effective["root_dir"] == str(tmp_path / "root")
-    harness = (tmp_path / "root" / "scripts" / "05-harness-cece.sh").read_text()
+    harness = (
+        tmp_path / "root" / "scripts" / "05-harness-cece-simple-maccity.sh"
+    ).read_text()
     assert "--suite-config=ex3-suite.yaml" in harness
     assert "-q batch" in harness
     messages = [record.getMessage() for record in caplog.records]
@@ -146,7 +169,14 @@ def test_stage_selection_renders_only_those(
         ]
     )
     assert code == 0
-    assert _scripts(tmp_path) == ["02-build-cece.sh", "05-harness-cece.sh"]
+    # The resume scripts render beside the harness ones (watch runs them).
+    assert _scripts(tmp_path) == [
+        "02-build-cece.sh",
+        "05-harness-cece-gcafs-anthro.sh",
+        "05-harness-cece-simple-maccity.sh",
+        "06-resume-cece-gcafs-anthro.sh",
+        "06-resume-cece-simple-maccity.sh",
+    ]
 
 
 def test_all_stages_run_with_bash_in_order(
@@ -156,7 +186,8 @@ def test_all_stages_run_with_bash_in_order(
     code = main(["run", f"--config-file={_config(tmp_path)}"])
     assert code == 0
     ran = [call.args[0].name for call in run_bash.call_args_list]
-    assert ran == _CECE_SCRIPTS
+    assert ran == _CECE_RUN_ORDER  # the resume scripts are rendered, not run
+    assert _scripts(tmp_path) == _CECE_SCRIPTS
 
 
 def test_failed_stage_stops_the_run_and_logs_at_error(
@@ -179,7 +210,8 @@ def test_local_config_runs_the_same_stages(
     code = main(["run", f"--config-file={_config(tmp_path, 'local.yaml')}"])
     assert code == 0
     ran = [call.args[0].name for call in run_bash.call_args_list]
-    assert ran == _CECE_SCRIPTS
+    assert ran == _LOCAL_SCRIPTS
+    assert _scripts(tmp_path) == _LOCAL_SCRIPTS  # no resume without submit_only
 
 
 def test_harness_keeps_slot_05_without_a_04(
@@ -193,12 +225,12 @@ def test_harness_keeps_slot_05_without_a_04(
 
 def test_platform_flag_overrides_file(tmp_path: Path, mocker: MockerFixture) -> None:
     mocker.patch("cli.main.run_bash")
-    path = _config(tmp_path)
+    path = _config(tmp_path, overrides={"harness.submit_only": False})
     assert (
         main(["run", f"--config-file={path}", "--platform", "local", "--dry-run"]) == 0
     )
     # The exports follow the overridden platform (local -> docker runtime).
-    harness = tmp_path / "root" / "scripts" / "05-harness-cece.sh"
+    harness = tmp_path / "root" / "scripts" / "05-harness-cece-simple-maccity.sh"
     assert "export ASSAY_RUNTIME=docker" in harness.read_text()
 
 
@@ -255,7 +287,7 @@ def test_root_dir_flag_overrides_the_derived_root(
     root = tmp_path / "elsewhere"
     code = main(["run", f"--config-file={config}", f"--root-dir={root}", "--dry-run"])
     assert code == 0
-    harness = root / "scripts" / "05-harness-cece.sh"
+    harness = root / "scripts" / "05-harness-cece-simple-maccity.sh"
     assert harness.is_file()
     assert f"export CECE_ROOT_DIR={root}/CECE" in harness.read_text()
 
@@ -280,15 +312,17 @@ def test_comprehensive_run_renders_stage_major_per_application(
         "02-build-stub.sh",
         "03-data-cece.sh",
         "03-data-stub.sh",
-        "05-harness-cece.sh",
-        "05-harness-stub.sh",
+        "05-harness-cece-simple-maccity.sh",
+        "05-harness-cece-gcafs-anthro.sh",
+        "05-harness-stub-simple-maccity.sh",
+        "05-harness-stub-gcafs-anthro.sh",
     ]
     scripts = tmp_path / "root" / "scripts"
     assert "natural_earth" in (scripts / "03-data-cece.sh").read_text()
     assert "natural_earth" not in (scripts / "03-data-stub.sh").read_text()
     assert (
-        "--combo-output-root=ufs-chem-assay-output/cece"
-        in (scripts / "05-harness-cece.sh").read_text()
+        "--combo-output-root=ufs-chem-assay-output/cece/simple-maccity"
+        in (scripts / "05-harness-cece-simple-maccity.sh").read_text()
     )
 
 
@@ -308,8 +342,106 @@ def test_application_flag_narrows_a_comprehensive_run(
         "01-source-stub.sh",
         "02-build-stub.sh",
         "03-data-stub.sh",
-        "05-harness-stub.sh",
+        "05-harness-stub-gcafs-anthro.sh",
+        "05-harness-stub-simple-maccity.sh",
+        "06-resume-stub-gcafs-anthro.sh",
+        "06-resume-stub-simple-maccity.sh",
     ]
+
+
+# ── Sessions ─────────────────────────────────────────────────────────────────
+
+
+def test_session_flag_narrows_the_run(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    run_bash = mocker.patch("cli.main.run_bash", return_value=0)
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(
+            ["run", f"--config-file={_config(tmp_path)}", "--session", "gcafs-anthro"]
+        )
+    assert code == 0
+    assert _scripts(tmp_path) == [
+        "01-source-cece.sh",
+        "02-build-cece.sh",
+        "03-data-cece.sh",
+        "05-harness-cece-gcafs-anthro.sh",
+        "06-resume-cece-gcafs-anthro.sh",
+    ]
+    ran = [call.args[0].name for call in run_bash.call_args_list]
+    assert ran == [
+        "01-source-cece.sh",
+        "02-build-cece.sh",
+        "03-data-cece.sh",
+        "05-harness-cece-gcafs-anthro.sh",
+    ]
+    data = (tmp_path / "root" / "scripts" / "03-data-cece.sh").read_text()
+    assert "--suite-config=gcafs-anthro-suite.yaml" in data
+    assert "simple-maccity" not in data  # only the selected session's inputs
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("sessions: gcafs-anthro" in m for m in messages)
+
+
+def test_unconfigured_session_is_a_clean_error(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch("cli.main.run_bash")
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "run",
+                f"--config-file={_config(tmp_path)}",
+                "--session",
+                "nope",
+                "--dry-run",
+            ]
+        )
+    assert code == 1
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "nope" in errors[0]
+    assert "simple-maccity" in errors[0]
+    # A config without sessions: has none to select.
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "run",
+                f"--config-file={_config(tmp_path, 'local.yaml')}",
+                "--session",
+                "x",
+                "--dry-run",
+            ]
+        )
+    assert code == 1
+    assert "no sessions:" in caplog.records[-1].getMessage()
+
+
+def test_stage_resume_runs_the_resume_scripts_only(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    run_bash = mocker.patch("cli.main.run_bash", return_value=0)
+    assert main(["run", f"--config-file={_config(tmp_path)}", "--stage", "resume"]) == 0
+    ran = [call.args[0].name for call in run_bash.call_args_list]
+    assert ran == ["06-resume-cece-simple-maccity.sh", "06-resume-cece-gcafs-anthro.sh"]
+    assert _scripts(tmp_path) == [
+        "06-resume-cece-gcafs-anthro.sh",
+        "06-resume-cece-simple-maccity.sh",
+    ]
+    # Without submit_only there is nothing to resume: a clean error.
+    run_bash.reset_mock()
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "run",
+                f"--config-file={_config(tmp_path, 'local.yaml')}",
+                "--stage",
+                "resume",
+            ]
+        )
+    assert code == 1
+    run_bash.assert_not_called()
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors == ["resume is rendered only with harness.submit_only: true"]
 
 
 def test_unconfigured_application_is_a_clean_error(

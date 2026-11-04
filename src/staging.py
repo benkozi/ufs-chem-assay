@@ -27,6 +27,7 @@ import yaml
 from pydantic import ConfigDict, Field
 from ulid import ULID
 
+from fslock import locked
 from logs import get_logger
 from models.base import StrictModel
 from models.conventions import CONVENTIONS
@@ -463,7 +464,13 @@ def rewrite_suite_digests(path: Path, updates: dict[PurePosixPath, str]) -> None
     other byte kept (the suite files are hand-commented, which a YAML dump
     would lose), verified by reloading: the suite must equal the previous
     one with exactly those digests changed, or the original text is
-    restored. The ULID repoint's pattern (baselines/suite.py)."""
+    restored. The ULID repoint's pattern (baselines/suite.py), under the
+    same exclusive file lock (fslock)."""
+    with locked(path):
+        _rewrite_suite_digests(path, updates)
+
+
+def _rewrite_suite_digests(path: Path, updates: dict[PurePosixPath, str]) -> None:
     from applications.registry import load_suite
 
     original = path.read_text()

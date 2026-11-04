@@ -25,6 +25,7 @@ from typing import Literal
 import pandas as pd
 from pydantic import ConfigDict, Field
 
+from fslock import locked
 from logs import get_logger
 from models.base import StrictModel
 from models.conventions import CONVENTIONS
@@ -372,12 +373,21 @@ class AppendResult(StrictModel):
 
 def append_benchmarks(repo_csv: Path, rows: Sequence[BenchmarkRow]) -> AppendResult:
     """Grow the committed per-configuration file: created with the header
-    when absent; a present (run_id, combo_id) is skipped; the rest are
-    appended as lines. Existing lines are never touched, re-sorted, or
-    re-formatted. The file is reloaded through the model afterwards and
-    restored from the original text if that fails."""
-    if not repo_csv.is_file():
-        repo_csv.parent.mkdir(parents=True, exist_ok=True)
+    when absent (or empty), a present (run_id, combo_id) is skipped; the
+    rest are appended as lines. Existing lines are never touched,
+    re-sorted, or re-formatted. The file is reloaded through the model
+    afterwards and restored from the original text if that fails. The
+    whole read-modify-write holds the file's exclusive lock (fslock), so
+    two sessions ending at once append one after the other."""
+    repo_csv.parent.mkdir(parents=True, exist_ok=True)
+    with locked(repo_csv):
+        return _append_benchmarks_locked(repo_csv, rows)
+
+
+def _append_benchmarks_locked(
+    repo_csv: Path, rows: Sequence[BenchmarkRow]
+) -> AppendResult:
+    if not repo_csv.is_file() or repo_csv.stat().st_size == 0:
         write_benchmarks_csv(rows, repo_csv)
         return AppendResult(appended=len(rows), skipped=0)
     original = repo_csv.read_text()

@@ -1,9 +1,18 @@
 """The harness CLI.
 
-`ufs-chem-assay run --config-file=X [--override K:P=V ...]`: render the
-stage scripts for every configured application and run them in order with
-bash, on this node. Under the slurm runtime the harness itself submits one
-Slurm job per driver call.
+`ufs-chem-assay run --config-file=X [--session NAME ...] [--override
+K:P=V ...]`: render the stage scripts for every configured application —
+per session for the harness and resume stages — and run them in order
+with bash, on this node. Under the slurm runtime the harness stage's
+pytest session submits every driver job at once and, with
+harness.submit_only, stops; the resume stage (rendered beside it,
+executed under --stage resume) evaluates the finished jobs.
+
+`ufs-chem-assay watch [--root-dir DIR] [--session NAME ...] [--interval S]
+[--once]`: the loop over the last `run`'s submit-only sessions — poll
+Slurm, run each session's resume script when its jobs are done, exit with
+the sessions' statuses. `ufs-chem-assay cancel --output-root PATH`:
+scancel a session's jobs still queued (cli/watch.py).
 
 `ufs-chem-assay fetch [--application NAME] [--suite-config SELECTOR]
 [--dry-run]`: stage the inputs the selected suites declare into the
@@ -31,9 +40,10 @@ from applications.base import Application, Stage
 from applications.registry import get_application
 from baselines import default_selector, ensure_baselines, load_run, plan, publish
 from benchmarks import append_benchmarks, read_benchmarks_csv
-from cli.run_config import RunConfig
+from cli.run_config import ResolvedSession, RunConfig
 from cli.shell import run_bash, write_script
-from cli.stages import render_stage
+from cli.stages import PER_SESSION, render_stage
+from cli.watch import cancel, watch
 from logs import configure_logging, get_logger
 from models.conventions import CONVENTIONS
 from models.suite_config import RunManifest
@@ -47,8 +57,16 @@ from staging import merge_inputs, rewrite_suite_digests, stage_inputs
 logger = get_logger("cli")
 
 # Script file numbering: fixed slots in the canonical order, so the harness
-# stage is always 05 (slot 04 is held for the application's own tests, issue #9).
-_INDEX = {Stage.SOURCE: 1, Stage.BUILD: 2, Stage.DATA: 3, Stage.HARNESS: 5}
+# stage is always 05 (slot 04 is held for the application's own tests, issue #9)
+# and its resume half 06.
+_INDEX = {
+    Stage.SOURCE: 1,
+    Stage.BUILD: 2,
+    Stage.DATA: 3,
+    Stage.HARNESS: 5,
+    Stage.RESUME: 6,
+}
+_RESUME_NEEDS_SUBMIT_ONLY = "resume is rendered only with harness.submit_only: true"
 
 
 @unique
@@ -61,6 +79,8 @@ class Command(StrEnum):
     RECORD_BENCHMARKS = "record-benchmarks"
     UPLOAD_OUTPUT = "upload-output"
     DOWNLOAD_OUTPUT = "download-output"
+    WATCH = "watch"
+    CANCEL = "cancel"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -110,6 +130,16 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     run.add_argument(
+        "--session",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help=(
+            "run only this configured session (repeatable); default: every "
+            "entry of the config's sessions: map"
+        ),
+    )
+    run.add_argument(
         "--stage",
         action="append",
         type=Stage,
@@ -118,7 +148,9 @@ def _parser() -> argparse.ArgumentParser:
         metavar="STAGE",
         help=(
             "run only this stage (repeatable, executed in canonical order); "
-            f"one of {', '.join(stage.value for stage in Stage)}"
+            f"one of {', '.join(stage.value for stage in Stage)}. resume (the "
+            "evaluation of a submit-only session, which `watch` runs) is "
+            "rendered by default but executed only when named"
         ),
     )
     run.add_argument(
@@ -310,14 +342,94 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="the wrapper's own --dryrun plan (or a file count for a directory store); nothing written",
     )
+    watch_parser = subparsers.add_parser(
+        Command.WATCH,
+        help=(
+            "poll Slurm for the submit-only sessions of the last `run` (its "
+            "effective config under <root_dir>/scripts/) and run each session's "
+            "resume script when its jobs are done, one session at a time; ends "
+            "when every session is evaluated, with the sessions' pytest statuses"
+        ),
+    )
+    watch_parser.add_argument(
+        "--root-dir",
+        type=Path,
+        default=None,
+        help="the run root `run` used (default: the harness checkout's parent directory)",
+    )
+    watch_parser.add_argument(
+        "--application",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help="watch only this configured application (repeatable)",
+    )
+    watch_parser.add_argument(
+        "--session",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help="watch only this configured session (repeatable)",
+    )
+    watch_parser.add_argument(
+        "--interval",
+        type=int,
+        default=None,
+        metavar="S",
+        help="seconds between polls (default: the config's slurm.poll_s)",
+    )
+    watch_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="report every session's state once and exit 0; evaluate nothing",
+    )
+    cancel_parser = subparsers.add_parser(
+        Command.CANCEL,
+        help="scancel a session's driver jobs still in the Slurm queue (its jobs.yaml)",
+    )
+    cancel_parser.add_argument(
+        "--output-root",
+        required=True,
+        type=Path,
+        help="the session's output root (the directory holding jobs.yaml)",
+    )
+    cancel_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="name the jobs that would be cancelled; cancel nothing",
+    )
     return parser
 
 
 def _selected_stages(requested: list[Stage] | None) -> list[Stage]:
-    """The requested stages in canonical order; all of them when none given."""
+    """The requested stages in canonical order; all but resume when none
+    given — a plain `run` must not block on the evaluation it just deferred."""
     if requested is None:
-        return list(Stage)
+        return [stage for stage in Stage if stage is not Stage.RESUME]
     return [stage for stage in Stage if stage in requested]
+
+
+def _selected_sessions(
+    config: RunConfig, requested: list[str] | None
+) -> list[ResolvedSession]:
+    """The configured sessions, in the config's order, narrowed to the
+    requested names; naming an unconfigured session is an error, as is
+    naming any on a config without sessions:."""
+    sessions = config.resolved_sessions()
+    if requested is None:
+        return sessions
+    if not config.sessions:
+        raise ValueError(
+            f"--session {requested}: the run config has no sessions: map "
+            "(it is one nameless session)"
+        )
+    unknown = sorted(set(requested) - set(config.sessions))
+    if unknown:
+        raise ValueError(
+            f"--session {unknown} not in the run config's sessions "
+            f"({list(config.sessions)})"
+        )
+    return [session for session in sessions if session.name in requested]
 
 
 def _selected_applications(
@@ -349,18 +461,24 @@ def _run(args: argparse.Namespace) -> int:
             resolve_application=get_application,
         )
         applications = _selected_applications(config, args.application)
+        sessions = _selected_sessions(config, args.session)
+        stages = _selected_stages(args.stage)
+        if Stage.RESUME in stages and not all(
+            session.harness.submit_only for session in sessions
+        ):
+            raise ValueError(_RESUME_NEEDS_SUBMIT_ONLY)
     except ValueError as exc:
         logger.error("%s", exc)
         return 1
     scripts_dir = config.root_dir / "scripts"
     logs_dir = config.root_dir / "logs"
-    stages = _selected_stages(args.stage)
     logger.info(
-        "platform %s / runtime %s; root %s; applications: %s; stages: %s",
+        "platform %s / runtime %s; root %s; applications: %s; sessions: %s; stages: %s",
         config.platform.value,
         config.runtime.value,
         config.root_dir,
         ", ".join(app.name for app in applications),
+        ", ".join(session.name or "(nameless)" for session in sessions),
         ", ".join(stage.value for stage in stages),
     )
     if args.override:
@@ -379,29 +497,54 @@ def _run(args: argparse.Namespace) -> int:
 
     # The effective configuration — the file plus every override, as
     # validated — beside the scripts it produced: re-runs the same run with
-    # no override list.
+    # no override list, and `watch` reads it for the sessions' roots.
     effective = scripts_dir / CONVENTIONS.effective_config
     config.to_yaml(effective)
     logger.info("wrote %s", effective)
 
     # Render and write everything first so a bad config fails before any
     # stage runs. Stage-major order: every application's source, then every
-    # build, ... so build failures surface before any pytest session.
-    paths = [
-        write_script(
-            render_stage(stage, config, app, shared_data=position == 0),
-            scripts_dir,
-            _INDEX[stage],
-        )
-        for stage in stages
-        for position, app in enumerate(applications)
-    ]
-    for path in paths:
-        logger.info("wrote %s", path)
+    # build, ... so build failures surface before any pytest session; the
+    # per-session stages render once per application per session. A
+    # submit-only session's resume script is rendered beside its harness
+    # script whenever the harness stage is — `watch` runs it — but executed
+    # only when --stage resume asks.
+    render = list(stages)
+    if Stage.HARNESS in render and Stage.RESUME not in render:
+        render.append(Stage.RESUME)
+    to_run: list[Path] = []
+    for stage in render:
+        for position, app in enumerate(applications):
+            if stage in PER_SESSION:
+                for session in sessions:
+                    if stage is Stage.RESUME and not session.harness.submit_only:
+                        continue
+                    path = write_script(
+                        render_stage(stage, config, app, session),
+                        scripts_dir,
+                        _INDEX[stage],
+                    )
+                    logger.info("wrote %s", path)
+                    if stage in stages:
+                        to_run.append(path)
+            else:
+                path = write_script(
+                    render_stage(
+                        stage,
+                        config,
+                        app,
+                        shared_data=position == 0,
+                        sessions=sessions,
+                    ),
+                    scripts_dir,
+                    _INDEX[stage],
+                )
+                logger.info("wrote %s", path)
+                to_run.append(path)
     if args.dry_run:
         logger.info("dry run: nothing executed")
         return 0
-    for path in paths:
+    for path in to_run:
         code = run_bash(path, logs_dir)
         if code != 0:
             logger.error("stage %s failed with exit %s", path.stem, code)
@@ -785,4 +928,6 @@ HANDLERS: dict[Command, Callable[[argparse.Namespace], int]] = {
     Command.RECORD_BENCHMARKS: _record_benchmarks,
     Command.UPLOAD_OUTPUT: _upload_output,
     Command.DOWNLOAD_OUTPUT: _download_output,
+    Command.WATCH: lambda args: watch(args, _selected_applications, _selected_sessions),
+    Command.CANCEL: cancel,
 }

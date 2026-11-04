@@ -24,13 +24,12 @@ def test_templates_live_in_config() -> None:
     assert TEMPLATES_DIR == _REPO_ROOT / "config"
     assert sorted(p.name for p in TEMPLATES_DIR.glob("*.yaml")) == [
         "local.yaml",
-        "ursa-gcafs-anthro.yaml",
         "ursa.yaml",
     ]
     assert not (_REPO_ROOT / "scripts").exists()  # nothing hand-written ships there
 
 
-@pytest.mark.parametrize("name", ["local.yaml", "ursa.yaml", "ursa-gcafs-anthro.yaml"])
+@pytest.mark.parametrize("name", ["local.yaml", "ursa.yaml"])
 def test_templates_carry_the_applications_map(name: str) -> None:
     raw = yaml.safe_load((TEMPLATES_DIR / name).read_text())
     assert list(raw["applications"]) == ["cece"]
@@ -65,8 +64,10 @@ def test_gcafs_anthro_runbook_covers_the_use_case() -> None:
         "ASSAY_INPUT_SEARCH_PATH",
         "fetch --suite-config=gcafs-anthro-suite.yaml --record-digests",
         "git diff",
-        "config/ursa-gcafs-anthro.yaml --dry-run",
-        "config/ursa-gcafs-anthro.yaml --stage data --stage harness",
+        "config/ursa.yaml --dry-run --session gcafs-anthro",
+        "config/ursa.yaml --stage data --stage harness --session gcafs-anthro",
+        "watch --session gcafs-anthro",
+        "sessions:gcafs-anthro:slurm:ntasks=4",
         "--mem=0",
         "publish-baselines",
         "baselines:enabled=true",
@@ -79,9 +80,8 @@ def test_gcafs_anthro_runbook_covers_the_use_case() -> None:
         "assay-output/<run ULID>",
     ):
         assert needle in text, needle
-    assert (
-        "GCAFS=(" not in text
-    )  # the override list became config/ursa-gcafs-anthro.yaml
+    assert "GCAFS=(" not in text  # the override list became a session overlay
+    assert "ursa-gcafs-anthro.yaml" not in text  # retired: one Ursa template
     assert "ROOT=" not in text  # inherits $ROOT from the Ursa runbook
     for scratch in ("/scratch3", "/scratch4", "RUNDIRS"):
         assert scratch not in text, scratch
@@ -96,11 +96,17 @@ def test_runbook_uses_placeholders_and_ref_variables() -> None:
     assert "fix/all-examples-pass" not in text
     assert "buid-test-tweaks" not in text
     assert "benkozi/CECE" not in text
-    assert "tmux" in text
+    assert "tmux" in text  # optional now, and the runbook says so
     assert "squeue" in text
     assert "config/ursa.yaml --stage harness" in text  # the template runs as shipped
-    assert "05-harness-cece.sh" in text
+    assert "05-harness-cece-simple-maccity.sh" in text  # per-session scripts
+    assert "06-resume-cece-simple-maccity.sh" in text
+    assert "ufs-chem-assay watch" in text
+    assert "jobs.yaml" in text
+    assert "ufs-chem-assay cancel" in text
+    assert "05-harness-cece.sh" not in text
     assert "05-harness.sh" not in text
+    assert "ursa-gcafs-anthro.yaml" not in text
     assert "root_dir" in text  # explains the derived root
     assert (
         ".sbatch" in text
@@ -158,10 +164,22 @@ def test_readme_documents_the_new_surfaces() -> None:
         "--upload-output",
         "harness.upload_output",
         "upload.yaml",
+        "sessions:",
+        "--session",
+        "harness.submit_only",
+        "jobs.yaml",
+        "ufs-chem-assay watch",
+        "ufs-chem-assay cancel",
+        "--submit-only",
+        "--resume",
+        "ASSAY_SLURM_POLL_S",
+        "06-resume-",
+        "flock",
     ):
         assert needle in text, needle
     assert "buid-test-tweaks" not in text
     assert "benkozi/CECE" not in text
+    assert "ursa-gcafs-anthro.yaml" not in text  # retired: one Ursa template
 
 
 def test_user_docs_never_say_example() -> None:

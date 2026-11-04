@@ -23,7 +23,7 @@ analysed. The configurations the harness carries live under
 that sweep it (`cece/maccity/`: `maccity.yaml` and its three suites;
 `cece/gcafs-anthro/` since 2026-10-19: the global anthropogenic use case of
 issue #33, one sweep-less suite over seven placed inputs with their Ursa
-locations, run as shipped by `config/ursa-gcafs-anthro.yaml`, Ursa only — see
+locations, run as shipped by the `gcafs-anthro` session of `config/ursa.yaml`, Ursa only — see
 `design/feat/20261019-1447-global-anthro-use-case/20261019-1447-global-anthro-use-case.md`,
 which also brought `grid.nz`, the driver-level AMIO input knobs, stream
 `time_label`, and the full cadence set into the CECE model, source-less
@@ -59,7 +59,20 @@ the harness test package `src/tests/ufs_chem_assay/`. See
   invocation writes the effective configuration to
   `<root_dir>/scripts/run-config.yaml`. Stages render per application as
   `<NN>-<stage>-<application>.sh`; a run config naming several
-  applications runs one pytest session per application.
+  applications runs one pytest session per application. Since 2026-11-04
+  a run config also describes several **sessions**: `sessions:` maps a
+  name to an overlay on `harness:`/`slurm:`/`baselines:` (one level deep,
+  an overlaid key replaces the base value whole; `runtime` is config-wide),
+  each one pytest session under `<output_root>/<session>` with the
+  per-session stages rendered as `<NN>-<stage>-<application>-<session>.sh`
+  and `--session NAME` narrowing; no `sessions:` is one nameless session
+  with the old paths. `config/ursa.yaml` ships `simple-maccity` and
+  `gcafs-anthro` (the former `config/ursa-gcafs-anthro.yaml`, retired) and
+  a commented `exhaustive-maccity`. A sixth stage, `resume`, pairs with
+  `harness.submit_only`: the harness stage's session submits every job and
+  stops, `ufs-chem-assay watch` runs the resume scripts as the jobs
+  finish (Execution model; `ufs-chem-assay cancel` scancels a session's;
+  `design/feat/20261104-1129-async-runs/20261104-1129-async-runs.md`).
 - No dependency on existing CECE Python infrastructure; the runner lives in
   its **own repository** with its own `uv`-managed environment. The
   application checkout (driver build, input data) is external, located via
@@ -417,6 +430,9 @@ Layout under the output root is the same either way:
   benchmarks.csv               # one BenchmarkRow per executed combination (header
                                #   only after a dry run); see Benchmarks
   upload.yaml                  # once uploaded: OutputUploadRecord (see Output upload)
+  jobs.yaml                    # slurm: JobLedger — every combination's job as submitted
+                               #   (SubmittedJob: id, script, .out, timeout, queue allowance,
+                               #   submitted_at), submitted_by, evaluated_at, exit_status
   run.yaml                     # RunManifest (incl. inputs as found, baselines as
                                #   found or synced): session ULID, application,
                                #   application_commit (the checkout's HEAD SHA; null
@@ -465,7 +481,24 @@ session and can never pre-exist.
 Three **runtimes** (`settings.runtime`, `src/platforms.py`): `docker`, the
 default on the `local` platform and described first below; `slurm`, the
 default on every other platform (RDHPC machines have no docker) — pytest
-runs on a login node and each driver call is one `sbatch --wait` job
+runs on a login node and each driver call is one Slurm job: every
+combination's is submitted up front (`sbatch --parsable`, in enumeration
+order, by the session fixture `submitted_jobs`), recorded in `jobs.yaml`
+(the job ledger, `src/jobs.py`, rewritten after each submission so an
+interrupted submit stays truthful) and waited for by polling `squeue`
+every `slurm_poll_s` (`wait_for_job`; past submission + timeout + queue
+allowance the job is cancelled and `SlurmJobTimeout` raised), its verdict
+from `sacct` (`finish_driver_job`: TIMEOUT/CANCELLED → timeout, a nonzero
+exit → `SlurmJobError`; `sbatch --wait` is gone, 2026-11-04). The session
+has two optional halves: `--submit-only` ends it once the ledger is
+complete (every combo test skips naming its job; no report, no
+benchmarks) and `--resume --combo-output-root=<root>` reopens the root —
+adopting `run_id` from `run.yaml` and the combination ids from the ledger
+by (suite, canonical name), with an exact-set check, never rewriting
+`run.yaml`, `combos.csv` or the generated files — waits for what is still
+queued and runs every test and the session-end pipeline; the ledger is
+rewritten last with `evaluated_at` and the exit status. `--combo-clean-root`
+refuses a root whose ledger lists queued jobs. Each job runs
 from a rendered `<combo_id>.sbatch` (Jinja2 template) kept beside the
 combo's artifacts — directives, `CECE_MODULEFILE` load, `ASSAY_JOB_ENV`,
 and the driver behind `srun ${ASSAY_SRUN_ARGS}` (`--ntasks=<slurm.ntasks>`
@@ -585,6 +618,14 @@ exit is the failure condition. The environment variables mirror `setup.sh`
     client never starts). Validates any suite — notably the exhaustive
     one — before paying for containers. With the default temp output root
     it needs no environment at all — no CECE checkout required.
+  - `--submit-only` / `--resume` — flags, slurm runtime only (a
+    `UsageError` elsewhere, or together; `--resume` needs
+    `--combo-output-root` and refuses `--combo-clean-root` and `--dry-run`):
+    the two halves of an asynchronous session (Execution model). The
+    run config's `harness.submit_only` renders them as the harness and
+    resume stages; the session flags below ride on both lines — the
+    submit session runs their start-of-session probes and defers the
+    actions with one INFO line, the resume session performs them.
   - `--publish-baselines` — flag; at session end (right after
     `test-report.csv` is written, before the plots), publish every
     compared combination that passed the gate as a new baseline and
@@ -881,8 +922,10 @@ Persistent benchmarking (2026-10-23, `src/benchmarks.py`; full design in
   `config_fingerprint`, equal across runs of the same generated
   configuration), provenance (`application_commit`, harness version and
   commit, platform, runtime, modulefile, the launch as `run.yaml` records
-  it), timings (`duration_s`: the harness clock around `run_driver`, queue
-  included under slurm; `wall_s`: the job's `tic`→`toc` lines — every
+  it), timings (`duration_s`: docker/native, the harness clock around
+  `run_driver`; slurm, submission to end from the accounting's `queue_s +
+  elapsed_s`, this process's clock from submission when the accounting
+  lacks them; `wall_s`: the job's `tic`→`toc` lines — every
   runtime writes them now, the runner around docker/native output, the
   job template in the batch script; empty when the job was killed),
   Slurm accounting (`queue_s`, `elapsed_s`, `max_rss_kb`, `slurm_job_id`,
@@ -907,12 +950,19 @@ Persistent benchmarking (2026-10-23, `src/benchmarks.py`; full design in
   header, refuses a foreign header, skips a present `(run_id, combo_id)`,
   appends the rest as lines without touching existing ones, and restores
   the original text when the reload fails — the ULID repoint's pattern;
-  the user reviews the diff and commits.
-- **The runner surfaces the job**: `run_driver` returns `DriverExecution`
-  (the Slurm job id, None elsewhere); a failed or cancelled job raises
+  the user reviews the diff and commits. Since 2026-11-04 the whole
+  read-modify-write holds an exclusive `fcntl.flock` on the file
+  (`fslock.locked`; the two suite-file rewriters, `rewrite_suite_ulid` and
+  `rewrite_suite_digests`, take the same lock): two sessions ending at
+  once cannot interleave — `watch` evaluates sessions serially anyway,
+  which covers filesystems whose cross-node `flock` is not honoured.
+- **The runner surfaces the job**: under slurm `submit_driver_job` writes
+  the script and submits it, `finish_driver_job` waits and judges, and
+  `DriverExecution` carries the job id and its `SlurmAccounting`
+  (docker/native: `run_driver`, id None); a failed or cancelled job raises
   `SlurmJobError`/`SlurmJobTimeout` (subclasses of the standard
-  exceptions) carrying the id, since accounting matters most then;
-  `DriverRunResult` keeps `execution`, `duration_s`, `timeout_s`.
+  exceptions, `src/jobs.py`) carrying the id, since accounting matters
+  most then; `DriverRunResult` keeps `execution`, `duration_s`, `timeout_s`.
 - **Session-end order**: report → benchmarks (per-run and per-combination
   files, and the committed file under `--record-benchmarks`) → publish →
   stats → plots; the benchmark step is wrapped so it never fails the
@@ -1043,7 +1093,9 @@ All code under `src/`; the project is `uv`-managed with its own
   pyproject.toml          # uv project: pytest, pytest-mock, pydantic>=2, pydantic-settings, pyyaml
   README.md               # user-facing setup + run instructions
   docs/ursa-runbook.md    # manual native run on Ursa (what the CLI automates)
-  config/                 # run-config templates: local.yaml (docker), ursa.yaml (native + slurm)
+  docs/gcafs-anthro-runbook.md  # the global anthropogenic use case on top of it
+  config/                 # run-config templates: local.yaml (docker), ursa.yaml (native + slurm;
+                          #   sessions: simple-maccity, gcafs-anthro, a commented exhaustive-maccity)
   design/design.md
   src/
     applications/
@@ -1066,11 +1118,13 @@ All code under `src/`; the project is `uv`-managed with its own
       strict_yaml.py      # the YAML-1.2-boolean loader (configs, override values)
       conventions.py      # CONVENTIONS: the harness-wide names (files, .staging, prefixes,
                           #   default stores, clock format) — frozen, described, never overridden
-    cli/                  # `ufs-chem-assay run`: run config model (applications map),
-                          #   overrides, per-application stage scripts, bash execution
-                          #   (main.Command, the StrEnum of subcommands, keys the handlers);
+    cli/                  # `ufs-chem-assay run`: run config model (applications map,
+                          #   sessions overlays), overrides, per-application / per-session
+                          #   stage scripts, bash execution (main.Command, the StrEnum of
+                          #   subcommands, keys the handlers);
                           #   `ufs-chem-assay fetch`: stage the selected suites' inputs;
-                          #   `ufs-chem-assay publish-baselines`: a finished run -> the store
+                          #   `ufs-chem-assay publish-baselines`: a finished run -> the store;
+                          #   watch.py: `watch` (the monitor loop) and `cancel`
     identity.py           # HARNESS_NAME, HARNESS_ROOT, harness_version/commit
     platforms.py          # Platform / Runtime enums, hostname detection
     templates/driver-job.sbatch.j2  # the slurm runtime's per-driver job script
@@ -1089,7 +1143,11 @@ All code under `src/`; the project is `uv`-managed with its own
     selection.py          # selector -> the loaded suites of one application (pytest + fetch)
     staging.py            # inputs: merge across suites, stage via s3_sync, verify, record
     runner.py             # driver command per runtime (docker run / native +
-                          #   launcher / sbatch), check_output, .out writing
+                          #   launcher / sbatch --parsable), check_output, .out writing,
+                          #   submit_driver_job / finish_driver_job (slurm's two halves)
+    jobs.py               # the job ledger (SubmittedJob, JobLedger, jobs.yaml), sbatch /
+                          #   squeue / sacct / scancel: submit, poll, judge, cancel
+    fslock.py             # locked(path): flock around the committed files' rewrites
     s3_sync.py            # stand-alone `aws s3 sync` wrapper; credentials are
                           #   the CLI's own; one harness import (the logger)
     benchmarks.py         # BenchmarkRow, tic/toc and sacct parsing, the three benchmarks.csv writers
@@ -1161,7 +1219,9 @@ stage: enough for a user to set up and run the suite. It covers:
 - **Environment variables**: the `ASSAY_*` (harness) and `CECE_*` (adapter)
   settings tables.
 - **Configuring a run**: the run config as the complete YAML surface,
-  `--override`, precedence, and the `run-config.yaml` artifact.
+  `--override`, precedence, and the `run-config.yaml` artifact; sessions,
+  `--session`, submit-then-watch (`harness.submit_only`, `jobs.yaml`,
+  `ufs-chem-assay watch`, `cancel`).
 
 The README grows alongside future features (evaluation step, richer suite
 config) but stays a quick-start document; design rationale lives here, not

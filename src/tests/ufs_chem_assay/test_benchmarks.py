@@ -312,6 +312,62 @@ def test_append_refuses_a_foreign_header_and_restores_on_a_bad_reload(
     assert repo.read_text() == original
 
 
+def test_append_treats_an_empty_file_as_absent(tmp_path: Path) -> None:
+    # locked() creates the file when absent, so a zero-byte file is the
+    # "never written" case too: header plus rows, no header check.
+    repo = tmp_path / CONVENTIONS.benchmarks
+    repo.touch()
+    assert append_benchmarks(repo, [_row()]) == AppendResult(appended=1, skipped=0)
+    assert repo.read_text().startswith(",".join(BENCHMARK_COLUMNS) + "\n")
+    assert read_benchmarks_csv(repo) == [_row()]
+
+
+def test_append_from_two_threads_keeps_both_sets_and_one_header(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    # Two sessions ending at once append under the exclusive lock: every
+    # row of both lands, the header is written once, nothing interleaves.
+    import threading
+    import time
+
+    repo = tmp_path / "cece" / "maccity" / CONVENTIONS.benchmarks
+    original_write = write_benchmarks_csv
+
+    def slow_write(rows: object, path: Path) -> object:
+        time.sleep(0.05)  # widen the window inside the critical section
+        return original_write(rows, path)  # type: ignore[arg-type]
+
+    mocker.patch("benchmarks.write_benchmarks_csv", side_effect=slow_write)
+    first = [_row(combo_id=f"01JCOMBOA{i:017d}") for i in range(3)]
+    second = [
+        _row(run_id="01JRUN2RUN2RUN2RUN2RUN2RUN", combo_id=f"01JCOMBOB{i:017d}")
+        for i in range(3)
+    ]
+    errors: list[Exception] = []
+
+    def append(rows: list[BenchmarkRow]) -> None:
+        try:
+            append_benchmarks(repo, rows)
+        except Exception as exc:  # noqa: BLE001 - surfaced by the assert below
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=append, args=(first,)),
+        threading.Thread(target=append, args=(second,)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+    assert not errors
+    lines = repo.read_text().splitlines()
+    assert lines[0] == ",".join(BENCHMARK_COLUMNS)
+    assert lines.count(",".join(BENCHMARK_COLUMNS)) == 1
+    assert sorted(
+        (row.run_id, row.combo_id) for row in read_benchmarks_csv(repo)
+    ) == sorted((row.run_id, row.combo_id) for row in first + second)
+
+
 # ── collect_row ──────────────────────────────────────────────────────────────
 
 

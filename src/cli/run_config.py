@@ -1,12 +1,21 @@
 """The run config: one YAML file describing where and how a run happens —
 every harness setting, every application's section, every pytest option —
-with command-line overrides merged in before validation."""
+with command-line overrides merged in before validation.
+
+A run config describes one or several *sessions*: `sessions:` is a map of
+session name to an overlay on the file's harness:/slurm:/baselines:
+sections, one level deep (an overlaid key replaces the base value whole).
+Each session is one pytest session with its own output root
+(<output_root>/<session>) and job geometry. No `sessions:` means one
+implicit, nameless session with today's paths and script names."""
 
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable, Iterable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from typing import TypeVar
 
 import yaml
 from pydantic import (
@@ -25,7 +34,16 @@ from models.base import StrictModel
 from models.conventions import CONVENTIONS
 from platforms import Platform, Runtime, default_runtime, detect_platform
 
-__all__ = ["HARNESS_ROOT", "ResolveApplication", "RunConfig"]
+__all__ = [
+    "HARNESS_ROOT",
+    "ResolveApplication",
+    "ResolvedSession",
+    "RunConfig",
+    "SessionOverlay",
+]
+
+# Session names become directory and script names: lower-case, digits, dashes.
+SESSION_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 # name -> adapter, or ValueError naming the registered ones: the registry's
 # get_application. Injected by the caller (cli/main.py, the tests) because
@@ -151,6 +169,15 @@ class HarnessSection(StrictModel):
             "(off by default; needs network where the session runs)"
         ),
     )
+    submit_only: bool = Field(
+        default=False,
+        description=(
+            "Pass --submit-only: the session submits every driver job, writes "
+            "jobs.yaml at its output root and stops; `ufs-chem-assay watch` (or "
+            "`run --stage resume`) evaluates it later through the rendered resume "
+            "script. Slurm runtime only"
+        ),
+    )
     runtime: Runtime | None = Field(
         default=None,
         description=(
@@ -200,9 +227,9 @@ class HarnessSection(StrictModel):
 
 
 class SlurmSection(StrictModel):
-    """The per-driver Slurm job (slurm runtime): one `sbatch --wait` per
-    driver call, from the login node where pytest runs. The time limit is
-    the suite timeout, not configured here."""
+    """The per-driver Slurm job (slurm runtime): one job per driver call,
+    submitted from the login node where pytest runs and waited for by
+    polling. The time limit is the suite timeout, not configured here."""
 
     account: str = Field(
         default="epic", description="sbatch -A (the Slurm project to charge)"
@@ -241,6 +268,15 @@ class SlurmSection(StrictModel):
         ),
     )
 
+    poll_s: int = Field(
+        default=30,
+        gt=0,
+        description=(
+            "ASSAY_SLURM_POLL_S: seconds between squeue polls while a driver job "
+            "is queued or running"
+        ),
+    )
+
     @property
     def sbatch_args(self) -> str:
         """ASSAY_SBATCH_ARGS: one node, the configured tasks and cpus per
@@ -262,6 +298,42 @@ class UvSection(StrictModel):
     cache_dir: Path | None = Field(
         default=None, description="UV_CACHE_DIR; null means <root_dir>/uv-cache"
     )
+
+
+class SessionOverlay(StrictModel):
+    """One `sessions:` entry: what this session changes in the harness:,
+    slurm: and baselines: sections, one level deep — an overlaid key
+    replaces the base value whole (`env` is replaced, not merged). The other
+    sections (applications:, data:, outputs:, uv:) are run-wide: the
+    checkout, the inputs, the stores and the cache are the same whichever
+    suite runs."""
+
+    harness: dict[str, object] = Field(
+        default_factory=dict,
+        description="harness: keys this session overrides (runtime is config-wide and refused)",
+    )
+    slurm: dict[str, object] = Field(
+        default_factory=dict,
+        description="slurm: keys this session overrides; needs a slurm: section in the file",
+    )
+    baselines: dict[str, object] = Field(
+        default_factory=dict,
+        description="baselines: keys this session overrides",
+    )
+
+
+class ResolvedSession(StrictModel):
+    """A session as the stages render it: its name (None for the implicit
+    session of a config without sessions:) and its three effective sections."""
+
+    name: str | None = Field(
+        description="The sessions: key; None for the nameless implicit session"
+    )
+    harness: HarnessSection = Field(description="The effective harness: section")
+    slurm: SlurmSection | None = Field(
+        description="The effective slurm: section; None when the file has none"
+    )
+    baselines: BaselinesSection = Field(description="The effective baselines: section")
 
 
 class RunConfig(StrictModel):
@@ -298,7 +370,41 @@ class RunConfig(StrictModel):
         default=None,
         description="Batch-job settings; null runs the driver directly",
     )
+    sessions: dict[str, SessionOverlay] = Field(
+        default_factory=dict,
+        description=(
+            "Named sessions, each one pytest session under <output_root>/<name>, "
+            "as overlays on harness:/slurm:/baselines:; empty means one nameless "
+            "session with today's paths. Select with `run --session NAME`"
+        ),
+    )
     uv: UvSection = Field(default_factory=UvSection)
+
+    @field_validator("sessions", mode="before")
+    @classmethod
+    def _session_names(cls, value: object) -> object:
+        if isinstance(value, dict):
+            for name in value:
+                if not isinstance(name, str) or not SESSION_NAME.match(name):
+                    raise ValueError(
+                        f"sessions: {name!r} is not a session name (lower-case "
+                        "letters, digits and dashes: it names a directory and a script)"
+                    )
+        return value
+
+    @model_validator(mode="after")
+    def _sessions_resolve(self) -> RunConfig:
+        # Every session resolves once at load, so a bad overlay fails
+        # from_yaml, not the harness stage; the same check guards the base.
+        for session in self.resolved_sessions():
+            if session.harness.submit_only and self.runtime is not Runtime.SLURM:
+                where = "" if session.name is None else f"sessions.{session.name}: "
+                raise ValueError(
+                    f"{where}submit_only needs the slurm runtime; "
+                    f"{self.platform.value} runs {self.runtime.value} "
+                    "(--override harness:submit_only=false to run this config here)"
+                )
+        return self
 
     @field_validator("root_dir", mode="before")
     @classmethod
@@ -386,6 +492,69 @@ class RunConfig(StrictModel):
         section = self.applications[app.name]
         return section.clone_dir or self.root_dir / app.checkout_dirname
 
+    # ── sessions ─────────────────────────────────────────────────────────
+
+    @property
+    def session_names(self) -> list[str | None]:
+        return [session.name for session in self.resolved_sessions()]
+
+    def resolved_sessions(self) -> list[ResolvedSession]:
+        """One entry per `sessions:` key in file order, each section built
+        as the base section's values with the overlay's on top and
+        re-validated (so an unknown key, a wrong type or a section rule
+        fails with the usual message under `sessions.<name>.<section>:`);
+        without `sessions:`, the one nameless session of the base sections."""
+        if not self.sessions:
+            return [
+                ResolvedSession(
+                    name=None,
+                    harness=self.harness,
+                    slurm=self.slurm,
+                    baselines=self.baselines,
+                )
+            ]
+        return [
+            self._resolve_session(name, overlay)
+            for name, overlay in self.sessions.items()
+        ]
+
+    def _resolve_session(self, name: str, overlay: SessionOverlay) -> ResolvedSession:
+        if "runtime" in overlay.harness:
+            raise ValueError(
+                f"sessions.{name}.harness: runtime is config-wide (the platform's "
+                "runtime is one thing); it cannot be overlaid per session"
+            )
+        if overlay.slurm and self.slurm is None:
+            raise ValueError(
+                f"session {name} overlays slurm: but the config has no slurm: section"
+            )
+        return ResolvedSession(
+            name=name,
+            harness=_overlaid(
+                self.harness, overlay.harness, f"sessions.{name}.harness"
+            ),
+            slurm=(
+                None
+                if self.slurm is None
+                else _overlaid(self.slurm, overlay.slurm, f"sessions.{name}.slurm")
+            ),
+            baselines=_overlaid(
+                self.baselines, overlay.baselines, f"sessions.{name}.baselines"
+            ),
+        )
+
+    def session_output_root(self, app: Application, session: ResolvedSession) -> str:
+        """The session's --combo-output-root: harness.output_root as-is for
+        one application and a nameless session; /<application> when several
+        applications share the run; /<session> when the session is named —
+        <output_root>[/<application>][/<session>]."""
+        root = PurePosixPath(session.harness.output_root)
+        if len(self.applications) > 1:
+            root = root / app.name
+        if session.name is not None:
+            root = root / session.name
+        return str(root)
+
     def to_yaml(self, path: Path) -> None:
         """The effective configuration, as validated, keys in model order."""
         with open(path, "w") as f:
@@ -395,6 +564,19 @@ class RunConfig(StrictModel):
                 default_flow_style=False,
                 sort_keys=False,
             )
+
+
+_Section = TypeVar("_Section", bound=StrictModel)
+
+
+def _overlaid(base: _Section, patch: dict[str, object], where: str) -> _Section:
+    """The base section's values with the overlay's on top, re-validated as
+    the section — so an unknown key, a wrong type or the section's own
+    rule fails with the usual message, prefixed by the session's path."""
+    try:
+        return type(base).model_validate(base.model_dump() | patch)
+    except ValueError as exc:  # ValidationError is a ValueError
+        raise ValueError(f"{where}: {exc}") from exc
 
 
 def search_path_value(paths: list[Path]) -> str:

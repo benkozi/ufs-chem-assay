@@ -160,10 +160,17 @@ uv run ufs-chem-assay run --config-file=config/ursa.yaml --dry-run
 ```
 
 The dry run renders every stage to `$ROOT/scripts/<NN>-<stage>-<application>.sh`
-(`05-harness-cece.sh` for the harness stage) and executes nothing; read
-`05-harness-cece.sh` before running it. It runs pytest
+— per session for the harness stage and its second half:
+`05-harness-cece-simple-maccity.sh` and `06-resume-cece-simple-maccity.sh`,
+and the same pair for `gcafs-anthro` (`config/ursa.yaml` ships two
+sessions, each its own pytest session under
+`$ROOT/CECE/ufs-chem-assay-output/<session>`; `--session simple-maccity`
+narrows to one) — and executes nothing; read
+`05-harness-cece-simple-maccity.sh` before running it. It runs pytest
 **on the login node**, and pytest submits **one Slurm job per driver
-call**: each combo gets a rendered `<combo_id>.sbatch` beside its
+call, all of them at once**, writes `jobs.yaml` (the job ledger) at the
+output root and returns (`harness.submit_only: true`; the resume script
+is the half that waits): each combo gets a rendered `<combo_id>.sbatch` beside its
 `.yaml` and `.out` under the output root, with the `#SBATCH` directives
 (`-N 1 -n <slurm.ntasks> -c <slurm.cpus>` plus `slurm.extra_args`), the
 module load, and the `srun` launch (`--ntasks=<slurm.ntasks>` plus
@@ -181,36 +188,51 @@ with the modulefile loaded without purging first. Analysis (stats,
 plots) runs in the pytest process on the login node, so the template
 pins `dask_nworkers` to 2.
 
-## 7. Run and watch
+## 7. Submit, then watch
 
 ```bash
-tmux new -s harness            # the session outlives your SSH connection
 cd $ROOT/ufs-chem-assay
-uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage harness
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage harness --session simple-maccity
+uv run ufs-chem-assay watch --session simple-maccity
 ```
 
-The CLI logs to `$ROOT/logs/05-harness-cece-<timestamp>.log` as it
-runs. In another window, `squeue -u $USER` shows the per-combo jobs
-(`ufs-chem-assay-<combo_id>`) come and go. Results land in
-`$ROOT/CECE/ufs-chem-assay-output/`: `run.yaml` (with `application:
-cece`, `application_commit`, the harness's own `harness_version` and
-`harness_commit`, `platform: ursa`, `runtime: slurm`, `modulefile`,
-`launch`: the directives, srun options and job environment),
-`combos.csv`,
-`test-report.csv`, and per combo the generated config, the job script,
-the job's `.out`, `cece.log`, NetCDF, stats, and plots. The login node
-has network, so the first plot fetches Natural Earth coastlines on its
-own.
+The harness stage returns within minutes: it logs to
+`$ROOT/logs/05-harness-cece-simple-maccity-<timestamp>.log`, and
+`squeue -u $USER` shows the per-combo jobs (`ufs-chem-assay-<combo_id>`)
+queued together. `watch` polls `squeue` every `slurm.poll_s` seconds (30
+as shipped; `--interval`), reports each session's jobs as `queued`,
+`running` and `done`, and once a session's jobs have all left the queue
+runs its `06-resume-*` script — the pytest session that evaluates every
+combination (its verdict from `sacct`) and runs the session-end pipeline
+(benchmarks, publish, plots, upload) — one session at a time, logging to
+`$ROOT/logs/06-resume-cece-simple-maccity-<timestamp>.log`; it exits with
+the sessions' pytest statuses. Kill it and run it again whenever you
+like: a dropped SSH connection loses nothing, so `tmux` is optional;
+`watch --once` is a status report, and `uv run ufs-chem-assay run
+--config-file=config/ursa.yaml --stage resume` evaluates by hand. Without
+`--session` both shipped sessions submit and are watched. Results land in
+`$ROOT/CECE/ufs-chem-assay-output/simple-maccity/`: `run.yaml` (with
+`application: cece`, `application_commit`, the harness's own
+`harness_version` and `harness_commit`, `platform: ursa`, `runtime:
+slurm`, `modulefile`, `launch`: the directives, srun options and job
+environment), `combos.csv`, `jobs.yaml` (every job as submitted, and when
+it was evaluated), `test-report.csv`, and per combo the generated config,
+the job script, the job's `.out`, `cece.log`, NetCDF, stats, and plots.
+The login node has network, so the first plot fetches Natural Earth
+coastlines on its own.
 
 **Triage.** A failed combo is reproducible by hand:
 
 ```bash
-cd $ROOT/CECE && sbatch --wait $ROOT/CECE/ufs-chem-assay-output/<combo_id>/<combo_id>.sbatch
+cd $ROOT/CECE && sbatch --wait $ROOT/CECE/ufs-chem-assay-output/simple-maccity/<combo_id>/<combo_id>.sbatch
 ```
 
 then read the `.out` it rewrites. Edit the script in place to
 experiment (a different modulefile, an extra export); the harness
-regenerates it on the next run.
+regenerates it on the next run. To give up on a submission,
+`uv run ufs-chem-assay cancel --output-root=$ROOT/CECE/ufs-chem-assay-output/simple-maccity`
+scancels the session's jobs still queued; a new `run --stage harness`
+over a root whose jobs are still queued is refused until then.
 
 **Publishing baselines.** Once a run is the one you want to compare
 future runs against, publish its compared combinations from the login
@@ -220,9 +242,9 @@ dry-run first, then for real:
 ```bash
 cd $ROOT/ufs-chem-assay
 AWS_PROFILE=<profile> uv run ufs-chem-assay publish-baselines \
-    --output-root=$ROOT/CECE/ufs-chem-assay-output --dry-run
+    --output-root=$ROOT/CECE/ufs-chem-assay-output/simple-maccity --dry-run
 AWS_PROFILE=<profile> uv run ufs-chem-assay publish-baselines \
-    --output-root=$ROOT/CECE/ufs-chem-assay-output
+    --output-root=$ROOT/CECE/ufs-chem-assay-output/simple-maccity
 ```
 
 Each combination the suite compares against goes to
@@ -231,8 +253,8 @@ the suite file's `ulid:` lines are repointed in your harness checkout —
 commit that change. Set `baselines.root_dir` in the run config (or
 `ASSAY_BASELINE_ROOT_DIR`) to also keep a local copy the next run reads;
 `harness.publish_baselines: true` does all of this at the end of the
-harness stage instead — the harness stage runs on the login node under
-the slurm runtime, which has network. A session run *inside* an
+resume session instead — `watch` runs it on the login node, which has
+network. A session run *inside* an
 allocation (a compute node, no network) refuses `--publish-baselines` at
 start: run without the flag, then publish the output root from a login
 or data-transfer node as above. `--store=/path/to/dir` (or `baselines.store`)
@@ -248,7 +270,7 @@ once written; for a run that was not recorded:
 
 ```bash
 cd $ROOT/ufs-chem-assay
-uv run --no-sync ufs-chem-assay record-benchmarks --output-root=$ROOT/CECE/ufs-chem-assay-output
+uv run --no-sync ufs-chem-assay record-benchmarks --output-root=$ROOT/CECE/ufs-chem-assay-output/simple-maccity
 ```
 
 **Uploading a run.** To keep or share the whole output root (every
@@ -258,12 +280,13 @@ re-runnable after a publish, never deleting:
 
 ```bash
 cd $ROOT/ufs-chem-assay
-AWS_PROFILE=<profile> uv run --no-sync ufs-chem-assay upload-output --output-root=$ROOT/CECE/ufs-chem-assay-output --dry-run
-AWS_PROFILE=<profile> uv run --no-sync ufs-chem-assay upload-output --output-root=$ROOT/CECE/ufs-chem-assay-output
+AWS_PROFILE=<profile> uv run --no-sync ufs-chem-assay upload-output --output-root=$ROOT/CECE/ufs-chem-assay-output/simple-maccity --dry-run
+AWS_PROFILE=<profile> uv run --no-sync ufs-chem-assay upload-output --output-root=$ROOT/CECE/ufs-chem-assay-output/simple-maccity
 ```
 
 `harness.upload_output: true` in the run config does it at the end of the
-harness stage instead (off in every template; the login node has network).
+resume session instead (off in every template; `watch` runs it on the
+login node, which has network).
 On any machine with the bucket credentials, `download-output --ulid <run
 ULID> --dest <dir>` brings the root back to `<dir>/<run ULID>/`; the ULID
 is `run_id` in `run.yaml` and the output root's name in the harness log.

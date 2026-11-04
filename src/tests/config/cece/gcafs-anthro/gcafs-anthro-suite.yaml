@@ -1,8 +1,9 @@
 # The global anthropogenic use case (issue 33): one configuration, no sweep —
 # the base config is the single combination. Ursa only (the inputs live on
-# Ursa; a run takes hours): run it with config/ursa-gcafs-anthro.yaml, the
-# Ursa template with this suite, the QOS, the timeout cap and the author's
-# single-task single-thread geometry baked in (docs/gcafs-anthro-runbook.md).
+# Ursa; a run takes hours): run it as the gcafs-anthro session of
+# config/ursa.yaml (--session gcafs-anthro), which overlays this suite, the
+# timeout cap and the author's single-task single-thread geometry on the
+# Ursa template (docs/gcafs-anthro-runbook.md).
 name: gcafs-anthro
 config_path: gcafs-anthro.yaml
 timeout_s: 1800  # per combination; deliberately short (the author saw up to 3 h): see it time out, then raise

@@ -1,3 +1,4 @@
+import dataclasses
 import hashlib
 import shutil
 import subprocess
@@ -26,6 +27,14 @@ from benchmarks import (
 from combos import Combo, ParameterRow, enumerate_combos, write_combos_csv
 from comparison import concatenate_comparison_csvs, resolve_baseline_comparisons
 from identity import harness_commit, harness_version
+from jobs import (
+    JobLedger,
+    SubmittedJob,
+    queue_states,
+    read_ledger,
+    submitted_by,
+    write_ledger,
+)
 from logs import configure_logging, get_logger
 from models.conventions import CONVENTIONS
 from models.suite_config import (
@@ -42,7 +51,14 @@ from platforms import ACCOUNTING, Accounting, Runtime
 from plotting import render_all_bias_plots, render_all_plots
 from report import TestReportRow, worst_result, write_test_report_csv
 from resolution import resolve_output_roots
-from runner import DriverExecution, DriverRunResult, run_driver, write_job_script
+from runner import (
+    DriverExecution,
+    DriverRunResult,
+    finish_driver_job,
+    run_driver,
+    submit_driver_job,
+    write_job_script,
+)
 from s3_sync import check_reachable
 from selection import resolve_suites
 from settings import Settings
@@ -117,6 +133,12 @@ _REPORT_ROWS = pytest.StashKey[dict[str, TestReportRow]]()
 _BASELINE_STATES = pytest.StashKey[dict[str, StagedBaseline]]()  # by ULID
 _DRIVER_RESULTS = pytest.StashKey[dict[str, DriverRunResult]]()  # by combo_id
 _ACCOUNTING = pytest.StashKey[dict[str, SlurmAccounting]]()  # by combo_id
+# The job ledger (slurm): the one being written by this session's
+# submissions, or the one --resume read; None outside slurm and in dry runs.
+_LEDGER = pytest.StashKey[JobLedger | None]()
+# --resume: the run manifest of the root being reopened (its ids are adopted,
+# its files never rewritten); None otherwise.
+_RESUMED_RUN = pytest.StashKey[RunManifest | None]()
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -206,6 +228,27 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="With --publish-baselines: publish, but leave the suite files alone.",
     )
     group.addoption(
+        "--submit-only",
+        action="store_true",
+        help=(
+            "slurm runtime: submit every combination's job, write jobs.yaml at "
+            "the output root, and stop — every combo test skips naming its job "
+            "id, no test report or benchmarks are written. Evaluate later with "
+            "--resume (ufs-chem-assay watch runs it)."
+        ),
+    )
+    group.addoption(
+        "--resume",
+        action="store_true",
+        help=(
+            "slurm runtime: open an existing output root (--combo-output-root, "
+            "required) instead of creating one — adopt its run_id and its "
+            "combination ids from jobs.yaml, wait for jobs still queued, then "
+            "run every test and the session-end pipeline over the finished jobs. "
+            "run.yaml, combos.csv and the generated configs are never rewritten."
+        ),
+    )
+    group.addoption(
         "--baseline-atol",
         type=float,
         default=None,
@@ -249,6 +292,31 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     except ValidationError as exc:
         raise pytest.UsageError(str(exc)) from exc
     configure_logging(settings.log_level)
+    submit_only = bool(config.getoption("--submit-only"))
+    resume = bool(config.getoption("--resume"))
+    for flag, given in (("--submit-only", submit_only), ("--resume", resume)):
+        if given and settings.runtime is not Runtime.SLURM:
+            raise pytest.UsageError(
+                f"{flag} needs the slurm runtime; {settings.platform.value} runs "
+                f"{settings.runtime.value}"
+            )
+    if submit_only and resume:
+        raise pytest.UsageError(
+            "--submit-only and --resume are the two halves of one session; pass one"
+        )
+    if resume:
+        if config.getoption("--combo-clean-root"):
+            raise pytest.UsageError(
+                "--resume and --combo-clean-root: a resumed root is kept, never removed"
+            )
+        if config.getoption("--dry-run"):
+            raise pytest.UsageError(
+                "--resume and --dry-run: there is nothing to resume in a dry run"
+            )
+        if config.getoption("--combo-output-root") is None:
+            raise pytest.UsageError(
+                "--resume needs --combo-output-root: the root to reopen"
+            )
     if settings.enable_baseline_comparisons and (
         settings.baseline_atol is not None or settings.baseline_rtol is not None
     ):
@@ -290,6 +358,14 @@ def pytest_sessionstart(session: pytest.Session) -> None:
                 "afterwards from a node with network: ufs-chem-assay "
                 "upload-output --output-root=<this run's output root>"
             ) from exc
+    deferred = [
+        flag
+        for flag in ("--publish-baselines", "--record-benchmarks", "--upload-output")
+        if submit_only and config.getoption(flag)
+    ]
+    if deferred:
+        # The probes above ran; the actions belong to the evaluating session.
+        logger.info("--submit-only: %s deferred to --resume", ", ".join(deferred))
 
     # Selection, application, suite loading: the same sequence the CLI's
     # fetch runs (selection.resolve_suites); every failure is a usage error.
@@ -327,21 +403,12 @@ def pytest_sessionstart(session: pytest.Session) -> None:
             )
         )
 
-    # One ULID per test run, generated at runtime only — never configuration.
-    run_id = str(ULID())
-    logger.info(
-        "starting run %s (application %s; %s suite(s): %s)",
-        run_id,
-        app.name,
-        len(contexts),
-        ", ".join(context.suite.name for context in contexts),
-    )
-    config.stash[_RUN_ID] = run_id
-
     # An explicit output root is resolved and guarded here, before anything
     # runs. The default (pytest tmp) root is created lazily in combo_roots —
     # it is freshly created each session and can never pre-exist.
     option = config.getoption("--combo-output-root")
+    resumed: RunManifest | None = None
+    ledger: JobLedger | None = None
     if option is None:
         roots = None
     else:
@@ -359,7 +426,9 @@ def pytest_sessionstart(session: pytest.Session) -> None:
             )
         except ValueError as exc:
             raise pytest.UsageError(str(exc)) from exc
-        if host_root.exists():
+        if resume:
+            resumed, ledger = _reopen_root(host_root, contexts)
+        elif host_root.exists():
             if not config.getoption("--combo-clean-root"):
                 raise pytest.UsageError(
                     f"output root {host_root} already exists; move it aside or pass --combo-clean-root"
@@ -373,8 +442,24 @@ def pytest_sessionstart(session: pytest.Session) -> None:
                     f"output root {host_root} exists but is not a previous harness "
                     "output root (no run.yaml); refusing --combo-clean-root — move it aside"
                 )
+            _refuse_a_live_root(host_root)
             shutil.rmtree(host_root)
         roots = ComboRoots(host=host_root, driver=driver_root, needs_mount=False)
+
+    # One ULID per test run, generated at runtime only — never configuration;
+    # a resumed session is the submit session's run and keeps its id.
+    run_id = str(ULID()) if resumed is None else resumed.run_id
+    logger.info(
+        "%s run %s (application %s; %s suite(s): %s)",
+        "resuming" if resumed is not None else "starting",
+        run_id,
+        app.name,
+        len(contexts),
+        ", ".join(context.suite.name for context in contexts),
+    )
+    config.stash[_RUN_ID] = run_id
+    config.stash[_RESUMED_RUN] = resumed
+    config.stash[_LEDGER] = ledger
 
     config.stash[_SETTINGS] = settings
     config.stash[_APPLICATION] = app
@@ -403,6 +488,82 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     # accounting, its job's numbers — the benchmark rows' raw material.
     config.stash[_DRIVER_RESULTS] = {}
     config.stash[_ACCOUNTING] = {}
+
+
+def _refuse_a_live_root(host_root: Path) -> None:
+    """--combo-clean-root on a root whose ledger lists jobs still in the
+    queue would delete the directory they write into: refuse, naming the
+    way out. A root without a ledger (docker, native, a dry run) or with
+    every job gone is cleaned as always."""
+    try:
+        ledger = read_ledger(host_root)
+    except ValueError:
+        return
+    live = sorted(queue_states(job.job_id for job in ledger.jobs))
+    if live:
+        raise pytest.UsageError(
+            f"output root {host_root} has {len(live)} job(s) still in the Slurm "
+            f"queue (job ids {', '.join(live)}); wait for them (ufs-chem-assay "
+            f"watch) or cancel them (ufs-chem-assay cancel --output-root={host_root}) "
+            "before cleaning"
+        )
+
+
+def _reopen_root(
+    host_root: Path, contexts: list[SuiteContext]
+) -> tuple[RunManifest, JobLedger]:
+    """--resume: the root must be a submitted run (run.yaml and jobs.yaml)
+    of exactly the selected suites, and the ledger must name exactly the
+    enumerated combinations, whose fresh ULIDs are replaced by the recorded
+    ones in place (the contexts' combos lists are rebound). Usage errors
+    name what differs — the suite file or the selection changed since the
+    submission."""
+    if not (host_root / CONVENTIONS.run_manifest).is_file():
+        raise pytest.UsageError(
+            f"--resume: {host_root} is not a run's output root (no {CONVENTIONS.run_manifest})"
+        )
+    run = read_run(host_root)
+    try:
+        ledger = read_ledger(host_root)
+    except ValueError as exc:
+        raise pytest.UsageError(f"--resume: {exc}") from exc
+    recorded = sorted(suite.name for suite in run.suites)
+    selected = sorted(context.suite.name for context in contexts)
+    if recorded != selected:
+        raise pytest.UsageError(
+            f"--resume: run {run.run_id} executed suite(s) {recorded}, the "
+            f"selection loads {selected}; pass the same --suite-config"
+        )
+    recorded_ids = {(job.suite, job.combo): job.combo_id for job in ledger.jobs}
+    claimed: set[tuple[str, str]] = set()
+    missing: list[str] = []
+    for context in contexts:
+        rebound: list[Combo] = []
+        for combo in context.combos:
+            key = (context.suite.name, combo.name)
+            if key in recorded_ids:
+                claimed.add(key)
+                rebound.append(dataclasses.replace(combo, combo_id=recorded_ids[key]))
+            else:
+                missing.append(f"{context.suite.name}/{combo.name}")
+                rebound.append(combo)
+        context.combos[:] = rebound
+    unclaimed = sorted(f"{s}/{c}" for (s, c) in set(recorded_ids) - claimed)
+    if missing or unclaimed:
+        parts = []
+        if missing:
+            parts.append(
+                f"{len(missing)} combination(s) have no recorded job: {', '.join(missing)}"
+            )
+        if unclaimed:
+            parts.append(
+                f"{len(unclaimed)} recorded job(s) match no combination: {', '.join(unclaimed)}"
+            )
+        raise pytest.UsageError(
+            f"--resume: {host_root} does not match the selection (the suite or "
+            "-k changed since submission): " + "; ".join(parts)
+        )
+    return run, ledger
 
 
 def pytest_collection_modifyitems(
@@ -434,6 +595,19 @@ def pytest_collection_modifyitems(
             raise pytest.UsageError(str(exc)) from exc
         logger.warning("%s; --dry-run records application_commit: null", exc)
         config.stash[_APPLICATION_COMMIT] = None
+    resumed = config.stash.get(_RESUMED_RUN, None)
+    if (
+        resumed is not None
+        and resumed.application_commit != config.stash[_APPLICATION_COMMIT]
+    ):
+        # run.yaml stays what it was: that is the build the jobs ran.
+        logger.warning(
+            "the %s checkout moved from %s to %s since submission; the jobs ran "
+            "the earlier build, which run.yaml records",
+            app.name,
+            resumed.application_commit,
+            config.stash[_APPLICATION_COMMIT],
+        )
     if dry_run:
         return
     if app_settings.root_dir is None:
@@ -495,18 +669,32 @@ def pytest_runtest_makereport(
     return report
 
 
-def pytest_sessionfinish(session: pytest.Session) -> None:
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Session-end artifact pipeline, in order: test report -> stats concat ->
     per-suite overview plots -> comparison-stats concat -> per-suite bias
     plots. The output root is flat across suites; concatenated CSVs carry
     application and suite columns, and each suite's plots render from its
     own slice so color scales never mix suites. Bias plotting is independent
     of the overview plotting/stats gates: its scale derives from the
-    comparison CSV and it is governed per comparison entry."""
+    comparison CSV and it is governed per comparison entry. A --submit-only
+    session has no verdicts: it names the ledger and stops here. Under
+    slurm the ledger is rewritten last, with the evaluation's time and
+    status."""
     config = session.config
     contexts = config.stash.get(_SUITE_CONTEXTS, None)
     roots = config.stash.get(_REALIZED_ROOTS, None)
     if contexts is None or roots is None:
+        return
+    ledger = config.stash.get(_LEDGER, None)
+    if config.getoption("--submit-only"):
+        logger.info(
+            "%s job(s) submitted for run %s: %s at %s; evaluate with: "
+            "ufs-chem-assay watch (or run --stage resume)",
+            len(ledger.jobs) if ledger is not None else 0,
+            config.stash[_RUN_ID],
+            CONVENTIONS.job_ledger,
+            roots.host,
+        )
         return
 
     report_rows = config.stash.get(_REPORT_ROWS, {})
@@ -617,6 +805,14 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     # into pytest; the post-hoc command is named on failure.
     if config.getoption("--upload-output"):
         _upload_output(config, roots)
+
+    # The ledger's last word, after everything else: when the jobs were
+    # evaluated and with what status (so `watch` moves on, and an uploaded
+    # root says "not yet evaluated" only if the session died before here).
+    if ledger is not None:
+        ledger.evaluated_at = datetime.now(UTC)
+        ledger.exit_status = int(exitstatus)
+        write_ledger(ledger, roots.host)
 
 
 def _upload_output(config: pytest.Config, roots: ComboRoots) -> None:
@@ -856,6 +1052,9 @@ def combo_roots(
     # Write the run manifest as soon as the root is realized, so even a run
     # that dies mid-way records what ran (combos.csv follows immediately
     # after config generation — its values come from the generated configs).
+    # A resumed root already has its manifest: the submit session's, kept.
+    if request.config.stash[_RESUMED_RUN] is not None:
+        return roots
     roots.host.mkdir(parents=True, exist_ok=True)
     settings = request.config.stash[_SETTINGS]
     app = request.config.stash[_APPLICATION]
@@ -921,18 +1120,30 @@ def generated_combos(
     settings = request.config.stash[_SETTINGS]
     app = request.config.stash[_APPLICATION]
     app_settings = request.config.stash[_APP_SETTINGS]
+    resuming = request.config.stash[_RESUMED_RUN] is not None
     for context in request.config.stash[_SUITE_CONTEXTS]:
         for combo in context.combos:
             # Storage carries no semantics: directories and filenames are the
             # combo's runtime ULID; combos.csv dereferences them.
             combo_dir = combo_roots.host / combo.combo_id
-            combo_dir.mkdir(parents=True)
             driver_dir = combo_roots.driver / combo.combo_id
             config = app.build_config(
                 combo,
                 output_directory=str(driver_dir),
                 config_path=context.suite.config_path,
             )
+            if resuming:
+                # The submit session wrote everything; build_config is
+                # deterministic, so the in-memory record is the same — the
+                # directory, the yaml, the job script are read, not written.
+                generated[combo.combo_id] = GeneratedCombo(
+                    host_dir=combo_dir,
+                    driver_yaml=driver_dir
+                    / app.generated_config_path(combo_dir, combo.combo_id).name,
+                    config=config,
+                )
+                continue
+            combo_dir.mkdir(parents=True)
             # The adapter writes the generated configuration (one file for
             # CECE; a directory for an application whose configuration is
             # one) and names the driver's argument.
@@ -957,13 +1168,80 @@ def generated_combos(
             entries.append(
                 (context.suite.name, combo, app.effective_parameters(combo, config))
             )
-    write_combos_csv(
-        entries,
+    if not resuming:
+        write_combos_csv(
+            entries,
+            run_id=request.config.stash[_RUN_ID],
+            application=app.name,
+            csv_path=combo_roots.host / CONVENTIONS.combos_csv,
+        )
+    return generated
+
+
+@pytest.fixture(scope="session")
+def submitted_jobs(
+    request: pytest.FixtureRequest,
+    combo_roots: ComboRoots,
+    generated_combos: dict[str, GeneratedCombo],
+    settings: Settings,
+    app_settings: ApplicationSettings,
+) -> dict[str, SubmittedJob]:
+    """slurm: every combination's job, by combo_id — submitted here, in
+    enumeration order, as soon as the scripts exist, the ledger rewritten
+    after each submission (a refusal half-way leaves a truthful ledger and
+    raises, so nothing is silently half-submitted); or, under --resume, the
+    ledger's. Empty under docker/native (the driver runs inline) and in a
+    dry run (nothing is submitted, no ledger)."""
+    if settings.runtime is not Runtime.SLURM or request.config.getoption("--dry-run"):
+        return {}
+    ledger = request.config.stash[_LEDGER]
+    if ledger is not None:  # --resume
+        return {job.combo_id: job for job in ledger.jobs}
+    app = request.config.stash[_APPLICATION]
+    ledger = JobLedger(
         run_id=request.config.stash[_RUN_ID],
         application=app.name,
-        csv_path=combo_roots.host / CONVENTIONS.combos_csv,
+        submitted_by=submitted_by(),
     )
-    return generated
+    request.config.stash[_LEDGER] = ledger
+    jobs: dict[str, SubmittedJob] = {}
+    for context in request.config.stash[_SUITE_CONTEXTS]:
+        for combo in context.combos:
+            generated = generated_combos[combo.combo_id]
+            out_path = generated.host_dir / f"{combo.combo_id}.out"
+            timeout_s = min(context.suite.timeout_s, settings.run_timeout_s)
+            try:
+                script, job_id = submit_driver_job(
+                    settings, app_settings, generated.driver_yaml, out_path, timeout_s
+                )
+            except subprocess.CalledProcessError as exc:
+                write_ledger(ledger, combo_roots.host)
+                said = (exc.stderr or exc.output or "").strip()
+                logger.error(
+                    "submission of combo %s refused after %s job(s): %s; cancel "
+                    "them with: ufs-chem-assay cancel --output-root=%s",
+                    combo.name,
+                    len(ledger.jobs),
+                    said or f"sbatch exited {exc.returncode}",
+                    combo_roots.host,
+                )
+                raise
+            job = SubmittedJob(
+                suite=context.suite.name,
+                combo=combo.name,
+                combo_id=combo.combo_id,
+                job_id=job_id,
+                script=script,
+                out_path=out_path,
+                timeout_s=timeout_s,
+                queue_wait_s=settings.slurm_queue_wait_s,
+                submitted_at=datetime.now(UTC),
+            )
+            ledger.jobs.append(job)
+            write_ledger(ledger, combo_roots.host)
+            jobs[combo.combo_id] = job
+            logger.info("submitted combo %s as Slurm job %s", combo.name, job_id)
+    return jobs
 
 
 @pytest.fixture(scope="session")
@@ -971,12 +1249,15 @@ def driver_run(
     request: pytest.FixtureRequest,
     combo_roots: ComboRoots,
     generated_combos: dict[str, GeneratedCombo],
+    submitted_jobs: dict[str, SubmittedJob],
     settings: Settings,
     application: Application,
     app_settings: ApplicationSettings,
 ) -> DriverRunResult:
     """Run the driver once per combination (session-scoped, parameterized on
-    (suite context, combo) pairs) and capture the outcome without raising."""
+    (suite context, combo) pairs) and capture the outcome without raising.
+    Under slurm the job was submitted up front (submitted_jobs): this waits
+    for it and judges it — or, under --submit-only, skips naming it."""
     context, combo = request.param
     assert isinstance(context, SuiteContext)
     assert isinstance(combo, Combo)
@@ -992,6 +1273,9 @@ def driver_run(
         # skipped, and every dependent test skips with this reason.
         logger.info("dry run: skipping driver execution for combo %s", combo.name)
         pytest.skip("dry run: driver execution skipped")
+
+    if settings.runtime is Runtime.SLURM:
+        return _slurm_driver_run(request, combo, generated, submitted_jobs)
 
     logger.info("running combo %s (timeout=%ss)", combo.name, run_timeout_s)
     start = time.monotonic()
@@ -1020,22 +1304,76 @@ def driver_run(
             type(error).__name__,
         )
 
-    # A failed or cancelled Slurm job still has an id (the runner's exceptions
-    # carry it), and that is when its accounting matters most.
-    job_id = getattr(error, "job_id", None) or execution.job_id
     result = DriverRunResult(
         combo=combo,
         combo_dir=generated.host_dir,
         out_path=out_path,
         config=generated.config,
         error=error,
-        execution=DriverExecution(job_id=job_id),
+        execution=execution,
         duration_s=duration,
         timeout_s=run_timeout_s,
     )
     request.config.stash[_DRIVER_RESULTS][combo.combo_id] = result
-    if job_id and ACCOUNTING.get(settings.platform) is Accounting.SACCT:
-        accounting = slurm_accounting(job_id)
-        if accounting is not None:
-            request.config.stash[_ACCOUNTING][combo.combo_id] = accounting
+    return result
+
+
+def _slurm_driver_run(
+    request: pytest.FixtureRequest,
+    combo: Combo,
+    generated: GeneratedCombo,
+    submitted_jobs: dict[str, SubmittedJob],
+) -> DriverRunResult:
+    """The slurm half of driver_run: the combination's job is in the ledger;
+    wait for it (polling), judge it by its accounting, and keep the
+    accounting for the benchmark row. duration_s is submission to end,
+    queue included, from the accounting's clock (this process's clock from
+    submission when the accounting lacks it). Under --submit-only the test
+    skips, naming the job; nothing waits."""
+    settings = request.config.stash[_SETTINGS]
+    job = submitted_jobs[combo.combo_id]
+    if request.config.getoption("--submit-only"):
+        pytest.skip(f"submitted as Slurm job {job.job_id}; evaluate with --resume")
+    logger.info("waiting for combo %s (Slurm job %s)", combo.name, job.job_id)
+    error: Exception | None = None
+    execution = DriverExecution(job_id=job.job_id)
+    try:
+        execution = finish_driver_job(job, settings)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        error = exc
+    accounting = execution.accounting
+    if accounting is None and ACCOUNTING.get(settings.platform) is Accounting.SACCT:
+        # A failed or cancelled job: the runner raised before returning its
+        # accounting, and that is when the accounting matters most.
+        accounting = slurm_accounting(job.job_id)
+    if accounting is not None:
+        request.config.stash[_ACCOUNTING][combo.combo_id] = accounting
+    if (
+        accounting is not None
+        and accounting.queue_s is not None
+        and accounting.elapsed_s is not None
+    ):
+        duration = accounting.queue_s + accounting.elapsed_s
+    else:
+        duration = (datetime.now(UTC) - job.submitted_at).total_seconds()
+    if error is None:
+        logger.info("combo %s completed (%.1fs from submission)", combo.name, duration)
+    else:
+        logger.error(
+            "combo %s FAILED (%.1fs from submission): %s",
+            combo.name,
+            duration,
+            type(error).__name__,
+        )
+    result = DriverRunResult(
+        combo=combo,
+        combo_dir=generated.host_dir,
+        out_path=job.out_path,
+        config=generated.config,
+        error=error,
+        execution=DriverExecution(job_id=job.job_id, accounting=accounting),
+        duration_s=duration,
+        timeout_s=job.timeout_s,
+    )
+    request.config.stash[_DRIVER_RESULTS][combo.combo_id] = result
     return result

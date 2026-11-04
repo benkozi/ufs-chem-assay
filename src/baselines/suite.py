@@ -9,13 +9,21 @@ from pathlib import Path
 
 import yaml
 
+from fslock import locked
+
 
 def rewrite_suite_ulid(path: Path, old: str, new: str) -> None:
     """Exactly one `ulid: <old>` line becomes `ulid: <new>`. Zero matches
     (the entry was edited since the run) and two or more (two entries pin
     the same ULID) are refused; after writing, the file is reloaded and
     must equal the previous suite with that one ULID changed, or the
-    original text is restored."""
+    original text is restored. Under the file's exclusive lock (fslock):
+    two sessions publishing at once repoint one after the other."""
+    with locked(path):
+        _rewrite_suite_ulid(path, old, new)
+
+
+def _rewrite_suite_ulid(path: Path, old: str, new: str) -> None:
     from applications.registry import load_suite
 
     original = path.read_text()

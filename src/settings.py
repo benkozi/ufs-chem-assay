@@ -104,6 +104,15 @@ class Settings(BaseSettings):
             "own limit is the suite timeout rounded up to minutes"
         ),
     )
+    slurm_poll_s: int = Field(
+        default=30,
+        gt=0,
+        description=(
+            "slurm runtime: seconds between squeue polls while a driver job is "
+            "queued or running (every job is submitted up front and waited for "
+            "by polling, never with sbatch --wait)"
+        ),
+    )
     job_env: str = Field(
         default="",
         description=(

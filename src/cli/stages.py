@@ -1,22 +1,26 @@
-"""One shell script per stage per application, rendered from a RunConfig.
+"""One shell script per stage per application — per session for the
+harness and resume stages — rendered from a RunConfig.
 
 The scripts are the deliverable as much as their execution: they are written
 under <root_dir>/scripts/ for review, `--dry-run` stops after rendering, and
 the Ursa runbook (docs/ursa-runbook.md) is the same commands by hand — when
 one changes, the other does. Every stage runs where the CLI runs; under the
-slurm runtime the harness stage's driver runs submit their own jobs. Paths
-and values are shell-quoted. The source and build bodies are the
-application adapter's; the data and harness stages are shared — one export
-block, rendered from the settings' field names, precedes both the harness's
-`fetch` (data) and its pytest session (harness), so both resolve the same
-suites — with an adapter hook for application-specific data lines.
+slurm runtime the harness stage's pytest session submits every driver job
+at once and, with harness.submit_only, stops there: the resume stage
+(rendered beside it, run by `ufs-chem-assay watch` or `--stage resume`)
+reopens the session's root and evaluates the finished jobs. Paths and
+values are shell-quoted. The source and build bodies are the application
+adapter's; the data, harness and resume stages are shared — one export
+block per session, rendered from the settings' field names, precedes the
+harness's `fetch` (data: one block per session) and its pytest session
+(harness, resume), so all resolve the same suites — with an adapter hook
+for application-specific data lines.
 """
 
 from __future__ import annotations
 
 import shlex
 from enum import StrEnum
-from pathlib import PurePosixPath
 
 from pydantic import ConfigDict, Field
 
@@ -26,7 +30,12 @@ from applications.base import (
     ApplicationSettings,
     Stage,
 )
-from cli.run_config import HARNESS_ROOT, RunConfig, search_path_value
+from cli.run_config import (
+    HARNESS_ROOT,
+    ResolvedSession,
+    RunConfig,
+    search_path_value,
+)
 from models.base import StrictModel
 from models.conventions import CONVENTIONS
 from platforms import Runtime
@@ -49,6 +58,7 @@ SETTINGS_NOT_MIRRORED = frozenset(
         "sbatch_args",  # slurm: (account, qos, partition, ntasks, cpus, extra_args)
         "srun_args",  # slurm: (ntasks, srun_args)
         "slurm_queue_wait_s",  # slurm.queue_wait_s
+        "slurm_poll_s",  # slurm.poll_s
         "job_env",  # harness.env under the slurm runtime
         "input_search_path",  # data.input_search_path
         "output_store",  # outputs.store
@@ -62,7 +72,11 @@ class ShellScript(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str = Field(
-        description="Stage name, application-qualified: <stage>-<application>"
+        description=(
+            "Stage name, application-qualified — <stage>-<application> — and "
+            "session-qualified for the per-session stages of a named session: "
+            "<stage>-<application>-<session>"
+        )
     )
     text: str = Field(description="Complete bash source, shebang included")
 
@@ -88,12 +102,8 @@ def settings_mirror_fields() -> list[str]:
     return [name for name in Settings.model_fields if name not in SETTINGS_NOT_MIRRORED]
 
 
-def application_output_root(config: RunConfig, app: Application) -> str:
-    """harness.output_root as-is for a single configured application;
-    <output_root>/<application> when several share the run."""
-    if len(config.applications) == 1:
-        return config.harness.output_root
-    return str(PurePosixPath(config.harness.output_root) / app.name)
+# The stages rendered once per session (the others once per application).
+PER_SESSION = frozenset({Stage.HARNESS, Stage.RESUME})
 
 
 def _env_value(value: object) -> str | None:
@@ -108,12 +118,19 @@ def _env_value(value: object) -> str | None:
 
 
 def _exports(
-    config: RunConfig, app: Application, section: ApplicationRunSection
+    config: RunConfig,
+    app: Application,
+    section: ApplicationRunSection,
+    session: ResolvedSession,
 ) -> list[tuple[str, str]]:
-    """The environment both shared stages export: the application's settings
-    under its prefix, every mirrored harness setting under ASSAY_, the slurm
-    bits, uv's cache, and the user's env."""
-    harness = config.harness
+    """The environment the shared stages export for one session: the
+    application's settings under its prefix, every mirrored harness setting
+    under ASSAY_, the slurm bits, uv's cache, and the user's env — the
+    per-session ones (timeout cap, job geometry, baselines) from the
+    session's effective sections, the rest config-wide."""
+    harness = session.harness
+    slurm = session.slurm
+    baselines = session.baselines
     prefix = app.env_prefix
     exports: list[tuple[str, str]] = [
         (f"{prefix}ROOT_DIR", q(config.checkout_dir(app)))
@@ -135,16 +152,13 @@ def _exports(
         if value is not None:
             exports.append((CONVENTIONS.env_var(field), value))
     if config.runtime is Runtime.SLURM:
-        assert config.slurm is not None, "slurm runtime needs a slurm: section"
+        assert slurm is not None, "slurm runtime needs a slurm: section"
+        exports.append((CONVENTIONS.env_var("SBATCH_ARGS"), q(slurm.sbatch_args)))
+        exports.append((CONVENTIONS.env_var("SRUN_ARGS"), q(slurm.srun_args_value)))
         exports.append(
-            (CONVENTIONS.env_var("SBATCH_ARGS"), q(config.slurm.sbatch_args))
+            (CONVENTIONS.env_var("SLURM_QUEUE_WAIT_S"), str(slurm.queue_wait_s))
         )
-        exports.append(
-            (CONVENTIONS.env_var("SRUN_ARGS"), q(config.slurm.srun_args_value))
-        )
-        exports.append(
-            (CONVENTIONS.env_var("SLURM_QUEUE_WAIT_S"), str(config.slurm.queue_wait_s))
-        )
+        exports.append((CONVENTIONS.env_var("SLURM_POLL_S"), str(slurm.poll_s)))
         if harness.env:
             # The driver jobs' environment; the login-node shell never needs it.
             pairs = " ".join(f"{key}={value}" for key, value in harness.env.items())
@@ -152,18 +166,18 @@ def _exports(
     exports.append(
         (
             CONVENTIONS.env_var("ENABLE_BASELINE_COMPARISONS"),
-            "true" if config.baselines.enabled else "false",
+            "true" if baselines.enabled else "false",
         )
     )
-    if config.baselines.root_dir is not None:
+    if baselines.root_dir is not None:
         exports.append(
-            (CONVENTIONS.env_var("BASELINE_ROOT_DIR"), q(config.baselines.root_dir))
+            (CONVENTIONS.env_var("BASELINE_ROOT_DIR"), q(baselines.root_dir))
         )
-    exports.append((CONVENTIONS.env_var("BASELINE_STORE"), q(config.baselines.store)))
+    exports.append((CONVENTIONS.env_var("BASELINE_STORE"), q(baselines.store)))
     exports.append((CONVENTIONS.env_var("OUTPUT_STORE"), q(config.outputs.store)))
     for tolerance, override in (
-        ("ATOL", config.baselines.atol),
-        ("RTOL", config.baselines.rtol),
+        ("ATOL", baselines.atol),
+        ("RTOL", baselines.rtol),
     ):
         if override is not None:
             exports.append(
@@ -185,19 +199,38 @@ def _exports(
     return exports
 
 
-def _harness(
-    config: RunConfig, app: Application, section: ApplicationRunSection
+def _pytest_stage(
+    config: RunConfig,
+    app: Application,
+    section: ApplicationRunSection,
+    session: ResolvedSession,
+    *,
+    resume: bool,
 ) -> list[str]:
-    harness = config.harness
+    """The harness stage's body, or the resume stage's: the same exports and
+    cd, then the pytest session. The harness line carries --combo-clean-root,
+    --dry-run and --submit-only as configured; the resume line carries
+    --resume on the same root and none of those three. The session flags
+    (publish, record, upload, no_suite_update) and pytest_args appear on
+    both: the submit session performs the start-of-session probes and defers
+    the actions, and -k must select the same combinations in both halves."""
+    harness = session.harness
     pytest_args = [
         f"--application={app.name}",
         f"--suite-config={harness.suite_config}",
-        f"--combo-output-root={application_output_root(config, app)}",
     ]
-    if harness.clean_root:
-        pytest_args.append("--combo-clean-root")
-    if harness.pytest_dry_run:
-        pytest_args.append("--dry-run")
+    if resume:
+        pytest_args.append("--resume")
+    pytest_args.append(
+        f"--combo-output-root={config.session_output_root(app, session)}"
+    )
+    if not resume:
+        if harness.clean_root:
+            pytest_args.append("--combo-clean-root")
+        if harness.pytest_dry_run:
+            pytest_args.append("--dry-run")
+        if harness.submit_only:
+            pytest_args.append("--submit-only")
     if harness.publish_baselines:
         pytest_args.append("--publish-baselines")
     if harness.no_suite_update:
@@ -209,7 +242,10 @@ def _harness(
     pytest_args += harness.pytest_args
     return [
         *clean_python_env(section),
-        *(f"export {key}={value}" for key, value in _exports(config, app, section)),
+        *(
+            f"export {key}={value}"
+            for key, value in _exports(config, app, section, session)
+        ),
         f"cd {q(HARNESS_ROOT)}",
         f"uv run --no-sync pytest {_DRIVER_COMBOS} "
         + " ".join(q(arg) for arg in pytest_args),
@@ -217,20 +253,33 @@ def _harness(
 
 
 def _data(
-    config: RunConfig, app: Application, section: ApplicationRunSection, shared: bool
+    config: RunConfig,
+    app: Application,
+    section: ApplicationRunSection,
+    shared: bool,
+    sessions: list[ResolvedSession],
 ) -> list[str]:
-    # The harness's own fetch, under the harness stage's exports (so it
-    # resolves the same suites against the same checkout), from the harness
-    # checkout; then whatever data lines the adapter adds.
-    lines = [
-        *clean_python_env(section),
-        *(f"export {key}={value}" for key, value in _exports(config, app, section)),
-        f"cd {q(HARNESS_ROOT)}",
-        (
-            "uv run --no-sync ufs-chem-assay fetch "
-            f"--application={app.name} --suite-config={q(config.harness.suite_config)}"
-        ),
-    ]
+    # The harness's own fetch, once per session under that session's exports
+    # (so it resolves the same suites against the same checkout, with the
+    # same baseline settings), from the harness checkout — sessions that
+    # fetch the same thing fetch once; then whatever data lines the adapter
+    # adds, and the harness-wide cartopy warm-up.
+    lines = [*clean_python_env(section)]
+    seen: set[tuple[tuple[tuple[str, str], ...], str]] = set()
+    for session in sessions:
+        exports = tuple(_exports(config, app, section, session))
+        key = (exports, session.harness.suite_config)
+        if key in seen:
+            continue
+        seen.add(key)
+        lines += [
+            *(f"export {key}={value}" for key, value in exports),
+            f"cd {q(HARNESS_ROOT)}",
+            (
+                "uv run --no-sync ufs-chem-assay fetch "
+                f"--application={app.name} --suite-config={q(session.harness.suite_config)}"
+            ),
+        ]
     lines += app.stage_lines(Stage.DATA, config, section)
     if shared and config.data.warm_cartopy:
         snippet = (
@@ -242,24 +291,68 @@ def _data(
     return lines
 
 
+def _required_session(
+    config: RunConfig, session: ResolvedSession | None
+) -> ResolvedSession:
+    """The session a per-session stage renders: the given one, or the
+    nameless implicit session of a config without sessions:."""
+    if session is not None:
+        return session
+    if config.sessions:
+        names = ", ".join(config.sessions)
+        raise ValueError(
+            f"the run config names sessions ({names}); the harness and resume "
+            "stages render one session at a time"
+        )
+    return config.resolved_sessions()[0]
+
+
 def render_stage(
-    stage: Stage, config: RunConfig, app: Application, *, shared_data: bool = True
+    stage: Stage,
+    config: RunConfig,
+    app: Application,
+    session: ResolvedSession | None = None,
+    *,
+    shared_data: bool = True,
+    sessions: list[ResolvedSession] | None = None,
 ) -> ShellScript:
-    """The stand-alone script for one stage of one application: shebang,
-    strict mode, banner, body. Modules are loaded only by the build body and
-    by the job script. `shared_data`: render the harness-wide data lines
-    (the cartopy cache) — once per run, under the first application."""
+    """The stand-alone script for one stage of one application — of one
+    session for the per-session stages (harness, resume): shebang, strict
+    mode, banner, body. Modules are loaded only by the build body and by the
+    job script. `session`: required when the config names sessions, implied
+    otherwise; the resume stage needs the session's harness.submit_only.
+    `sessions`: the sessions the data stage fetches for (default: all).
+    `shared_data`: render the harness-wide data lines (the cartopy cache) —
+    once per run, under the first application."""
     section = config.applications[app.name]
-    if stage is Stage.HARNESS:
-        body = _harness(config, app, section)
+    who = app.name
+    if stage in PER_SESSION:
+        session = _required_session(config, session)
+        if stage is Stage.RESUME and not session.harness.submit_only:
+            raise ValueError("resume is rendered only with harness.submit_only: true")
+        body = _pytest_stage(
+            config, app, section, session, resume=stage is Stage.RESUME
+        )
+        name = f"{stage.value}-{app.name}"
+        if session.name is not None:
+            name = f"{name}-{session.name}"
+            who = f"{app.name}/{session.name}"
     elif stage is Stage.DATA:
-        body = _data(config, app, section, shared_data)
+        body = _data(
+            config,
+            app,
+            section,
+            shared_data,
+            config.resolved_sessions() if sessions is None else sessions,
+        )
+        name = f"{stage.value}-{app.name}"
     else:
         body = app.stage_lines(stage, config, section)
+        name = f"{stage.value}-{app.name}"
     lines = [
         _SHEBANG,
         "set -euo pipefail",
-        f'echo ">>> stage: {stage.value} ({app.name})"',
+        f'echo ">>> stage: {stage.value} ({who})"',
         *body,
     ]
-    return ShellScript(name=f"{stage.value}-{app.name}", text="\n".join(lines) + "\n")
+    return ShellScript(name=name, text="\n".join(lines) + "\n")
