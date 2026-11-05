@@ -56,7 +56,6 @@ COMBOS = [
     combo(Algo.CONSD, "01JCOMBOCONSD0000000000002"),
     combo(Algo.PASSTHROUGH, "01JCOMBOPASSTHROUGH0000003"),
 ]
-B, C, P = (combo.name for combo in COMBOS)  # MACCITY.map-bilinear, ...
 
 
 def manifest(

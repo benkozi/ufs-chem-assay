@@ -28,9 +28,6 @@ from tests.ufs_chem_assay.report_roots import (
     RUN_ID,
     T0,
     TESTS,
-    B,
-    C,
-    P,
     benchmark,
     clean_root,
     manifest,
@@ -41,6 +38,8 @@ from tests.ufs_chem_assay.report_roots import (
     write_run,
     write_session_ledger,
 )
+
+B, C, P = (combo.name for combo in COMBOS)  # MACCITY.map-bilinear, ...
 
 
 def _kinds(summary: SessionSummary) -> list[str]:
