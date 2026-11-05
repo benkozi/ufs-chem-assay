@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v0.1.0-rc.10 (2026-11-05)
+
+### Chores
+
+- **ci**: Bump astral-sh/setup-uv from 10.3.2 to 10.3.3 in the actions group
+  ([#38](https://github.com/benkozi/ufs-chem-assay/pull/38),
+  [`58d9e6e`](https://github.com/benkozi/ufs-chem-assay/commit/58d9e6e0d045b2630793bd5208a08e53b29e5111))
+
+- **deps**: Bump the python group with 8 updates
+  ([#39](https://github.com/benkozi/ufs-chem-assay/pull/39),
+  [`799a2b4`](https://github.com/benkozi/ufs-chem-assay/commit/799a2b4adf097492f8721274d82ebbf7f1b23172))
+
+### Features
+
+- Async HPC runs with multiple suites ([#40](https://github.com/benkozi/ufs-chem-assay/pull/40),
+  [`265e783`](https://github.com/benkozi/ufs-chem-assay/commit/265e7830049205b83cb6b6d19c10d231daddb48c))
+
+
 ## v0.1.0-rc.9 (2026-11-04)
 
 ### Chores

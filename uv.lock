@@ -2401,7 +2401,7 @@ wheels = [
 
 [[package]]
 name = "ufs-chem-assay"
-version = "0.1.0rc9"
+version = "0.1.0rc10"
 source = { editable = "." }
 dependencies = [
     { name = "cartopy" },
