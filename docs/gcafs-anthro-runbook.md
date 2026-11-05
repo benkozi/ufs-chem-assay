@@ -5,8 +5,11 @@ is CECE's global anthropogenic emissions case: a 0.25° global grid, 25
 hourly steps from 2021-12-20T11Z, 10 species stacked from 32 streams over
 seven input files (CEDS monthly inventories, EDGAR hour-of-day and
 CAMS-TEMPO daily/weekly/hourly weights), SO2/OC/BC written every step.
-It runs on Ursa only: the inputs are not in any bucket, and one run takes
-hours. This runbook assumes the [Ursa runbook](ursa-runbook.md) steps 1–4
+It runs on Ursa only: the inputs are not in any bucket. One run takes
+about a minute on one task (the recorded rows in
+`src/tests/config/cece/gcafs-anthro/benchmarks.csv`: ~40 s of wall time
+and up to 8 GB of memory), far below the earlier up-to-3 h estimate. This
+runbook assumes the [Ursa runbook](ursa-runbook.md) steps 1–4
 are done (`uv`, the harness, the CECE source, the driver build) and uses
 the same `$ROOT`.
 
@@ -17,16 +20,18 @@ Two things differ from the maccity runs:
   `sources:` — where each lives on Ursa; `ufs-chem-assay fetch` links
   them from there, verifies each by `sha256`, and never downloads one.
   Record the digests once (step 1).
-- **The run has its own run config.** `config/ursa-gcafs-anthro.yaml`
-  is `config/ursa.yaml` with the use case baked in — the suite, a raised
-  timeout cap, and the author's known-good geometry (one task on one
-  bound core, single-threaded, the whole node's memory). It runs as
-  shipped; the two later runs flip one key each.
-- **The first job is meant to time out.** The suite's `timeout_s` is 30
-  minutes, deliberately short of the author's up-to-3 h runs, so the
-  first attempt shows what the time limit does before a long window is
-  requested; raising it is one line in the suite (and the QOS follows,
-  see step 2).
+- **The run is the `gcafs-anthro` session of `config/ursa.yaml`.** An
+  entry under `sessions:` overlays the use case on the Ursa template —
+  the suite, a raised timeout cap, and the author's known-good geometry
+  (one task on one bound core, single-threaded, the whole node's memory).
+  `--session gcafs-anthro` runs it alone, as shipped; the two later runs
+  flip one key each. Like every Ursa session it submits its job and
+  returns; `ufs-chem-assay watch` evaluates it when the job ends.
+- **The time limit is generous.** The suite's `timeout_s` is 30 minutes
+  against a measured ~40 s run (`benchmarks.csv`), so the job finishes
+  well inside its window; step 4 says what a timeout looks like should a
+  change to the configuration make a run longer (raising the limit is one
+  line in the suite, and the QOS follows, see step 2).
 
 ## 1. Link the inputs in place and record their digests
 
@@ -71,8 +76,8 @@ file. The seven basenames:
 
 ## 2. The run config
 
-`config/ursa-gcafs-anthro.yaml` is the Ursa template with these values
-changed, each commented in the file: `harness.suite_config:
+The `gcafs-anthro` entry under `sessions:` in `config/ursa.yaml` overlays
+these values on the Ursa template, each commented in the file: `harness.suite_config:
 gcafs-anthro-suite.yaml`; `harness.run_timeout_s: 28800` (the Ursa
 template's 300 s cap would otherwise cut every suite to five minutes — the
 suite's own `timeout_s` is the job's time limit, 1800 s = `--time=30` for
@@ -82,22 +87,28 @@ now); `slurm.qos: debug`, which fits a 30-minute job and schedules fast
 one core (`ntasks: 1`, `cpus: 1`), bound with `srun_args:
 --cpu-bind=cores`, and `extra_args: --mem=0` (the whole node's memory —
 the per-core default was not enough); the seven single-thread exports
-added to `harness.env` beside `I_MPI_FABRICS` and `FI_PROVIDER`. The
-account is `epic`; `--override slurm:account=<yours>` if it differs.
-Nothing in the file names a path: the inputs' locations are the suite's.
+restated in the session's `harness.env` beside `I_MPI_FABRICS` and
+`FI_PROVIDER` (an overlaid key replaces the base value whole). The
+account is `epic`; `--override slurm:account=<yours>` if it differs (a
+base key reaches every session; a session's own key is
+`--override sessions:gcafs-anthro:slurm:ntasks=4`). Nothing in the file
+names a path: the inputs' locations are the suite's.
 
 ## 3. Render and read
 
 ```bash
 cd $ROOT/ufs-chem-assay
-uv run ufs-chem-assay run --config-file=config/ursa-gcafs-anthro.yaml --dry-run
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --dry-run --session gcafs-anthro
 ```
 
 `$ROOT/scripts/run-config.yaml` shows the effective configuration;
-`05-harness-cece.sh` exports
+`05-harness-cece-gcafs-anthro.sh` exports
 `ASSAY_SBATCH_ARGS='-A epic -q debug -p u1-compute -N 1 -n 1 -c 1 --mem=0'`,
 `ASSAY_SRUN_ARGS='--ntasks=1 --cpu-bind=cores'`, `ASSAY_RUN_TIMEOUT_S=28800`
-and the nine `ASSAY_JOB_ENV` pairs. The rendered job script
+and the nine `ASSAY_JOB_ENV` pairs, and runs pytest with `--submit-only`
+on `--combo-output-root=ufs-chem-assay-output/gcafs-anthro`;
+`06-resume-cece-gcafs-anthro.sh` is the session's second half
+(`pytest --resume` over the same root), which `watch` runs. The rendered job script
 (`<combo_id>.sbatch` under the output root after the harness stage starts)
 carries those directives, `--time=30`, the module block, the exports,
 then `tic`, the `srun`, `toc`, and `report-mem`.
@@ -105,20 +116,30 @@ then `tic`, the `srun`, `toc`, and `report-mem`.
 ## 4. Run (one rank)
 
 ```bash
-tmux new -s gcafs
 cd $ROOT/ufs-chem-assay
-uv run ufs-chem-assay run --config-file=config/ursa-gcafs-anthro.yaml --stage data --stage harness
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage data --stage harness --session gcafs-anthro
+uv run ufs-chem-assay watch --session gcafs-anthro
+uv run ufs-chem-assay report --session gcafs-anthro
 ```
 
 The data stage re-verifies the inputs (and, with comparisons enabled,
-pre-warms the baseline); the harness stage submits the one job and waits.
-With the 30-minute `timeout_s`, expect the first job to be killed by
-Slurm at `--time=30`: `test_driver_execution` fails with the job's
-nonzero exit, the `.out` ends without `toc`, and `sacct -j <id> -o
-Elapsed,State` says `TIMEOUT`. That is the measurement; then raise
-`timeout_s` in the suite (and the QOS, step 2) and run again.
-`squeue -u $USER` shows `ufs-chem-assay-<combo_id>`. Results land in
-`$ROOT/CECE/ufs-chem-assay-output/<combo_id>/`: the generated
+pre-warms the baseline); the harness stage submits the one job, writes
+`jobs.yaml` and returns; `watch` polls `squeue` until the job leaves the
+queue, then runs the resume session, which judges the job by `sacct` and
+finishes the run (kill and restart `watch` at will; `tmux` is optional);
+`report` is the one-screen summary of what it left — the session line,
+one block per issue with the job's state, the `.out` tail and the paths
+to open — and exits 1 while anything is wrong or unfinished.
+The job runs about 40 s of wall time (`benchmarks.csv`: `wall_s`,
+`elapsed_s`, with queue waits from seconds to minutes), well inside the
+30-minute `timeout_s`. Should a run ever outlive its limit, Slurm kills
+it at `--time=30`: `test_driver_execution` fails with the job's
+`TIMEOUT` state (the report shows it as `[driver-timeout] … job <id>
+TIMEOUT`), the `.out` ends without `toc`, and `sacct -j <id> -o
+Elapsed,State` agrees; raise `timeout_s` in the suite (and the QOS,
+step 2) and run again. `squeue -u $USER` shows
+`ufs-chem-assay-<combo_id>` meanwhile. Results land in
+`$ROOT/CECE/ufs-chem-assay-output/gcafs-anthro/<combo_id>/`: the generated
 configuration, the job script, the `.out` (ending with `toc` and the
 `report-mem` table), `cece.log`, 25 NetCDF files, stats, plots and GIFs.
 `run.yaml` records `launch` (the directives, the srun options, the job
@@ -137,9 +158,9 @@ From the login node, with the AWS CLI configured as in the Ursa runbook
 ```bash
 cd $ROOT/ufs-chem-assay
 AWS_PROFILE=<profile> uv run ufs-chem-assay publish-baselines \
-    --output-root=$ROOT/CECE/ufs-chem-assay-output --dry-run
+    --output-root=$ROOT/CECE/ufs-chem-assay-output/gcafs-anthro --dry-run
 AWS_PROFILE=<profile> uv run ufs-chem-assay publish-baselines \
-    --output-root=$ROOT/CECE/ufs-chem-assay-output
+    --output-root=$ROOT/CECE/ufs-chem-assay-output/gcafs-anthro
 ```
 
 One baseline goes to `s3://ufs-chem/baselines/<combo_id>/` with its
@@ -162,7 +183,7 @@ checkout — the first rows are the point of the 30-minute experiment:
 and the launch columns saying one task, one bound core, the single-thread
 exports. The same row sits in the combination directory as
 `benchmarks.csv` (so it travels with the baseline when published), and the
-run's own copy is `$ROOT/CECE/ufs-chem-assay-output/benchmarks.csv`.
+run's own copy is `$ROOT/CECE/ufs-chem-assay-output/gcafs-anthro/benchmarks.csv`.
 
 ```bash
 git diff src/tests/config/cece/gcafs-anthro/benchmarks.csv
@@ -175,7 +196,7 @@ afterwards:
 
 ```bash
 cd $ROOT/ufs-chem-assay
-uv run --no-sync ufs-chem-assay record-benchmarks --output-root=$ROOT/CECE/ufs-chem-assay-output
+uv run --no-sync ufs-chem-assay record-benchmarks --output-root=$ROOT/CECE/ufs-chem-assay-output/gcafs-anthro
 ```
 
 Raise `timeout_s`, run again, and the next row lands beside the first;
@@ -190,8 +211,8 @@ first; the ULID is `run_id` in `run.yaml`):
 
 ```bash
 cd $ROOT/ufs-chem-assay
-AWS_PROFILE=<profile> uv run --no-sync ufs-chem-assay upload-output --output-root=$ROOT/CECE/ufs-chem-assay-output --dry-run
-AWS_PROFILE=<profile> uv run --no-sync ufs-chem-assay upload-output --output-root=$ROOT/CECE/ufs-chem-assay-output
+AWS_PROFILE=<profile> uv run --no-sync ufs-chem-assay upload-output --output-root=$ROOT/CECE/ufs-chem-assay-output/gcafs-anthro --dry-run
+AWS_PROFILE=<profile> uv run --no-sync ufs-chem-assay upload-output --output-root=$ROOT/CECE/ufs-chem-assay-output/gcafs-anthro
 ```
 
 Re-run it after the publish (step 5) and the `baseline.yaml` it wrote goes
@@ -203,9 +224,11 @@ AWS_PROFILE=<profile> uv run ufs-chem-assay download-output --ulid <run ULID> --
 ```
 
 lands the root at `~/gcafs-runs/<run ULID>/`. To upload every run
-automatically, set `harness.upload_output: true` in
-`config/ursa-gcafs-anthro.yaml` (off as shipped); the session then refuses
-to start without network, which on Ursa means the login node.
+automatically, set `harness.upload_output: true` in `config/ursa.yaml` —
+or for this session alone, `--override
+sessions:gcafs-anthro:harness:upload_output=true` (off as shipped); the
+submit session then refuses to start without network, and the resume
+session does the upload — on Ursa the login node, where `watch` runs it.
 
 ## 6. Cold start: the baseline comes back from the store
 
@@ -215,8 +238,9 @@ nothing), run with comparisons on and a baseline root — the two keys the
 run config leaves for this step:
 
 ```bash
-uv run ufs-chem-assay run --config-file=config/ursa-gcafs-anthro.yaml --stage harness \
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage harness --session gcafs-anthro \
     --override baselines:enabled=true baselines:root_dir=$ROOT/baselines
+uv run ufs-chem-assay watch --session gcafs-anthro
 ```
 
 Skipping the data stage lets the pytest session itself sync the baseline
@@ -231,8 +255,9 @@ without network.
 The same run config with the task count changed:
 
 ```bash
-uv run ufs-chem-assay run --config-file=config/ursa-gcafs-anthro.yaml --stage harness \
-    --override slurm:ntasks=4 baselines:enabled=true baselines:root_dir=$ROOT/baselines
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage harness --session gcafs-anthro \
+    --override sessions:gcafs-anthro:slurm:ntasks=4 baselines:enabled=true baselines:root_dir=$ROOT/baselines
+uv run ufs-chem-assay watch --session gcafs-anthro
 ```
 
 `-c` is per task, so this asks for four cores. The driver splits the
@@ -245,6 +270,8 @@ loosen `rtol`.
 
 ## What to record after the first run
 
+- The run report (`uv run ufs-chem-assay report --session gcafs-anthro
+  --write <path>.yaml`): the session line and every issue block, as is.
 - `tic`→`toc` wall time and the `report-mem` table from the `.out`
   (`sacct -j <id> -o Elapsed,MaxRSS` agrees); whether `--mem=0` can
   become a `--mem=<n>g`.

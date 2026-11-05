@@ -1,8 +1,9 @@
 """Slurm runtime: pytest on a login node, one rendered sbatch script per
-driver call, submitted with `sbatch --wait`. Popen is mocked throughout."""
+driver call, submitted with `sbatch --parsable` and finished by polling
+(jobs.py). Every Slurm command is mocked."""
 
-import io
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -11,17 +12,21 @@ from pytest_mock import MockerFixture
 
 from applications.cece.settings import CONTAINER_WORKDIR, CeceSettings
 from applications.registry import get_application
+from benchmarks import SlurmAccounting
+from jobs import SlurmJobError, SlurmJobTimeout, SubmittedJob
 from platforms import Platform, Runtime, default_runtime
 from resolution import resolve_output_roots
 from runner import (
     TEMPLATE_PATH,
     build_command,
     driver_command,
+    finish_driver_job,
     job_script_path,
     render_job_script,
     run_driver,
     sbatch_directives,
     slurm_minutes,
+    submit_driver_job,
     write_job_script,
 )
 from settings import Settings
@@ -210,110 +215,146 @@ def test_slurm_build_command_submits_the_script() -> None:
         PurePosixPath("/o/x/x.yaml"),
         job_script=Path("/o/x/x.sbatch"),
     )
-    assert command == ["sbatch", "--wait", "--parsable", "/o/x/x.sbatch"]
+    assert command == ["sbatch", "--parsable", "/o/x/x.sbatch"]  # no --wait: polled
 
 
-class _FakeJob:
-    """A Popen stand-in: prints the job id, then ends with `returncode`."""
-
-    def __init__(self, returncode: int, hang: bool = False) -> None:
-        self.returncode = returncode
-        self.hang = hang
-        self.stdout = io.BytesIO(b"12345\n")
-        self.killed = False
-        self.last_timeout: float | None = None
-
-    def wait(self, timeout: float | None = None) -> int:
-        self.last_timeout = timeout
-        if self.hang:
-            raise subprocess.TimeoutExpired(cmd="sbatch", timeout=timeout or 0)
-        return self.returncode
-
-    def kill(self) -> None:
-        self.killed = True
-
-
-def test_slurm_run_driver_writes_the_script_and_submits_it(
-    mocker: MockerFixture, tmp_path: Path
-) -> None:
-    job = _FakeJob(returncode=0)
-    popen = mocker.patch("runner.subprocess.Popen", return_value=job)
-    out_path = tmp_path / "x.out"
-    out_path.write_bytes(b"driver ok\n")  # Slurm wrote the job's output
-
-    execution = run_driver(
-        _slurm(),
-        _APP,
-        _CECE,
-        PurePosixPath(str(tmp_path / "x.yaml")),
-        out_path,
+def _submitted(tmp_path: Path, job_id: str = "12345") -> SubmittedJob:
+    return SubmittedJob(
+        suite="simple-maccity",
+        combo="x",
+        combo_id="x",
+        job_id=job_id,
+        script=tmp_path / "x.sbatch",
+        out_path=tmp_path / "x.out",
         timeout_s=10,
+        queue_wait_s=5,
+        submitted_at=datetime.now(UTC),
     )
 
-    assert execution.job_id == "12345"  # from sbatch --parsable, for accounting
-    script = tmp_path / "x.sbatch"
+
+def _accounting(state: str, exit_code: int | None) -> SlurmAccounting:
+    return SlurmAccounting(
+        job_id="12345",
+        submit=None,
+        start=None,
+        end=None,
+        elapsed_s=None,
+        queue_s=None,
+        max_rss_kb=None,
+        state=state,
+        exit_code=exit_code,
+    )
+
+
+def test_submit_driver_job_writes_the_script_and_submits_it(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    submit = mocker.patch("runner.submit_job", return_value="12345")
+    script, job_id = submit_driver_job(
+        _slurm(), _CECE, PurePosixPath(str(tmp_path / "x.yaml")), tmp_path / "x.out", 10
+    )
+    assert job_id == "12345"  # from sbatch --parsable, for the ledger
+    assert script == tmp_path / "x.sbatch"
     assert script.is_file()
     assert "srun --ntasks=1" in script.read_text()
-    assert popen.call_args.args[0] == ["sbatch", "--wait", "--parsable", str(script)]
-    assert popen.call_args.kwargs["stdout"] == subprocess.PIPE
-    assert out_path.read_bytes() == b"driver ok\n"  # untouched: Slurm owns it
+    submit.assert_called_once_with(script)
 
 
-def test_slurm_run_driver_nonzero_exit_reraises_with_job_output(
+def test_finish_driver_job_completed_returns_the_accounting(
     mocker: MockerFixture, tmp_path: Path
 ) -> None:
-    mocker.patch("runner.subprocess.Popen", return_value=_FakeJob(returncode=3))
-    out_path = tmp_path / "x.out"
-    out_path.write_bytes(b"boom\n")
-    with pytest.raises(subprocess.CalledProcessError) as excinfo:
-        run_driver(
-            _slurm(),
-            _APP,
-            _CECE,
-            PurePosixPath(str(tmp_path / "x.yaml")),
-            out_path,
-            timeout_s=10,
-        )
+    accounting = _accounting("COMPLETED", 0)
+    wait = mocker.patch("runner.wait_for_job", return_value=accounting)
+    job = _submitted(tmp_path)
+    job.out_path.write_bytes(b"driver ok\n")  # Slurm wrote the job's output
+    execution = finish_driver_job(job, _slurm(slurm_poll_s=1))
+    assert execution.job_id == "12345"
+    assert execution.accounting is accounting
+    assert wait.call_args.args[0] is job
+    assert wait.call_args.kwargs == {"poll_s": 1}
+    assert job.out_path.read_bytes() == b"driver ok\n"  # untouched: Slurm owns it
+
+
+def test_finish_driver_job_nonzero_exit_reraises_with_job_output(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    mocker.patch("runner.wait_for_job", return_value=_accounting("FAILED", 3))
+    job = _submitted(tmp_path)
+    job.out_path.write_bytes(b"boom\n")
+    with pytest.raises(SlurmJobError) as excinfo:
+        finish_driver_job(job, _slurm(slurm_poll_s=1))
+    assert isinstance(excinfo.value, subprocess.CalledProcessError)
     assert excinfo.value.returncode == 3
     assert excinfo.value.output == b"boom\n"
+    assert excinfo.value.job_id == "12345"
+    assert excinfo.value.cmd == ["sbatch", "--parsable", str(job.script)]
 
 
-def test_slurm_run_driver_writes_out_when_the_job_left_none(
+def test_finish_driver_job_without_an_exit_code_judges_by_state(
     mocker: MockerFixture, tmp_path: Path
 ) -> None:
-    mocker.patch("runner.subprocess.Popen", return_value=_FakeJob(returncode=1))
-    out_path = tmp_path / "x.out"
-    with pytest.raises(subprocess.CalledProcessError):
+    # NODE_FAIL and friends: no exit code to speak of, not COMPLETED -> failed.
+    mocker.patch("runner.wait_for_job", return_value=_accounting("NODE_FAIL", None))
+    job = _submitted(tmp_path)
+    job.out_path.write_bytes(b"")
+    with pytest.raises(SlurmJobError) as excinfo:
+        finish_driver_job(job, _slurm(slurm_poll_s=1))
+    assert excinfo.value.returncode == 1
+    # COMPLETED with no parsed exit code is still a pass.
+    mocker.patch("runner.wait_for_job", return_value=_accounting("COMPLETED", None))
+    assert finish_driver_job(job, _slurm(slurm_poll_s=1)).job_id == "12345"
+
+
+@pytest.mark.parametrize("state", ["TIMEOUT", "CANCELLED by 1234"])
+def test_finish_driver_job_timeout_and_cancelled_are_timeouts(
+    mocker: MockerFixture, tmp_path: Path, state: str
+) -> None:
+    mocker.patch("runner.wait_for_job", return_value=_accounting(state, 0))
+    job = _submitted(tmp_path)
+    job.out_path.write_bytes(b"partial\n")
+    with pytest.raises(SlurmJobTimeout) as excinfo:
+        finish_driver_job(job, _slurm(slurm_poll_s=1))
+    assert isinstance(excinfo.value, subprocess.TimeoutExpired)
+    assert excinfo.value.job_id == "12345"
+    assert excinfo.value.timeout == 15  # timeout_s + queue allowance
+
+
+def test_finish_driver_job_writes_out_when_the_job_left_none(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    mocker.patch("runner.wait_for_job", return_value=_accounting("FAILED", 1))
+    job = _submitted(tmp_path)
+    with pytest.raises(SlurmJobError):
+        finish_driver_job(job, _slurm(slurm_poll_s=1))
+    assert job.out_path.is_file()
+    text = job.out_path.read_text()
+    assert "12345" in text  # what Slurm said, at least
+    assert "FAILED" in text
+
+
+def test_finish_driver_job_propagates_the_waits_timeout(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    # The deadline case is the wait's (jobs.wait_for_job scancels and raises);
+    # the runner adds nothing to it.
+    mocker.patch(
+        "runner.wait_for_job",
+        side_effect=SlurmJobTimeout(["sbatch"], 15, "12345"),
+    )
+    with pytest.raises(SlurmJobTimeout):
+        finish_driver_job(_submitted(tmp_path), _slurm(slurm_poll_s=1))
+
+
+def test_run_driver_refuses_the_slurm_runtime(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="submit_driver_job"):
         run_driver(
             _slurm(),
-            _APP,
-            _CECE,
-            PurePosixPath(str(tmp_path / "x.yaml")),
-            out_path,
-            timeout_s=10,
-        )
-    assert out_path.is_file()
-    assert b"12345" in out_path.read_bytes()  # the sbatch submission line at least
-
-
-def test_slurm_run_driver_outer_timeout_cancels_the_job(
-    mocker: MockerFixture, tmp_path: Path
-) -> None:
-    job = _FakeJob(returncode=0, hang=True)
-    mocker.patch("runner.subprocess.Popen", return_value=job)
-    scancel = mocker.patch("runner.subprocess.run")
-    with pytest.raises(subprocess.TimeoutExpired):
-        run_driver(
-            _slurm(slurm_queue_wait_s=5),
             _APP,
             _CECE,
             PurePosixPath(str(tmp_path / "x.yaml")),
             tmp_path / "x.out",
             timeout_s=10,
         )
-    assert scancel.call_args.args[0] == ["scancel", "12345"]
-    assert job.killed
-    assert job.last_timeout == 15  # timeout_s + queue allowance
 
 
 def test_slurm_roots_are_host_roots() -> None:

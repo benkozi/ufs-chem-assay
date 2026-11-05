@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
+from fslock import locked as real_locked
 from models.conventions import CONVENTIONS
 from models.suite_config import InputFile, SuiteConfig
 from platforms import Platform
@@ -467,6 +468,17 @@ def test_rewrite_suite_digests_replaces_only_the_named_entries(
         "a/x.nc": _DIGEST,
         "b/y.nc": _PLACEHOLDER,
     }
+
+
+def test_rewrite_suite_digests_holds_the_file_lock(
+    tmp_path: Path, cece_config_path: Path, mocker: MockerFixture
+) -> None:
+    # The same exclusive lock the benchmark append and the ULID repoint take.
+    suite_path = tmp_path / "placed-suite.yaml"
+    suite_path.write_text(_suite_text(cece_config_path, {"a/x.nc": _PLACEHOLDER}))
+    locked = mocker.patch("staging.locked", wraps=real_locked)
+    rewrite_suite_digests(suite_path, {PurePosixPath("a/x.nc"): _DIGEST})
+    locked.assert_called_once_with(suite_path)
 
 
 def test_rewrite_suite_digests_refuses_an_unknown_dst(

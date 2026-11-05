@@ -5,12 +5,20 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from applications.base import ApplicationRunSection, ApplicationSettings
 from applications.cece.cli import CeceRunSection
 from applications.registry import REGISTRY, get_application
-from cli.run_config import HARNESS_ROOT, HarnessSection, RunConfig
+from cli.run_config import (
+    HARNESS_ROOT,
+    BaselinesSection,
+    HarnessSection,
+    ResolvedSession,
+    RunConfig,
+    SlurmSection,
+)
 from cli.stages import SETTINGS_NOT_MIRRORED, settings_mirror_fields
 from platforms import Platform, Runtime
 from settings import Settings
@@ -19,6 +27,7 @@ from tests.ufs_chem_assay.run_configs import (
     TEMPLATES_DIR,
     load_run_config,
     run_config_file,
+    uncommented_sessions,
 )
 from tests.ufs_chem_assay.stubs import stub_application
 
@@ -52,14 +61,23 @@ def test_local_template_loads_and_runs_directly() -> None:
 def test_templates_list_every_accepted_key() -> None:
     # The template is the documentation of the surface: every key of every
     # section appears, null where the default applies.
-    import yaml
-
-    for name in ("ursa.yaml", "local.yaml", "ursa-gcafs-anthro.yaml"):
-        raw = yaml.safe_load((TEMPLATES_DIR / name).read_text())
+    for name in ("ursa.yaml", "local.yaml"):
+        raw = yaml.safe_load(uncommented_sessions(TEMPLATES_DIR / name))
         assert set(raw["harness"]) == set(HarnessSection.model_fields), name
         assert set(raw["applications"]["cece"]) == set(CeceRunSection.model_fields), (
             name
         )
+        # Every overlay names only keys its section accepts (the commented
+        # exhaustive-maccity example included: it must stay valid).
+        for session, overlay in (raw.get("sessions") or {}).items():
+            for section, model in (
+                ("harness", HarnessSection),
+                ("slurm", SlurmSection),
+                ("baselines", BaselinesSection),
+            ):
+                assert set(overlay.get(section, {})) <= set(model.model_fields), (
+                    f"{name}: sessions.{session}.{section}"
+                )
 
 
 def test_unknown_key_rejected(tmp_path: Path) -> None:
@@ -90,7 +108,14 @@ def test_old_top_level_cece_section_rejected(tmp_path: Path) -> None:
 
 
 def test_platform_override_beats_file() -> None:
-    config = load_run_config(TEMPLATES_DIR / "ursa.yaml", platform=Platform.LOCAL)
+    # The Ursa template submits only (slurm); on a laptop that key must go too.
+    with pytest.raises(ValidationError, match="submit_only needs the slurm runtime"):
+        load_run_config(TEMPLATES_DIR / "ursa.yaml", platform=Platform.LOCAL)
+    config = load_run_config(
+        TEMPLATES_DIR / "ursa.yaml",
+        platform=Platform.LOCAL,
+        overrides=["harness:submit_only=false"],
+    )
     assert config.platform is Platform.LOCAL
     assert config.runtime is Runtime.DOCKER
 
@@ -98,7 +123,9 @@ def test_platform_override_beats_file() -> None:
 def test_platform_detected_when_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = run_config_file(tmp_path, overrides={"platform": REMOVE})
+    path = run_config_file(
+        tmp_path, overrides={"platform": REMOVE, "harness.submit_only": False}
+    )
     monkeypatch.setattr("platforms.socket.gethostname", lambda: "ufe04")
     assert load_run_config(path).platform is Platform.URSA
     monkeypatch.setattr("platforms.socket.gethostname", lambda: "laptop")
@@ -191,30 +218,38 @@ def test_data_input_search_path_defaults_empty_and_parses() -> None:
     ]
 
 
-def test_gcafs_anthro_template_bakes_in_the_use_case() -> None:
-    # The static Ursa run config for the use case: no override list.
-    config = load_run_config(TEMPLATES_DIR / "ursa-gcafs-anthro.yaml")
-    assert config.platform is Platform.URSA
-    assert config.harness.suite_config == "gcafs-anthro-suite.yaml"
-    assert config.harness.run_timeout_s == 28800
-    assert config.harness.env["I_MPI_FABRICS"] == "shm"
-    assert config.harness.env["OMP_NUM_THREADS"] == "1"
-    assert config.harness.env["OPENBLAS_DEFAULT_NUM_THREADS"] == "1"
-    assert config.baselines.enabled is False
-    assert config.harness.record_benchmarks is True  # every run is kept
-    assert config.slurm is not None
+def test_ursa_template_gcafs_anthro_session_bakes_in_the_use_case() -> None:
+    # The use case is a session of the one Ursa template: no override list,
+    # no second file. Everything the overlay does not name is the base's.
+    config = load_run_config(TEMPLATES_DIR / "ursa.yaml")
+    sessions = {s.name: s for s in config.resolved_sessions()}
+    assert list(sessions) == ["simple-maccity", "gcafs-anthro"]
+    gcafs = sessions["gcafs-anthro"]
+    assert gcafs.harness.suite_config == "gcafs-anthro-suite.yaml"
+    assert gcafs.harness.run_timeout_s == 28800
     assert (
-        config.slurm.sbatch_args
+        gcafs.harness.env["I_MPI_FABRICS"] == "shm"
+    )  # restated: env is replaced whole
+    assert gcafs.harness.env["OMP_NUM_THREADS"] == "1"
+    assert gcafs.harness.env["OPENBLAS_DEFAULT_NUM_THREADS"] == "1"
+    assert gcafs.baselines.enabled is False
+    assert gcafs.harness.record_benchmarks is True  # every run is kept
+    assert gcafs.harness.submit_only is True
+    assert gcafs.slurm is not None
+    assert (
+        gcafs.slurm.sbatch_args
         == "-A epic -q debug -p u1-compute -N 1 -n 1 -c 1 --mem=0"
     )
-    assert config.slurm.srun_args_value == "--ntasks=1 --cpu-bind=cores"
-    assert config.slurm.queue_wait_s == 3600
+    assert gcafs.slurm.srun_args_value == "--ntasks=1 --cpu-bind=cores"
+    assert gcafs.slurm.queue_wait_s == 3600
     assert config.data.input_search_path == []  # the suite's sources: cover Ursa
-    # Everything else is the Ursa template's.
-    ursa = load_run_config(TEMPLATES_DIR / "ursa.yaml")
-    assert config.applications == ursa.applications
-    assert config.harness.output_root == ursa.harness.output_root
-    assert config.slurm.account == ursa.slurm.account if ursa.slurm else False
+    # The simple-maccity session is the base sections as written.
+    simple = sessions["simple-maccity"]
+    assert simple.harness == config.harness
+    assert simple.slurm == config.slurm
+    assert simple.baselines == config.baselines
+    assert simple.harness.suite_config == "simple-maccity-suite.yaml"
+    assert gcafs.harness.output_root == simple.harness.output_root
 
 
 def test_outputs_section_and_upload_flag_default_off_everywhere() -> None:
@@ -222,7 +257,7 @@ def test_outputs_section_and_upload_flag_default_off_everywhere() -> None:
 
     assert OutputsSection().store == "s3://ufs-chem/assay-output"
     assert HarnessSection().upload_output is False
-    for name in ("ursa.yaml", "local.yaml", "ursa-gcafs-anthro.yaml"):
+    for name in ("ursa.yaml", "local.yaml"):
         config = load_run_config(TEMPLATES_DIR / name)
         assert config.outputs.store == "s3://ufs-chem/assay-output", name
         assert config.harness.upload_output is False, name  # off by default, everywhere
@@ -288,7 +323,7 @@ def test_slurm_section_describes_the_per_driver_job(tmp_path: Path) -> None:
 def test_templates_ship_without_a_root_and_derive_the_harness_parent() -> None:
     # The runbook layout: $ROOT/ufs-chem-assay beside $ROOT/CECE — so the
     # harness checkout's parent is the root, and no YAML edit is needed.
-    for name in ("ursa.yaml", "local.yaml", "ursa-gcafs-anthro.yaml"):
+    for name in ("ursa.yaml", "local.yaml"):
         # no top-level root_dir line (baselines.root_dir is a different key)
         assert (
             re.search(r"^root_dir:", (TEMPLATES_DIR / name).read_text(), re.MULTILINE)
@@ -353,6 +388,7 @@ def test_harness_section_mirrors_every_setting() -> None:
         "baseline_rtol",
         "sbatch_args",
         "slurm_queue_wait_s",
+        "slurm_poll_s",  # slurm.poll_s
         "srun_args",  # slurm: ntasks + srun_args
         "job_env",
         "input_search_path",  # data.input_search_path
@@ -422,9 +458,10 @@ def test_override_precedence_beats_named_flag_beats_file_beats_detection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("platforms.socket.gethostname", lambda: "laptop")
-    absent = run_config_file(tmp_path, overrides={"platform": REMOVE})
+    local_ok = {"harness.submit_only": False}  # the template's slurm-only key
+    absent = run_config_file(tmp_path, overrides={"platform": REMOVE, **local_ok})
     assert load_run_config(absent).platform is Platform.LOCAL  # detected
-    in_file = run_config_file(tmp_path, overrides={"platform": "ursa"})
+    in_file = run_config_file(tmp_path, overrides={"platform": "ursa", **local_ok})
     assert load_run_config(in_file).platform is Platform.URSA  # file
     assert (
         load_run_config(in_file, platform=Platform.LOCAL).platform is Platform.LOCAL
@@ -498,7 +535,7 @@ def test_example_keys_are_rejected(tmp_path: Path, dotted: str) -> None:
 
 
 def test_baselines_store_defaults_and_publish_keys_default_off() -> None:
-    for name in ("ursa.yaml", "local.yaml", "ursa-gcafs-anthro.yaml"):
+    for name in ("ursa.yaml", "local.yaml"):
         config = load_run_config(TEMPLATES_DIR / name)
         assert config.baselines.store == "s3://ufs-chem/baselines", name
         assert config.harness.publish_baselines is False, name
@@ -525,3 +562,166 @@ def test_malformed_values_fail_validation(tmp_path: Path) -> None:
     not_a_mapping.write_text("- a\n- b\n")
     with pytest.raises(ValueError, match="not a mapping"):
         load_run_config(not_a_mapping)
+
+
+# ── Sessions: named overlays, one pytest session each ─────────────────────────
+
+
+def test_without_sessions_the_config_is_one_nameless_session() -> None:
+    config = load_run_config(TEMPLATES_DIR / "local.yaml")
+    assert config.sessions == {}
+    (only,) = config.resolved_sessions()
+    assert only == ResolvedSession(
+        name=None,
+        harness=config.harness,
+        slurm=None,
+        baselines=config.baselines,
+    )
+    assert config.session_names == [None]
+
+
+def test_session_overlay_replaces_a_key_whole(tmp_path: Path) -> None:
+    # One level deep: an overlaid key replaces the base value — env is not
+    # merged, a session that wants the base hints restates them.
+    path = run_config_file(
+        tmp_path,
+        overrides={
+            "sessions": {
+                "a": {},
+                "b": {"harness": {"env": {"X": "1"}, "run_timeout_s": 7}},
+            }
+        },
+    )
+    config = load_run_config(path)
+    a, b = config.resolved_sessions()
+    assert (a.name, b.name) == ("a", "b")
+    assert a.harness == config.harness
+    assert b.harness.env == {"X": "1"}
+    assert b.harness.run_timeout_s == 7
+    assert b.harness.suite_config == config.harness.suite_config
+    assert b.slurm == config.slurm
+
+
+def test_session_overlay_errors_name_the_session(tmp_path: Path) -> None:
+    cases: list[tuple[dict[str, object], str]] = [
+        ({"x": {"harness": {"suite": "typo"}}}, "sessions.x.harness"),
+        ({"x": {"slurm": {"cpus": "many"}}}, "sessions.x.slurm"),
+        ({"x": {"data": {"warm_cartopy": False}}}, "data"),  # not overlayable
+        ({"Bad_Name": {}}, "Bad_Name"),
+        (
+            {"x": {"harness": {"no_suite_update": True}}},
+            "sessions.x.harness",
+        ),  # the section's own rule, under the session's name
+        ({"x": {"harness": {"runtime": "native"}}}, "runtime"),  # config-wide
+    ]
+    for sessions, needle in cases:
+        path = run_config_file(tmp_path, overrides={"sessions": sessions})
+        with pytest.raises(ValidationError, match=needle):
+            load_run_config(path)
+
+
+def test_slurm_overlay_needs_a_slurm_section(tmp_path: Path) -> None:
+    path = run_config_file(
+        tmp_path, "local.yaml", overrides={"sessions": {"x": {"slurm": {"qos": "b"}}}}
+    )
+    with pytest.raises(ValidationError, match="session x overlays slurm:"):
+        load_run_config(path)
+
+
+def test_submit_only_needs_the_slurm_runtime(tmp_path: Path) -> None:
+    assert HarnessSection().submit_only is False
+    path = run_config_file(
+        tmp_path, "local.yaml", overrides={"harness.submit_only": True}
+    )
+    with pytest.raises(ValidationError, match="submit_only needs the slurm runtime"):
+        load_run_config(path)
+    # Per session too: the base may be off and one session on — under slurm.
+    path = run_config_file(
+        tmp_path,
+        overrides={
+            "harness.submit_only": False,
+            "sessions": {"x": {"harness": {"submit_only": True}}},
+        },
+    )
+    (x,) = load_run_config(path).resolved_sessions()
+    assert x.harness.submit_only is True
+    assert load_run_config(TEMPLATES_DIR / "ursa.yaml").harness.submit_only is True
+    assert load_run_config(TEMPLATES_DIR / "local.yaml").harness.submit_only is False
+
+
+def test_session_output_root_four_shapes(tmp_path: Path) -> None:
+    from applications.registry import REGISTRY
+
+    cece = get_application("cece")
+    stub = stub_application()
+    REGISTRY["stub"] = stub
+    try:
+        one = load_run_config(TEMPLATES_DIR / "local.yaml")
+        (nameless,) = one.resolved_sessions()
+        assert one.session_output_root(cece, nameless) == "ufs-chem-assay-output"
+        two_apps = load_run_config(
+            run_config_file(
+                tmp_path,
+                "local.yaml",
+                overrides={"applications.stub": {"git_url": "u", "ref": "main"}},
+            )
+        )
+        (nameless,) = two_apps.resolved_sessions()
+        assert (
+            two_apps.session_output_root(stub, nameless) == "ufs-chem-assay-output/stub"
+        )
+        ursa = load_run_config(TEMPLATES_DIR / "ursa.yaml")
+        simple, gcafs = ursa.resolved_sessions()
+        assert (
+            ursa.session_output_root(cece, gcafs)
+            == "ufs-chem-assay-output/gcafs-anthro"
+        )
+        both = load_run_config(
+            run_config_file(
+                tmp_path,
+                overrides={"applications.stub": {"git_url": "u", "ref": "main"}},
+            )
+        )
+        simple, gcafs = both.resolved_sessions()
+        assert (
+            both.session_output_root(cece, simple)
+            == "ufs-chem-assay-output/cece/simple-maccity"
+        )
+    finally:
+        del REGISTRY["stub"]
+
+
+def test_override_reaches_a_session_overlay(tmp_path: Path) -> None:
+    config = load_run_config(
+        run_config_file(tmp_path),
+        overrides=["sessions:gcafs-anthro:slurm:ntasks=4"],
+    )
+    sessions = {s.name: s for s in config.resolved_sessions()}
+    assert sessions["gcafs-anthro"].slurm is not None
+    assert sessions["gcafs-anthro"].slurm.ntasks == 4
+    assert "-n 4 -c 1" in sessions["gcafs-anthro"].slurm.sbatch_args
+    assert sessions["simple-maccity"].slurm is not None
+    assert sessions["simple-maccity"].slurm.ntasks == 1
+    out = tmp_path / "run-config.yaml"
+    config.to_yaml(out)
+    reloaded = load_run_config(out)
+    assert reloaded == config
+    assert yaml.safe_load(out.read_text())["sessions"]["gcafs-anthro"]["slurm"] == {
+        "cpus": 1,
+        "srun_args": "--cpu-bind=cores",
+        "extra_args": "--mem=0",
+        "ntasks": 4,
+    }
+
+
+def test_slurm_poll_s_defaults_and_is_a_setting() -> None:
+    from cli.run_config import SlurmSection
+
+    assert SlurmSection().poll_s == 30
+    assert Settings(platform=Platform.URSA).slurm_poll_s == 30
+    assert Settings(platform=Platform.URSA, slurm_poll_s=5).slurm_poll_s == 5
+    with pytest.raises(ValidationError):
+        Settings(platform=Platform.URSA, slurm_poll_s=0)
+    ursa = load_run_config(TEMPLATES_DIR / "ursa.yaml")
+    assert ursa.slurm is not None
+    assert ursa.slurm.poll_s == 30

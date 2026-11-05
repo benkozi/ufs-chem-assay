@@ -40,6 +40,7 @@ class Stage(StrEnum):
     BUILD = "build"  # configure + build the driver
     DATA = "data"  # input data (the application's) + cartopy cache
     HARNESS = "harness"  # the pytest session, on this node; driver calls per runtime
+    RESUME = "resume"  # (harness.submit_only) the session's second half: wait, evaluate
 
 
 class RunConfigView(Protocol):

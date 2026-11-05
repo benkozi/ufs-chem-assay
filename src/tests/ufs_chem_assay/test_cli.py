@@ -37,7 +37,28 @@ from tests.ufs_chem_assay.stubs import stub_application
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI_LOGGER = f"{LOGGER_NAME}.cli"
+# The Ursa template: two sessions, each a harness script and (submit_only)
+# a resume script; `run` renders the resume scripts but executes them only
+# when --stage resume asks. Sorted, as _scripts lists them.
 _CECE_SCRIPTS = [
+    "01-source-cece.sh",
+    "02-build-cece.sh",
+    "03-data-cece.sh",
+    "05-harness-cece-gcafs-anthro.sh",
+    "05-harness-cece-simple-maccity.sh",
+    "06-resume-cece-gcafs-anthro.sh",
+    "06-resume-cece-simple-maccity.sh",
+]
+# What a plain `run` executes, in order (sessions in config order).
+_CECE_RUN_ORDER = [
+    "01-source-cece.sh",
+    "02-build-cece.sh",
+    "03-data-cece.sh",
+    "05-harness-cece-simple-maccity.sh",
+    "05-harness-cece-gcafs-anthro.sh",
+]
+# The local template: one nameless session, no resume.
+_LOCAL_SCRIPTS = [
     "01-source-cece.sh",
     "02-build-cece.sh",
     "03-data-cece.sh",
@@ -71,7 +92,7 @@ def stub(monkeypatch: pytest.MonkeyPatch) -> Application:
 def test_dry_run_renders_every_script_and_executes_nothing(
     tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    run_bash = mocker.patch("cli.main.run_bash")
+    run_bash = mocker.patch("cli.commands.run.run_bash")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(["run", f"--config-file={_config(tmp_path)}", "--dry-run"])
     assert code == 0
@@ -87,7 +108,7 @@ def test_dry_run_renders_every_script_and_executes_nothing(
 def test_effective_config_records_overrides(
     tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    mocker.patch("cli.main.run_bash")
+    mocker.patch("cli.commands.run.run_bash")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(
             [
@@ -109,7 +130,9 @@ def test_effective_config_records_overrides(
     assert effective["slurm"]["qos"] == "batch"
     assert effective["harness"]["suite_config"] == "ex3-suite.yaml"
     assert effective["root_dir"] == str(tmp_path / "root")
-    harness = (tmp_path / "root" / "scripts" / "05-harness-cece.sh").read_text()
+    harness = (
+        tmp_path / "root" / "scripts" / "05-harness-cece-simple-maccity.sh"
+    ).read_text()
     assert "--suite-config=ex3-suite.yaml" in harness
     assert "-q batch" in harness
     messages = [record.getMessage() for record in caplog.records]
@@ -119,7 +142,7 @@ def test_effective_config_records_overrides(
 def test_bad_override_is_a_clean_error(
     tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    mocker.patch("cli.main.run_bash")
+    mocker.patch("cli.commands.run.run_bash")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(
             ["run", f"--config-file={_config(tmp_path)}", "--dry-run", "-o", "nonsense"]
@@ -133,7 +156,7 @@ def test_bad_override_is_a_clean_error(
 def test_stage_selection_renders_only_those(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    mocker.patch("cli.main.run_bash")
+    mocker.patch("cli.commands.run.run_bash")
     code = main(
         [
             "run",
@@ -146,23 +169,31 @@ def test_stage_selection_renders_only_those(
         ]
     )
     assert code == 0
-    assert _scripts(tmp_path) == ["02-build-cece.sh", "05-harness-cece.sh"]
+    # The resume scripts render beside the harness ones (watch runs them).
+    assert _scripts(tmp_path) == [
+        "02-build-cece.sh",
+        "05-harness-cece-gcafs-anthro.sh",
+        "05-harness-cece-simple-maccity.sh",
+        "06-resume-cece-gcafs-anthro.sh",
+        "06-resume-cece-simple-maccity.sh",
+    ]
 
 
 def test_all_stages_run_with_bash_in_order(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    run_bash = mocker.patch("cli.main.run_bash", return_value=0)
+    run_bash = mocker.patch("cli.commands.run.run_bash", return_value=0)
     code = main(["run", f"--config-file={_config(tmp_path)}"])
     assert code == 0
     ran = [call.args[0].name for call in run_bash.call_args_list]
-    assert ran == _CECE_SCRIPTS
+    assert ran == _CECE_RUN_ORDER  # the resume scripts are rendered, not run
+    assert _scripts(tmp_path) == _CECE_SCRIPTS
 
 
 def test_failed_stage_stops_the_run_and_logs_at_error(
     tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    run_bash = mocker.patch("cli.main.run_bash", side_effect=[0, 2])
+    run_bash = mocker.patch("cli.commands.run.run_bash", side_effect=[0, 2])
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(["run", f"--config-file={_config(tmp_path)}"])
     assert code == 2
@@ -175,30 +206,31 @@ def test_failed_stage_stops_the_run_and_logs_at_error(
 def test_local_config_runs_the_same_stages(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    run_bash = mocker.patch("cli.main.run_bash", return_value=0)
+    run_bash = mocker.patch("cli.commands.run.run_bash", return_value=0)
     code = main(["run", f"--config-file={_config(tmp_path, 'local.yaml')}"])
     assert code == 0
     ran = [call.args[0].name for call in run_bash.call_args_list]
-    assert ran == _CECE_SCRIPTS
+    assert ran == _LOCAL_SCRIPTS
+    assert _scripts(tmp_path) == _LOCAL_SCRIPTS  # no resume without submit_only
 
 
 def test_harness_keeps_slot_05_without_a_04(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
     # Slot 04 is held for the application-tests stage of issue #9.
-    mocker.patch("cli.main.run_bash")
+    mocker.patch("cli.commands.run.run_bash")
     assert main(["run", f"--config-file={_config(tmp_path)}", "--dry-run"]) == 0
     assert _scripts(tmp_path) == _CECE_SCRIPTS
 
 
 def test_platform_flag_overrides_file(tmp_path: Path, mocker: MockerFixture) -> None:
-    mocker.patch("cli.main.run_bash")
-    path = _config(tmp_path)
+    mocker.patch("cli.commands.run.run_bash")
+    path = _config(tmp_path, overrides={"harness.submit_only": False})
     assert (
         main(["run", f"--config-file={path}", "--platform", "local", "--dry-run"]) == 0
     )
     # The exports follow the overridden platform (local -> docker runtime).
-    harness = tmp_path / "root" / "scripts" / "05-harness-cece.sh"
+    harness = tmp_path / "root" / "scripts" / "05-harness-cece-simple-maccity.sh"
     assert "export ASSAY_RUNTIME=docker" in harness.read_text()
 
 
@@ -234,7 +266,7 @@ def test_uncreatable_root_dir_is_a_clean_error(
 ) -> None:
     """A bad root_dir must not end in a traceback: one ERROR line naming
     the root, exit 1, nothing executed."""
-    mocker.patch("cli.main.run_bash")
+    mocker.patch("cli.commands.run.run_bash")
     blocker = tmp_path / "blocker"
     blocker.write_text("not a directory")
     path = run_config_file(tmp_path, root_dir=blocker / "root")
@@ -250,12 +282,12 @@ def test_uncreatable_root_dir_is_a_clean_error(
 def test_root_dir_flag_overrides_the_derived_root(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    mocker.patch("cli.main.run_bash")
+    mocker.patch("cli.commands.run.run_bash")
     config = run_config_file(tmp_path)  # no root_dir in the template
     root = tmp_path / "elsewhere"
     code = main(["run", f"--config-file={config}", f"--root-dir={root}", "--dry-run"])
     assert code == 0
-    harness = root / "scripts" / "05-harness-cece.sh"
+    harness = root / "scripts" / "05-harness-cece-simple-maccity.sh"
     assert harness.is_file()
     assert f"export CECE_ROOT_DIR={root}/CECE" in harness.read_text()
 
@@ -267,7 +299,7 @@ def test_root_dir_flag_overrides_the_derived_root(
 def test_comprehensive_run_renders_stage_major_per_application(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    run_bash = mocker.patch("cli.main.run_bash", return_value=0)
+    run_bash = mocker.patch("cli.commands.run.run_bash", return_value=0)
     path = _config(
         tmp_path, overrides={"applications.stub": {"git_url": "u", "ref": "main"}}
     )
@@ -280,15 +312,17 @@ def test_comprehensive_run_renders_stage_major_per_application(
         "02-build-stub.sh",
         "03-data-cece.sh",
         "03-data-stub.sh",
-        "05-harness-cece.sh",
-        "05-harness-stub.sh",
+        "05-harness-cece-simple-maccity.sh",
+        "05-harness-cece-gcafs-anthro.sh",
+        "05-harness-stub-simple-maccity.sh",
+        "05-harness-stub-gcafs-anthro.sh",
     ]
     scripts = tmp_path / "root" / "scripts"
     assert "natural_earth" in (scripts / "03-data-cece.sh").read_text()
     assert "natural_earth" not in (scripts / "03-data-stub.sh").read_text()
     assert (
-        "--combo-output-root=ufs-chem-assay-output/cece"
-        in (scripts / "05-harness-cece.sh").read_text()
+        "--combo-output-root=ufs-chem-assay-output/cece/simple-maccity"
+        in (scripts / "05-harness-cece-simple-maccity.sh").read_text()
     )
 
 
@@ -296,7 +330,7 @@ def test_comprehensive_run_renders_stage_major_per_application(
 def test_application_flag_narrows_a_comprehensive_run(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    mocker.patch("cli.main.run_bash")
+    mocker.patch("cli.commands.run.run_bash")
     path = _config(
         tmp_path, overrides={"applications.stub": {"git_url": "u", "ref": "main"}}
     )
@@ -308,14 +342,112 @@ def test_application_flag_narrows_a_comprehensive_run(
         "01-source-stub.sh",
         "02-build-stub.sh",
         "03-data-stub.sh",
-        "05-harness-stub.sh",
+        "05-harness-stub-gcafs-anthro.sh",
+        "05-harness-stub-simple-maccity.sh",
+        "06-resume-stub-gcafs-anthro.sh",
+        "06-resume-stub-simple-maccity.sh",
     ]
+
+
+# ── Sessions ─────────────────────────────────────────────────────────────────
+
+
+def test_session_flag_narrows_the_run(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    run_bash = mocker.patch("cli.commands.run.run_bash", return_value=0)
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(
+            ["run", f"--config-file={_config(tmp_path)}", "--session", "gcafs-anthro"]
+        )
+    assert code == 0
+    assert _scripts(tmp_path) == [
+        "01-source-cece.sh",
+        "02-build-cece.sh",
+        "03-data-cece.sh",
+        "05-harness-cece-gcafs-anthro.sh",
+        "06-resume-cece-gcafs-anthro.sh",
+    ]
+    ran = [call.args[0].name for call in run_bash.call_args_list]
+    assert ran == [
+        "01-source-cece.sh",
+        "02-build-cece.sh",
+        "03-data-cece.sh",
+        "05-harness-cece-gcafs-anthro.sh",
+    ]
+    data = (tmp_path / "root" / "scripts" / "03-data-cece.sh").read_text()
+    assert "--suite-config=gcafs-anthro-suite.yaml" in data
+    assert "simple-maccity" not in data  # only the selected session's inputs
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("sessions: gcafs-anthro" in m for m in messages)
+
+
+def test_unconfigured_session_is_a_clean_error(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch("cli.commands.run.run_bash")
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "run",
+                f"--config-file={_config(tmp_path)}",
+                "--session",
+                "nope",
+                "--dry-run",
+            ]
+        )
+    assert code == 1
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "nope" in errors[0]
+    assert "simple-maccity" in errors[0]
+    # A config without sessions: has none to select.
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "run",
+                f"--config-file={_config(tmp_path, 'local.yaml')}",
+                "--session",
+                "x",
+                "--dry-run",
+            ]
+        )
+    assert code == 1
+    assert "no sessions:" in caplog.records[-1].getMessage()
+
+
+def test_stage_resume_runs_the_resume_scripts_only(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    run_bash = mocker.patch("cli.commands.run.run_bash", return_value=0)
+    assert main(["run", f"--config-file={_config(tmp_path)}", "--stage", "resume"]) == 0
+    ran = [call.args[0].name for call in run_bash.call_args_list]
+    assert ran == ["06-resume-cece-simple-maccity.sh", "06-resume-cece-gcafs-anthro.sh"]
+    assert _scripts(tmp_path) == [
+        "06-resume-cece-gcafs-anthro.sh",
+        "06-resume-cece-simple-maccity.sh",
+    ]
+    # Without submit_only there is nothing to resume: a clean error.
+    run_bash.reset_mock()
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "run",
+                f"--config-file={_config(tmp_path, 'local.yaml')}",
+                "--stage",
+                "resume",
+            ]
+        )
+    assert code == 1
+    run_bash.assert_not_called()
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors == ["resume is rendered only with harness.submit_only: true"]
 
 
 def test_unconfigured_application_is_a_clean_error(
     tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    mocker.patch("cli.main.run_bash")
+    mocker.patch("cli.commands.run.run_bash")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(
             [
@@ -362,7 +494,7 @@ def fetch_env(
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr("socket.gethostname", lambda: "laptop")  # platform: local
-    mocker.patch("cli.main.ensure_baselines", return_value=[])
+    mocker.patch("cli.commands.fetch.ensure_baselines", return_value=[])
     checkout = tmp_path / "checkout"
     (checkout / "data").mkdir(parents=True)
     suites = tmp_path / "suites"
@@ -389,7 +521,7 @@ def test_fetch_stages_the_merged_inputs_of_the_selected_suites(
     fetch_env: Path, mocker: MockerFixture
 ) -> None:
     stage = mocker.patch(
-        "cli.main.stage_inputs",
+        "cli.commands.fetch.stage_inputs",
         side_effect=lambda inputs, data_dir, **_: [
             _staged(i.url, data_dir / i.dst, "skipped") for i in inputs
         ],
@@ -418,7 +550,7 @@ def test_fetch_stages_the_merged_inputs_of_the_selected_suites(
 def test_fetch_default_selects_the_applications_default_suite(
     fetch_env: Path, mocker: MockerFixture
 ) -> None:
-    stage = mocker.patch("cli.main.stage_inputs", return_value=[])
+    stage = mocker.patch("cli.commands.fetch.stage_inputs", return_value=[])
     assert main(["fetch"]) == 0
     inputs, data_dir = stage.call_args.args
     assert data_dir == fetch_env / "data"
@@ -430,7 +562,7 @@ def test_fetch_exit_code_follows_the_results(
     fetch_env: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
     mocker.patch(
-        "cli.main.stage_inputs",
+        "cli.commands.fetch.stage_inputs",
         return_value=[
             _staged("s3://bkt/a.nc", fetch_env / "data" / "a.nc", "downloaded"),
             _staged("s3://bkt/b.nc", fetch_env / "data" / "b.nc", "failed"),
@@ -445,7 +577,7 @@ def test_fetch_exit_code_follows_the_results(
 
 @pytest.mark.usefixtures("fetch_env")
 def test_fetch_dry_run_passes_through(mocker: MockerFixture) -> None:
-    stage = mocker.patch("cli.main.stage_inputs", return_value=[])
+    stage = mocker.patch("cli.commands.fetch.stage_inputs", return_value=[])
     assert main(["fetch", "--suite-config=one-suite.yaml", "--dry-run"]) == 0
     assert stage.call_args.kwargs == {
         "dry_run": True,
@@ -462,7 +594,7 @@ def test_fetch_passes_the_input_search_path_setting(
     monkeypatch.setenv(
         "ASSAY_INPUT_SEARCH_PATH", os.pathsep.join(["/scratch/x/INPUT", "/scratch/y"])
     )
-    stage = mocker.patch("cli.main.stage_inputs", return_value=[])
+    stage = mocker.patch("cli.commands.fetch.stage_inputs", return_value=[])
     assert main(["fetch", "--suite-config=one-suite.yaml"]) == 0
     assert stage.call_args.kwargs["search_path"] == [
         Path("/scratch/x/INPUT"),
@@ -540,7 +672,9 @@ def test_fetch_record_digests_reports_a_failed_rewrite(
     _placed_suite(fetch_env, cece_config_path)
     (fetch_env / "data" / "placed").mkdir()
     (fetch_env / "data" / "placed" / "x.nc").write_bytes(b"placed bytes")
-    mocker.patch("cli.main.rewrite_suite_digests", side_effect=ValueError("boom"))
+    mocker.patch(
+        "cli.commands.fetch.rewrite_suite_digests", side_effect=ValueError("boom")
+    )
     with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
         code = main(["fetch", "--suite-config=three-suite.yaml", "--record-digests"])
     assert code == 1
@@ -554,7 +688,7 @@ def test_fetch_without_the_application_root_is_a_clean_error(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.delenv("CECE_ROOT_DIR")
-    stage = mocker.patch("cli.main.stage_inputs")
+    stage = mocker.patch("cli.commands.fetch.stage_inputs")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(["fetch", "--suite-config=one-suite.yaml"])
     assert code == 1
@@ -568,7 +702,7 @@ def test_fetch_without_the_application_root_is_a_clean_error(
 def test_fetch_no_matching_suite_is_a_clean_error(
     mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    stage = mocker.patch("cli.main.stage_inputs")
+    stage = mocker.patch("cli.commands.fetch.stage_inputs")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(["fetch", "--suite-config=absent-suite.yaml"])
     assert code == 1
@@ -588,7 +722,7 @@ def test_fetch_conflicting_inputs_is_a_clean_error(
         f"name: three\nconfig_path: {cece_config_path}\ntimeout_s: 5\ninputs:\n"
         f"  - url: s3://elsewhere/MACCity_4x5.nc\n    dst: MACCity_4x5.nc\n"
     )
-    stage = mocker.patch("cli.main.stage_inputs")
+    stage = mocker.patch("cli.commands.fetch.stage_inputs")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(["fetch", r"--suite-config=.*-suite\.yaml"])
     assert code == 1
@@ -766,7 +900,8 @@ def test_publish_baselines_fails_fast_without_network(
     publish_env: Run, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
     mocker.patch(
-        "cli.main.check_reachable", side_effect=ConnectionError("no network to s3")
+        "cli.commands.publish_baselines.check_reachable",
+        side_effect=ConnectionError("no network to s3"),
     )
     sync = mocker.patch("baselines.publish.sync")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
@@ -781,7 +916,7 @@ def test_publish_baselines_fails_fast_without_network(
 def test_publish_baselines_to_a_directory_never_probes_the_network(
     publish_env: Run, mocker: MockerFixture, tmp_path: Path
 ) -> None:
-    probe = mocker.patch("cli.main.check_reachable")
+    probe = mocker.patch("cli.commands.publish_baselines.check_reachable")
     store = tmp_path / "dropbox"
     store.mkdir()
     assert (
@@ -817,9 +952,10 @@ def test_fetch_stages_the_pinned_baselines_after_the_inputs(
 ) -> None:
     monkeypatch.setenv("ASSAY_BASELINE_ROOT_DIR", "/baselines")
     monkeypatch.setenv("ASSAY_BASELINE_STORE", "s3://bkt/p")
-    mocker.patch("cli.main.stage_inputs", return_value=[])
+    mocker.patch("cli.commands.fetch.stage_inputs", return_value=[])
     ensure = mocker.patch(
-        "cli.main.ensure_baselines", return_value=[_staged_baseline("01JX", "synced")]
+        "cli.commands.fetch.ensure_baselines",
+        return_value=[_staged_baseline("01JX", "synced")],
     )
     assert main(["fetch", "--suite-config=one-suite.yaml", "--dry-run"]) == 0
     ensure.assert_called_once()
@@ -835,8 +971,8 @@ def test_fetch_skips_baselines_when_comparisons_are_disabled(
     mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("ASSAY_ENABLE_BASELINE_COMPARISONS", "false")
-    mocker.patch("cli.main.stage_inputs", return_value=[])
-    ensure = mocker.patch("cli.main.ensure_baselines")
+    mocker.patch("cli.commands.fetch.stage_inputs", return_value=[])
+    ensure = mocker.patch("cli.commands.fetch.ensure_baselines")
     assert main(["fetch", "--suite-config=one-suite.yaml"]) == 0
     ensure.assert_not_called()
 
@@ -845,9 +981,9 @@ def test_fetch_skips_baselines_when_comparisons_are_disabled(
 def test_fetch_exit_code_covers_failed_baselines(
     mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    mocker.patch("cli.main.stage_inputs", return_value=[])
+    mocker.patch("cli.commands.fetch.stage_inputs", return_value=[])
     mocker.patch(
-        "cli.main.ensure_baselines",
+        "cli.commands.fetch.ensure_baselines",
         return_value=[
             _staged_baseline("01JX", "failed"),
             _staged_baseline("01JY", "local"),
@@ -866,9 +1002,9 @@ def test_fetch_exit_code_ignores_unpublished_baselines(
 ) -> None:
     # A suite shipped before its first publish pins the placeholder ULID:
     # not a failure — there is nothing to fetch yet.
-    mocker.patch("cli.main.stage_inputs", return_value=[])
+    mocker.patch("cli.commands.fetch.stage_inputs", return_value=[])
     mocker.patch(
-        "cli.main.ensure_baselines",
+        "cli.commands.fetch.ensure_baselines",
         return_value=[_staged_baseline("0" * 26, "unpublished")],
     )
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
@@ -1082,9 +1218,10 @@ def test_output_subcommands_probe_an_s3_store_first(
     output_env: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
     probe = mocker.patch(
-        "cli.main.check_reachable", side_effect=ConnectionError("no route")
+        "cli.commands.output_store.check_reachable",
+        side_effect=ConnectionError("no route"),
     )
-    upload = mocker.patch("cli.main.upload_output")
+    upload = mocker.patch("cli.commands.upload_output.upload_output")
     with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
         code = main(
             [
@@ -1098,7 +1235,7 @@ def test_output_subcommands_probe_an_s3_store_first(
     upload.assert_not_called()
     assert any("node with network" in r.getMessage() for r in caplog.records)
     # The download probes the same way.
-    download = mocker.patch("cli.main.download_output")
+    download = mocker.patch("cli.commands.download_output.download_output")
     assert (
         main(
             [
@@ -1116,14 +1253,16 @@ def test_output_subcommands_probe_an_s3_store_first(
 def test_output_subcommands_report_transfer_failures(
     output_env: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    mocker.patch("cli.main.check_reachable")
+    mocker.patch("cli.commands.output_store.check_reachable")
     mocker.patch(
-        "cli.main.upload_output",
+        "cli.commands.upload_output.upload_output",
         side_effect=subprocess.CalledProcessError(
             1, ["aws"], output="x\nAccessDenied\n"
         ),
     )
-    mocker.patch("cli.main.download_output", side_effect=OSError("disk full"))
+    mocker.patch(
+        "cli.commands.download_output.download_output", side_effect=OSError("disk full")
+    )
     with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
         assert (
             main(
@@ -1161,7 +1300,7 @@ def test_fetch_with_a_nonexistent_root_is_a_clean_error(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setenv("CECE_ROOT_DIR", "/nowhere/at/all")
-    stage = mocker.patch("cli.main.stage_inputs")
+    stage = mocker.patch("cli.commands.fetch.stage_inputs")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(["fetch", "--suite-config=one-suite.yaml"])
     assert code == 1
@@ -1174,7 +1313,7 @@ def test_fetch_with_a_nonexistent_root_is_a_clean_error(
 def test_publish_baselines_application_flag_alone(
     publish_env: Run, mocker: MockerFixture
 ) -> None:
-    mocker.patch("cli.main.check_reachable")
+    mocker.patch("cli.commands.publish_baselines.check_reachable")
     sync = mocker.patch("baselines.publish.sync", side_effect=fake_sync())
     code = main(
         ["publish-baselines", f"--output-root={publish_env.root}", "--application=cece"]
@@ -1186,7 +1325,7 @@ def test_publish_baselines_application_flag_alone(
 def test_publish_baselines_application_and_store_flags_together(
     publish_env: Run, mocker: MockerFixture, tmp_path: Path
 ) -> None:
-    probe = mocker.patch("cli.main.check_reachable")
+    probe = mocker.patch("cli.commands.publish_baselines.check_reachable")
     store = tmp_path / "dir-store"
     store.mkdir()
     original = publish_env.suite_path.read_text()
@@ -1210,7 +1349,7 @@ def test_publish_baselines_application_and_store_flags_together(
 def test_publish_baselines_bad_selector_and_wrong_application(
     publish_env: Run, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    mocker.patch("cli.main.check_reachable")
+    mocker.patch("cli.commands.publish_baselines.check_reachable")
     sync = mocker.patch("baselines.publish.sync")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(
@@ -1238,7 +1377,7 @@ def test_publish_baselines_bad_selector_and_wrong_application(
 def test_publish_baselines_refuses_a_suite_edited_since_the_run(
     publish_env: Run, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    mocker.patch("cli.main.check_reachable")
+    mocker.patch("cli.commands.publish_baselines.check_reachable")
     sync = mocker.patch("baselines.publish.sync")
     text = publish_env.suite_path.read_text()
     first_ulid = next(line for line in text.splitlines() if "ulid:" in line)

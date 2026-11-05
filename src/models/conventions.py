@@ -69,6 +69,13 @@ class Conventions(StrictModel):
             "(that combination, uploaded with its baseline), and committed per configuration"
         ),
     )
+    job_ledger: str = Field(
+        "jobs.yaml",
+        description=(
+            "The job ledger at an output root (slurm runtime): every submitted "
+            "driver job, and when a session evaluated them"
+        ),
+    )
     upload_record: str = Field(
         "upload.yaml",
         description="Written into an output root by upload-output: when and by whom the copy was taken",

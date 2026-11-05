@@ -1,37 +1,17 @@
-"""The run config: one YAML file describing where and how a run happens —
-every harness setting, every application's section, every pytest option —
-with command-line overrides merged in before validation."""
+"""The run config's sections as models: data:, baselines:, outputs:,
+harness: (the pytest session and the mirror of every harness-wide
+setting), slurm: (the per-driver job) and uv:. Each is validated on its
+own, so a session overlay re-validates one section with the same rules."""
 
 from __future__ import annotations
 
-import os
-from collections.abc import Callable, Iterable
 from pathlib import Path
 
-import yaml
-from pydantic import (
-    ConfigDict,
-    Field,
-    SerializeAsAny,
-    ValidationInfo,
-    field_validator,
-    model_validator,
-)
+from pydantic import ConfigDict, Field, model_validator
 
-from applications.base import Application, ApplicationRunSection
-from cli.override import apply_overrides
-from identity import HARNESS_ROOT
 from models.base import StrictModel
 from models.conventions import CONVENTIONS
-from platforms import Platform, Runtime, default_runtime, detect_platform
-
-__all__ = ["HARNESS_ROOT", "ResolveApplication", "RunConfig"]
-
-# name -> adapter, or ValueError naming the registered ones: the registry's
-# get_application. Injected by the caller (cli/main.py, the tests) because
-# this module must never import the registry: the registry imports the
-# adapters, which import this module (design/fix/20261016-1547-codeql-dependabot-alerts).
-ResolveApplication = Callable[[object], Application]
+from platforms import Runtime
 
 
 class DataSection(StrictModel):
@@ -151,6 +131,15 @@ class HarnessSection(StrictModel):
             "(off by default; needs network where the session runs)"
         ),
     )
+    submit_only: bool = Field(
+        default=False,
+        description=(
+            "Pass --submit-only: the session submits every driver job, writes "
+            "jobs.yaml at its output root and stops; `ufs-chem-assay watch` (or "
+            "`run --stage resume`) evaluates it later through the rendered resume "
+            "script. Slurm runtime only"
+        ),
+    )
     runtime: Runtime | None = Field(
         default=None,
         description=(
@@ -200,9 +189,9 @@ class HarnessSection(StrictModel):
 
 
 class SlurmSection(StrictModel):
-    """The per-driver Slurm job (slurm runtime): one `sbatch --wait` per
-    driver call, from the login node where pytest runs. The time limit is
-    the suite timeout, not configured here."""
+    """The per-driver Slurm job (slurm runtime): one job per driver call,
+    submitted from the login node where pytest runs and waited for by
+    polling. The time limit is the suite timeout, not configured here."""
 
     account: str = Field(
         default="epic", description="sbatch -A (the Slurm project to charge)"
@@ -241,6 +230,15 @@ class SlurmSection(StrictModel):
         ),
     )
 
+    poll_s: int = Field(
+        default=30,
+        gt=0,
+        description=(
+            "ASSAY_SLURM_POLL_S: seconds between squeue polls while a driver job "
+            "is queued or running"
+        ),
+    )
+
     @property
     def sbatch_args(self) -> str:
         """ASSAY_SBATCH_ARGS: one node, the configured tasks and cpus per
@@ -262,141 +260,3 @@ class UvSection(StrictModel):
     cache_dir: Path | None = Field(
         default=None, description="UV_CACHE_DIR; null means <root_dir>/uv-cache"
     )
-
-
-class RunConfig(StrictModel):
-    """Everything `ufs-chem-assay run` needs. Load through from_yaml, which
-    resolves the platform and root and merges overrides; the model itself
-    never guesses."""
-
-    platform: Platform = Field(
-        description=(
-            "Machine this config targets. Optional in the file: from_yaml "
-            "resolves --platform > the file > hostname detection"
-        )
-    )
-    root_dir: Path = Field(
-        description=(
-            "Directory holding everything the CLI creates: the checkouts, logs/, "
-            "scripts/, uv caches. Optional in the file: from_yaml resolves "
-            "--root-dir > the file > the harness checkout's parent directory"
-        )
-    )
-    # SerializeAsAny: each section dumps with its adapter's schema.
-    applications: dict[str, SerializeAsAny[ApplicationRunSection]] = Field(
-        description=(
-            "One section per application in the run, keyed by registry name "
-            "(cece, ...); a comprehensive run lists several, each getting its "
-            "own stages and pytest session"
-        )
-    )
-    data: DataSection = Field(default_factory=DataSection)
-    baselines: BaselinesSection = Field(default_factory=BaselinesSection)
-    outputs: OutputsSection = Field(default_factory=OutputsSection)
-    harness: HarnessSection = Field(default_factory=HarnessSection)
-    slurm: SlurmSection | None = Field(
-        default=None,
-        description="Batch-job settings; null runs the driver directly",
-    )
-    uv: UvSection = Field(default_factory=UvSection)
-
-    @field_validator("root_dir", mode="before")
-    @classmethod
-    def _expand_root(cls, value: object) -> object:
-        if isinstance(value, str | Path):
-            return Path(value).expanduser()
-        return value
-
-    @field_validator("applications", mode="before")
-    @classmethod
-    def _dispatch_sections(cls, value: object, info: ValidationInfo) -> object:
-        # The registry dispatch for the run config: each raw section validates
-        # against its adapter's model. The resolver arrives in the validation
-        # context (from_yaml passes it); sections that are already models
-        # pass through, so a dump can be re-validated without one.
-        if not isinstance(value, dict):
-            return value
-        if not value:
-            raise ValueError(
-                "applications: at least one application section is required"
-            )
-        resolve = (info.context or {}).get("resolve_application")
-        sections: dict[str, ApplicationRunSection] = {}
-        for name, raw in value.items():
-            if isinstance(raw, ApplicationRunSection):
-                sections[name] = raw
-                continue
-            if resolve is None:
-                raise ValueError(
-                    "applications: validating a raw section needs the application "
-                    "resolver; load through RunConfig.from_yaml"
-                )
-            app = resolve(name)
-            sections[app.name] = app.run_section_model.model_validate(raw)
-        return sections
-
-    @classmethod
-    def from_yaml(
-        cls,
-        path: Path,
-        platform: Platform | None = None,
-        root_dir: Path | None = None,
-        overrides: Iterable[str] = (),
-        *,
-        resolve_application: ResolveApplication,
-    ) -> RunConfig:
-        """Load a run config. Precedence, highest first: `overrides`
-        (KEY:PATH=VALUE entries, in order), the named flags (`platform`,
-        `root_dir`), the file, then the derived defaults — hostname detection
-        for the platform, the harness checkout's parent for the root — so
-        the shipped templates run as-is from a checkout laid out like the
-        runbook. `resolve_application` (the registry's get_application) turns
-        each `applications:` key into its adapter, whose run-section model
-        validates that section."""
-        with open(path) as f:
-            loaded = yaml.safe_load(f)
-        if not isinstance(loaded, dict):
-            raise ValueError(f"run config {path} is not a mapping")
-        if platform is not None:
-            loaded["platform"] = platform
-        if root_dir is not None:
-            loaded["root_dir"] = root_dir
-        apply_overrides(overrides, loaded)
-        loaded["platform"] = loaded.get("platform") or detect_platform()
-        loaded["root_dir"] = loaded.get("root_dir") or HARNESS_ROOT.parent
-        return cls.model_validate(
-            loaded, context={"resolve_application": resolve_application}
-        )
-
-    @property
-    def runtime(self) -> Runtime:
-        return self.harness.runtime or default_runtime(self.platform)
-
-    @property
-    def uv_cache_dir(self) -> Path:
-        return self.uv.cache_dir or self.root_dir / "uv-cache"
-
-    @property
-    def application_names(self) -> list[str]:
-        return list(self.applications)
-
-    def checkout_dir(self, app: Application) -> Path:
-        """The application's checkout: its section's clone_dir, else
-        <root_dir>/<the adapter's checkout_dirname>."""
-        section = self.applications[app.name]
-        return section.clone_dir or self.root_dir / app.checkout_dirname
-
-    def to_yaml(self, path: Path) -> None:
-        """The effective configuration, as validated, keys in model order."""
-        with open(path, "w") as f:
-            yaml.dump(
-                self.model_dump(mode="json"),
-                f,
-                default_flow_style=False,
-                sort_keys=False,
-            )
-
-
-def search_path_value(paths: list[Path]) -> str:
-    """ASSAY_SUITE_CONFIG_SEARCH_PATH's os.pathsep-joined form."""
-    return os.pathsep.join(str(path) for path in paths)

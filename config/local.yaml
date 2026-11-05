@@ -40,6 +40,7 @@ harness:
   no_suite_update: false  # pytest --no-suite-update: publish without repointing the suite files
   record_benchmarks: false  # pytest --record-benchmarks; off on a laptop so maccity runs leave the tracked file alone
   upload_output: false  # pytest --upload-output: copy the whole output root to outputs.store/<run ULID> at session end
+  submit_only: false  # pytest --submit-only; slurm runtime only (docker runs the driver inline)
   runtime:  # ASSAY_RUNTIME; null = the platform's default (docker here)
   launcher: ''  # ASSAY_LAUNCHER; unused under docker
   env: {}

@@ -1,11 +1,17 @@
 # Run config for Ursa (RDHPCS): native driver build against the application's
-# own modulefiles; pytest on the login node submitting one Slurm job per driver
-# call (the slurm runtime). Runs as shipped from a runbook-layout checkout:
-#   ufs-chem-assay run --config-file=config/ursa.yaml [--dry-run]
-# Every stage renders to <root_dir>/scripts/<NN>-<stage>-<application>.sh and
-# runs with bash where the CLI runs; run the harness stage under tmux. Every
-# key is listed; command-line overrides change any of them:
-#   --override harness:suite_config=exhaustive-maccity-run-only-suite.yaml slurm:qos=batch
+# own modulefiles; pytest on the login node submitting every driver call as a
+# Slurm job at once, then polling (the slurm runtime). Two sessions ship
+# enabled — simple-maccity (the base sections as written) and gcafs-anthro
+# (its own suite, timeout cap and job geometry) — each its own pytest session
+# under <output_root>/<session>; a commented exhaustive-maccity entry shows
+# how to add one. From a runbook-layout checkout:
+#   ufs-chem-assay run --config-file=config/ursa.yaml [--dry-run] [--session NAME]...
+#   ufs-chem-assay watch  # evaluates each session when its jobs are done
+# Every stage renders to <root_dir>/scripts/<NN>-<stage>-<application>[-<session>].sh
+# and runs with bash where the CLI runs; with harness.submit_only the harness
+# stage returns after submitting and 06-resume-* finishes the session later.
+# Every key is listed; command-line overrides change any of them:
+#   --override slurm:qos=batch sessions:gcafs-anthro:slurm:ntasks=4
 platform: ursa  # optional: detected from the hostname when absent; --platform wins
 # root_dir is derived: the parent of this harness checkout ($ROOT/ufs-chem-assay beside $ROOT/CECE).
 # Set it here, or pass --root-dir, only if your layout differs.
@@ -42,6 +48,7 @@ harness:
   no_suite_update: false  # pytest --no-suite-update: publish without repointing the suite files
   record_benchmarks: true  # pytest --record-benchmarks: append the run's rows to the suites' benchmarks.csv; commit
   upload_output: false  # pytest --upload-output: copy the whole output root to outputs.store/<run ULID> at session end
+  submit_only: true  # pytest --submit-only: submit every job, write jobs.yaml, stop; `watch` evaluates (slurm only)
   runtime:  # ASSAY_RUNTIME; null = the platform's default (slurm here)
   launcher: ''  # ASSAY_LAUNCHER; ignored under slurm
   env:  # exported inside every driver job (ASSAY_JOB_ENV); the single-node MPI hints CECE's ctest uses
@@ -56,10 +63,40 @@ slurm:  # the per-driver job (ASSAY_SBATCH_ARGS); time limit = the suite timeout
   account: epic  # sbatch -A; the default when omitted
   qos: debug  # 30 min cap per job; `batch` (8 h) for long drivers
   queue_wait_s: 3600  # queue allowance per job before the harness cancels it; hours on `batch`
+  poll_s: 30  # ASSAY_SLURM_POLL_S: seconds between squeue polls while a job is queued or running
   partition: u1-compute
   ntasks: 1  # sbatch -n and srun --ntasks: MPI tasks per driver job (the driver splits latitude bands across them)
   cpus: 8  # sbatch -c: cores per task; the driver uses them all as threads unless env says otherwise
   srun_args: ''  # extra srun options for the driver launch, e.g. --cpu-bind=cores
   extra_args: ''  # extra sbatch directives, verbatim, e.g. --mem=0
+# sessions: one pytest session per entry, each under <output_root>/<session>; an entry overlays the harness:,
+# slurm: and baselines: sections above, one level deep (an overlaid key replaces the base value whole).
+# --session NAME selects an entry; --override sessions:<name>:<section>:<key>=<value> reaches one.
+sessions:
+  simple-maccity: {}  # the base sections as written: simple-maccity-suite.yaml, 8 cores, debug
+  # exhaustive-maccity:  # a further session, documented but not enabled: uncomment to run both exhaustive suites
+  #   harness:
+  #     suite_config: exhaustive-maccity-.*-suite.yaml  # both exhaustive suites, one session
+  #   slurm:
+  #     qos: batch  # 8 h; the debug QOS is 30 min
+  #     queue_wait_s: 14400  # batch waits can be hours, and every job is submitted at once
+  gcafs-anthro:  # the global anthropogenic use case (docs/gcafs-anthro-runbook.md); input paths are in the suite
+    harness:
+      suite_config: gcafs-anthro-suite.yaml
+      run_timeout_s: 28800  # the batch cap: the suite's own timeout_s (1800 = --time=30 for now) is the job limit
+      env:  # replaces harness.env whole: the MPI hints again, then the author's single-thread geometry
+        I_MPI_FABRICS: shm
+        FI_PROVIDER: tcp
+        OMP_NUM_THREADS: 1
+        OMP_PROC_BIND: spread
+        OMP_PLACES: threads
+        KOKKOS_NUM_THREADS: 1
+        MKL_NUM_THREADS: 1
+        OPENBLAS_NUM_THREADS: 1
+        OPENBLAS_DEFAULT_NUM_THREADS: 1
+    slurm:
+      cpus: 1  # one core per task … (the rank-invariance check: --override sessions:gcafs-anthro:slurm:ntasks=4)
+      srun_args: --cpu-bind=cores  # … bound
+      extra_args: --mem=0  # the whole node's memory: the per-core default was not enough
 uv:
   cache_dir:  # UV_CACHE_DIR; default <root_dir>/uv-cache

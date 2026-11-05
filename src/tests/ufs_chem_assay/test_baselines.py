@@ -32,6 +32,7 @@ from baselines import (
     rewrite_suite_ulid,
 )
 from comparison import resolve_baseline_comparisons
+from fslock import locked as real_locked
 from identity import HARNESS_NAME
 from platforms import Platform, Runtime
 from s3_sync import S3SyncConfig, S3SyncResult
@@ -649,6 +650,14 @@ def test_rewrite_refuses_zero_and_ambiguous_matches(run: Run) -> None:
             run.suite_path, PREVIOUS_ULIDS[1], "01JNEWNEWNEWNEWNEWNEWNEWNE"
         )
     assert run.suite_path.read_text() == text
+
+
+def test_rewrite_holds_the_file_lock(run: Run, mocker: MockerFixture) -> None:
+    # Two sessions publishing at once repoint under the same exclusive lock
+    # the benchmark append takes (fslock.locked), on the suite file itself.
+    locked = mocker.patch("baselines.suite.locked", wraps=real_locked)
+    rewrite_suite_ulid(run.suite_path, PREVIOUS_ULIDS[1], "01JNEWNEWNEWNEWNEWNEWNEWNE")
+    locked.assert_called_once_with(run.suite_path)
 
 
 def test_rewrite_restores_the_file_when_the_reload_differs(run: Run) -> None:
