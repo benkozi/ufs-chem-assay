@@ -71,9 +71,11 @@ class Command(StrEnum):
 class CommandModule(Protocol):
     """What every module under cli/commands provides."""
 
-    def register(self, subparsers: Subparsers, name: str) -> None: ...
+    def register(self, subparsers: Subparsers, name: str) -> None:
+        """Add the subcommand's parser under `name`."""
 
-    def handler(self, args: argparse.Namespace) -> int: ...
+    def handler(self, args: argparse.Namespace) -> int:
+        """Run the subcommand; returns its exit code."""
 
 
 # One module per subcommand, in help order; `argparse` makes an unknown name
