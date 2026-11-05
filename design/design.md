@@ -73,6 +73,12 @@ the harness test package `src/tests/ufs_chem_assay/`. See
   stops, `ufs-chem-assay watch` runs the resume scripts as the jobs
   finish (Execution model; `ufs-chem-assay cancel` scancels a session's;
   `design/feat/20261104-1129-async-runs/20261104-1129-async-runs.md`).
+  `ufs-chem-assay report` (2026-11-05, `cli/run_report.py`) is the rollup
+  of what the sessions left behind — from the roots' files alone, one
+  `SessionSummary` per (application, session) with a closed taxonomy of
+  `Issue`s, decorated from the newest resume log, exit 1 for anything
+  wrong or unfinished — and `watch` ends with the same report
+  (`design/feat/20261105-0847-run-report/20261105-0847-run-report.md`).
 - No dependency on existing CECE Python infrastructure; the runner lives in
   its **own repository** with its own `uv`-managed environment. The
   application checkout (driver build, input data) is external, located via
@@ -498,7 +504,18 @@ by (suite, canonical name), with an exact-set check, never rewriting
 `run.yaml`, `combos.csv` or the generated files — waits for what is still
 queued and runs every test and the session-end pipeline; the ledger is
 rewritten last with `evaluated_at` and the exit status. `--combo-clean-root`
-refuses a root whose ledger lists queued jobs. Each job runs
+refuses a root whose ledger lists queued jobs. What a run left behind is
+read back by `ufs-chem-assay report` (`cli/run_report.py`): `run.yaml`,
+`combos.csv`, `jobs.yaml`, `test-report.csv`, `benchmarks.csv`, the
+`.out` files and `upload.yaml` per session root, classified in a fixed
+order — no `run.yaml` (not submitted); the ledger against the enumerated
+set (submission incomplete), its `evaluated_at` (not evaluated); per
+combination the driver's verdict (`driver-failed`, `driver-timeout`,
+`accounting-missing`: a failed driver row with no Slurm state), then the
+other tests (`test-failed`), then the comparison (`comparison-failed`);
+the pipeline's own `ERROR` lines from the newest resume log
+(`pipeline-error`) — with no Slurm call, so it works on a downloaded root
+and after the jobs are gone; `watch` ends with it. Each job runs
 from a rendered `<combo_id>.sbatch` (Jinja2 template) kept beside the
 combo's artifacts — directives, `CECE_MODULEFILE` load, `ASSAY_JOB_ENV`,
 and the driver behind `srun ${ASSAY_SRUN_ARGS}` (`--ntasks=<slurm.ntasks>`
@@ -1124,7 +1141,9 @@ All code under `src/`; the project is `uv`-managed with its own
                           #   subcommands, keys the handlers);
                           #   `ufs-chem-assay fetch`: stage the selected suites' inputs;
                           #   `ufs-chem-assay publish-baselines`: a finished run -> the store;
-                          #   watch.py: `watch` (the monitor loop) and `cancel`
+                          #   watch.py: `watch` (the monitor loop) and `cancel`;
+                          #   run_report.py: `report` — the per-root classifier
+                          #   (SessionSummary, Issue, RunReport) and its renderer
     identity.py           # HARNESS_NAME, HARNESS_ROOT, harness_version/commit
     platforms.py          # Platform / Runtime enums, hostname detection
     templates/driver-job.sbatch.j2  # the slurm runtime's per-driver job script
@@ -1221,7 +1240,8 @@ stage: enough for a user to set up and run the suite. It covers:
 - **Configuring a run**: the run config as the complete YAML surface,
   `--override`, precedence, and the `run-config.yaml` artifact; sessions,
   `--session`, submit-then-watch (`harness.submit_only`, `jobs.yaml`,
-  `ufs-chem-assay watch`, `cancel`).
+  `ufs-chem-assay watch`, `cancel`), then `ufs-chem-assay report` (the
+  session lines, the issue kinds, `--output-root`, `--write`).
 
 The README grows alongside future features (evaluation step, richer suite
 config) but stays a quick-start document; design rationale lives here, not

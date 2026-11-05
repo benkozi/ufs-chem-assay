@@ -194,6 +194,7 @@ pins `dask_nworkers` to 2.
 cd $ROOT/ufs-chem-assay
 uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage harness --session simple-maccity
 uv run ufs-chem-assay watch --session simple-maccity
+uv run ufs-chem-assay report --session simple-maccity --write $ROOT/logs/report-$(date +%Y%m%d-%H%M%S).yaml
 ```
 
 The harness stage returns within minutes: it logs to
@@ -221,7 +222,22 @@ the job script, the job's `.out`, `cece.log`, NetCDF, stats, and plots.
 The login node has network, so the first plot fetches Natural Earth
 coastlines on its own.
 
-**Triage.** A failed combo is reproducible by hand:
+`watch` ends with the run report, and `ufs-chem-assay report` prints it
+again whenever you like (the next morning, over every session, without
+`--session`): one line per session — state, run ULID, test counts,
+combinations clean, how the comparisons went, where it was uploaded — and
+one block per issue (a driver that failed or timed out, a test that
+failed, a comparison that failed, a session never submitted or never
+evaluated, a benchmarks/publish/upload error) with the job's state and
+exit code, the failed test names, the last lines of the `.out` and a
+`see:` line naming the files to open. It reads files only, exits 1 when
+anything is wrong or unfinished, and `--write` keeps it as YAML beside the
+logs. `report --output-root <dir>` summarizes one root, a downloaded one
+included.
+
+**Triage.** Start from the report's `see:` paths (the `.out`, `cece.log`,
+the combination directory, the resume log). A failed combo is
+reproducible by hand:
 
 ```bash
 cd $ROOT/CECE && sbatch --wait $ROOT/CECE/ufs-chem-assay-output/simple-maccity/<combo_id>/<combo_id>.sbatch

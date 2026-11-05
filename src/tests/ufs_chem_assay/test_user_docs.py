@@ -67,6 +67,7 @@ def test_gcafs_anthro_runbook_covers_the_use_case() -> None:
         "config/ursa.yaml --dry-run --session gcafs-anthro",
         "config/ursa.yaml --stage data --stage harness --session gcafs-anthro",
         "watch --session gcafs-anthro",
+        "report --session gcafs-anthro",
         "sessions:gcafs-anthro:slurm:ntasks=4",
         "--mem=0",
         "publish-baselines",
@@ -104,6 +105,8 @@ def test_runbook_uses_placeholders_and_ref_variables() -> None:
     assert "ufs-chem-assay watch" in text
     assert "jobs.yaml" in text
     assert "ufs-chem-assay cancel" in text
+    assert "ufs-chem-assay report" in text
+    assert "report --session simple-maccity --write" in text  # keep the YAML
     assert "05-harness-cece.sh" not in text
     assert "05-harness.sh" not in text
     assert "ursa-gcafs-anthro.yaml" not in text
@@ -175,6 +178,10 @@ def test_readme_documents_the_new_surfaces() -> None:
         "ASSAY_SLURM_POLL_S",
         "06-resume-",
         "flock",
+        "ufs-chem-assay report",
+        "--output-root PATH",
+        "--write PATH",
+        "pipeline-error",
     ):
         assert needle in text, needle
     assert "buid-test-tweaks" not in text

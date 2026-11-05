@@ -12,7 +12,11 @@ executed under --stage resume) evaluates the finished jobs.
 [--once]`: the loop over the last `run`'s submit-only sessions — poll
 Slurm, run each session's resume script when its jobs are done, exit with
 the sessions' statuses. `ufs-chem-assay cancel --output-root PATH`:
-scancel a session's jobs still queued (cli/watch.py).
+scancel a session's jobs still queued (cli/watch.py). `ufs-chem-assay
+report [--root-dir DIR | --output-root PATH] [--session NAME ...] [--tail N]
+[--write PATH] [--quiet]`: the rollup of what the sessions left behind —
+states, test counts, one block per issue with the paths to open — from the
+files alone, exit 1 when anything is wrong (cli/run_report.py).
 
 `ufs-chem-assay fetch [--application NAME] [--suite-config SELECTOR]
 [--dry-run]`: stage the inputs the selected suites declare into the
@@ -31,6 +35,7 @@ import argparse
 import os
 import subprocess
 from collections.abc import Callable
+from datetime import UTC, datetime
 from enum import StrEnum, unique
 from pathlib import Path, PurePosixPath
 
@@ -40,10 +45,11 @@ from applications.base import Application, Stage
 from applications.registry import get_application
 from baselines import default_selector, ensure_baselines, load_run, plan, publish
 from benchmarks import append_benchmarks, read_benchmarks_csv
-from cli.run_config import ResolvedSession, RunConfig
+from cli.run_config import HARNESS_ROOT, ResolvedSession, RunConfig
+from cli.run_report import DEFAULT_TAIL, RunReport, render, summarize_session
 from cli.shell import run_bash, write_script
 from cli.stages import PER_SESSION, render_stage
-from cli.watch import cancel, watch
+from cli.watch import cancel, configured_sessions, load_effective, watch
 from logs import configure_logging, get_logger
 from models.conventions import CONVENTIONS
 from models.suite_config import RunManifest
@@ -81,6 +87,7 @@ class Command(StrEnum):
     DOWNLOAD_OUTPUT = "download-output"
     WATCH = "watch"
     CANCEL = "cancel"
+    REPORT = "report"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -397,6 +404,67 @@ def _parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="name the jobs that would be cancelled; cancel nothing",
+    )
+    report_parser = subparsers.add_parser(
+        Command.REPORT,
+        help=(
+            "summarize what the last `run`'s sessions left behind (or one output "
+            "root): one line per session, one block per issue with the reasons and "
+            "the paths to open; files only, no Slurm; exit 1 when anything is wrong "
+            "or not finished"
+        ),
+    )
+    roots = report_parser.add_mutually_exclusive_group()
+    roots.add_argument(
+        "--root-dir",
+        type=Path,
+        default=None,
+        help=(
+            "the run root `run` used: its effective config names the sessions, its "
+            "logs/ supplies the details (default: the harness checkout's parent)"
+        ),
+    )
+    roots.add_argument(
+        "--output-root",
+        type=Path,
+        default=None,
+        help=(
+            "one session's output root instead (a downloaded one works): no "
+            "effective config, no logs; excludes --application and --session"
+        ),
+    )
+    report_parser.add_argument(
+        "--application",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help="report only this configured application (repeatable)",
+    )
+    report_parser.add_argument(
+        "--session",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help="report only this configured session (repeatable)",
+    )
+    report_parser.add_argument(
+        "--tail",
+        type=int,
+        default=DEFAULT_TAIL,
+        metavar="N",
+        help=f"lines of a failed combination's .out to show (default {DEFAULT_TAIL}; 0: none)",
+    )
+    report_parser.add_argument(
+        "--write",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="also write the report as YAML to this path (nothing is written into a root)",
+    )
+    report_parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="the session lines and the verdict only; no issue blocks",
     )
     return parser
 
@@ -900,6 +968,67 @@ def _download_output(args: argparse.Namespace) -> int:
     return 0
 
 
+def _report(args: argparse.Namespace) -> int:
+    """The run report: the sessions of the effective config under --root-dir
+    (every configured one, submit-only or not; logs from <root_dir>/logs),
+    or the one root --output-root names (application from its run.yaml, the
+    directory name as the session, no logs). Exit 0 when every session is
+    evaluated, exited 0 and has no issue; 1 otherwise."""
+    if args.output_root is not None:
+        if args.application or args.session:
+            logger.error(
+                "--output-root takes one root; --application/--session select "
+                "sessions of the effective config (use --root-dir)"
+            )
+            return 1
+        root = args.output_root.resolve()
+        manifest = root / CONVENTIONS.run_manifest
+        application = "unknown"
+        if manifest.is_file():
+            with open(manifest) as f:
+                application = str(yaml.safe_load(f).get("application", application))
+        logger.info("logs: none (output root given directly)")
+        summaries = [
+            summarize_session(
+                root, application=application, session=root.name, tail=args.tail
+            )
+        ]
+        root_dir = None
+    else:
+        root_dir = args.root_dir or HARNESS_ROOT.parent
+        try:
+            config = load_effective(root_dir)
+            applications = _selected_applications(config, args.application)
+            sessions = _selected_sessions(config, args.session)
+        except ValueError as exc:
+            logger.error("%s", exc)
+            return 1
+        configured = configured_sessions(
+            config, applications, sessions, root_dir / "scripts"
+        )
+        summaries = [
+            summarize_session(
+                w.root,
+                application=w.application,
+                session=w.session,
+                logs_dir=root_dir / "logs",
+                tail=args.tail,
+            )
+            for w in configured
+        ]
+    report = RunReport(
+        root_dir=root_dir, generated_at=datetime.now(UTC), sessions=summaries
+    )
+    for line in render(report, quiet=args.quiet):
+        logger.info("%s", line)
+    if args.write is not None:
+        args.write.parent.mkdir(parents=True, exist_ok=True)
+        with open(args.write, "w") as f:
+            yaml.safe_dump(report.model_dump(mode="json"), f, sort_keys=False)
+        logger.info("wrote %s", args.write)
+    return 0 if report.ok else 1
+
+
 def _transfer_detail(exc: Exception) -> str:
     if isinstance(exc, subprocess.CalledProcessError):
         output = (exc.output or "").strip()
@@ -930,4 +1059,5 @@ HANDLERS: dict[Command, Callable[[argparse.Namespace], int]] = {
     Command.DOWNLOAD_OUTPUT: _download_output,
     Command.WATCH: lambda args: watch(args, _selected_applications, _selected_sessions),
     Command.CANCEL: cancel,
+    Command.REPORT: _report,
 }

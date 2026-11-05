@@ -116,16 +116,21 @@ then `tic`, the `srun`, `toc`, and `report-mem`.
 cd $ROOT/ufs-chem-assay
 uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage data --stage harness --session gcafs-anthro
 uv run ufs-chem-assay watch --session gcafs-anthro
+uv run ufs-chem-assay report --session gcafs-anthro
 ```
 
 The data stage re-verifies the inputs (and, with comparisons enabled,
 pre-warms the baseline); the harness stage submits the one job, writes
 `jobs.yaml` and returns; `watch` polls `squeue` until the job leaves the
 queue, then runs the resume session, which judges the job by `sacct` and
-finishes the run (kill and restart `watch` at will; `tmux` is optional).
+finishes the run (kill and restart `watch` at will; `tmux` is optional);
+`report` is the one-screen summary of what it left — the session line,
+one block per issue with the job's state, the `.out` tail and the paths
+to open — and exits 1 while anything is wrong or unfinished.
 With the 30-minute `timeout_s`, expect the first job to be killed by
 Slurm at `--time=30`: `test_driver_execution` fails with the job's
-`TIMEOUT` state, the `.out` ends without `toc`, and `sacct -j <id> -o
+`TIMEOUT` state (the report shows it as `[driver-timeout] … job <id>
+TIMEOUT`), the `.out` ends without `toc`, and `sacct -j <id> -o
 Elapsed,State` agrees. That is the measurement; then raise `timeout_s`
 in the suite (and the QOS, step 2) and run again. `squeue -u $USER`
 shows `ufs-chem-assay-<combo_id>` meanwhile. Results land in
@@ -260,6 +265,8 @@ loosen `rtol`.
 
 ## What to record after the first run
 
+- The run report (`uv run ufs-chem-assay report --session gcafs-anthro
+  --write <path>.yaml`): the session line and every issue block, as is.
 - `tic`→`toc` wall time and the `report-mem` table from the `.out`
   (`sacct -j <id> -o Elapsed,MaxRSS` agrees); whether `--mem=0` can
   become a `--mem=<n>g`.

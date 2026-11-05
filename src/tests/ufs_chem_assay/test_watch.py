@@ -1,8 +1,9 @@
-"""`ufs-chem-assay watch` and `ufs-chem-assay cancel`: the monitor loop over
-the effective config's sessions — one squeue per tick, the resume scripts
-run serially as sessions' jobs finish, exit = the sessions' pytest statuses
-— and the scancel of a session's live jobs. Slurm (queue_states) and the
-resume scripts (run_bash) are mocked; the ledgers are real files."""
+"""`ufs-chem-assay watch`, `cancel` and `report`: the monitor loop over the
+effective config's sessions — one squeue per tick, the resume scripts run
+serially as sessions' jobs finish, exit = the sessions' pytest statuses,
+the run report at the end — the scancel of a session's live jobs, and the
+report command over the same roots. Slurm (queue_states) and the resume
+scripts (run_bash) are mocked; the ledgers and the roots are real files."""
 
 import logging
 from collections.abc import Callable
@@ -10,12 +11,26 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import yaml
 from pytest_mock import MockerFixture
 
 from cli.main import main
+from cli.run_report import RunReport
 from jobs import JobLedger, SubmittedJob, read_ledger, write_ledger
 from logs import LOGGER_NAME
 from models.conventions import CONVENTIONS
+from tests.ufs_chem_assay.report_roots import (
+    COMBOS,
+    RUN_ID,
+    benchmark,
+    clean_root,
+    manifest,
+    report_rows,
+    write_log,
+    write_outcomes,
+    write_run,
+    write_session_ledger,
+)
 from tests.ufs_chem_assay.run_configs import run_config_file
 
 _CLI_LOGGER = f"{LOGGER_NAME}.cli"
@@ -130,7 +145,12 @@ def test_watch_evaluates_each_session_when_its_jobs_are_gone(
         for m in messages
     )
     assert any("simple-maccity: evaluated (exit 0)" in m for m in messages)
-    assert any("every session evaluated" in m for m in messages)
+    # The ending is the run report over the watched roots (here: ledgers
+    # without run.yaml, so every session reads as not submitted).
+    assert not any("every session evaluated" in m for m in messages)
+    assert messages[-1] == "report: 2 issue(s) in 2 of 2 session(s); exit 1"
+    assert any(m.startswith(f"report: 2 session(s) under {rendered}") for m in messages)
+    assert any(m.startswith("simple-maccity  not submitted") for m in messages)
     for session in ("simple-maccity", "gcafs-anthro"):
         assert read_ledger(_session_root(rendered, session)).evaluated_at is not None
 
@@ -250,6 +270,156 @@ def test_watch_interrupt_ends_the_tick(rendered: Path, mocker: MockerFixture) ->
     mocker.patch("cli.watch.queue_states", return_value={"20": "PENDING"})
     mocker.patch("cli.watch.time.sleep", side_effect=KeyboardInterrupt)
     assert _watch(rendered) == 130
+
+
+def test_watch_ends_with_the_report_of_the_evaluated_roots(
+    rendered: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A resume that leaves a clean root behind: the report says so.
+    _ledger(rendered, "gcafs-anthro", ["20"])
+    mocker.patch("cli.watch.queue_states", return_value={})
+
+    def resume(_path: Path, _logs_dir: Path) -> int:
+        clean_root(_session_root(rendered, "gcafs-anthro"))
+        return 0
+
+    mocker.patch("cli.watch.run_bash", side_effect=resume)
+    mocker.patch("cli.watch.time.sleep")
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert _watch(rendered, "--session", "gcafs-anthro") == 0
+    messages = [r.getMessage() for r in caplog.records]
+    assert messages[-1] == "report: no issue in 1 session(s); exit 0"
+    assert any(
+        m.startswith(f"gcafs-anthro  run {RUN_ID}  evaluated (exit 0)  tests 12 passed")
+        for m in messages
+    )
+
+
+# ── report ───────────────────────────────────────────────────────────────────
+
+
+def _report(root: Path, *args: str) -> int:
+    return main(["report", f"--root-dir={root}", *args])
+
+
+def _cli_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """The CLI's own lines (the fabricated roots' writers log too)."""
+    return [r.getMessage() for r in caplog.records if r.name == _CLI_LOGGER]
+
+
+def test_report_over_the_effective_config(
+    rendered: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Nothing submitted yet: two not-submitted sessions, exit 1.
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert _report(rendered) == 1
+    messages = [r.getMessage() for r in caplog.records]
+    assert messages[0].startswith(f"report: 2 session(s) under {rendered}")
+    assert messages[1] == "simple-maccity  not submitted"
+    assert messages[2].startswith("  [not-submitted] no run.yaml at ")
+    assert messages[3] == "gcafs-anthro    not submitted"
+    assert messages[-1] == "report: 2 issue(s) in 2 of 2 session(s); exit 1"
+    # One clean session, narrowed to: exit 0; the other still counts without it.
+    clean_root(_session_root(rendered, "simple-maccity"))
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert (
+            _report(rendered, "--session", "simple-maccity", "--application", "cece")
+            == 0
+        )
+    messages = [r.getMessage() for r in caplog.records]
+    assert messages[-1] == "report: no issue in 1 session(s); exit 0"
+    assert _report(rendered) == 1
+
+
+def test_report_reads_the_logs_and_writes_yaml(
+    rendered: Path, caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    root = _session_root(rendered, "simple-maccity")
+    write_run(root, manifest(), COMBOS[:1])
+    write_session_ledger(root, COMBOS[:1], exit_status=1)
+    bilinear = COMBOS[0]
+    rows = report_rows(bilinear, failed=("test_nc_file_count",))
+    write_outcomes(root, rows, [benchmark(bilinear, "100")])
+    log = write_log(
+        rendered / "logs",
+        "06-resume-cece-simple-maccity-20261105-073000.log",
+        f"FAILED test_driver_combos.py::test_nc_file_count[{bilinear.name}] - "
+        "AssertionError: 2 != 3\n",
+    )
+    out = tmp_path / "keep" / "report.yaml"
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert _report(rendered, "--session", "simple-maccity", f"--write={out}") == 1
+    messages = [r.getMessage() for r in caplog.records]
+    assert "    test_nc_file_count: AssertionError: 2 != 3" in messages
+    assert f"    see: {log}" in messages
+    assert messages[-2] == "report: 1 issue(s) in 1 of 1 session(s); exit 1"
+    assert messages[-1] == f"wrote {out}"
+    with open(out) as f:
+        loaded = RunReport.model_validate(yaml.safe_load(f))
+    assert loaded.root_dir == rendered
+    assert loaded.sessions[0].log == log
+    assert [i.kind for i in loaded.sessions[0].issues] == ["test-failed"]
+    # --quiet keeps the session lines and the verdict only.
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert _report(rendered, "--session", "simple-maccity", "--quiet") == 1
+    messages = [r.getMessage() for r in caplog.records]
+    assert len(messages) == 3
+    assert not any(m.startswith("  [") for m in messages)
+
+
+def test_report_output_root(
+    rendered: Path, caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    root = _session_root(rendered, "simple-maccity")
+    clean_root(root)
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert main(["report", f"--output-root={root}", "--tail", "0"]) == 0
+    messages = _cli_messages(caplog)
+    assert messages[0] == "logs: none (output root given directly)"
+    assert (
+        messages[1]
+        == "report: 1 session(s) (generated " + messages[1].split("(generated ")[1]
+    )
+    # The directory name stands in for the session; the application is run.yaml's.
+    assert messages[2].startswith(f"simple-maccity  run {RUN_ID}  evaluated (exit 0)")
+    assert messages[-1] == "report: no issue in 1 session(s); exit 0"
+    # A root that is not a run: unknown application, not submitted, exit 1.
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert main(["report", f"--output-root={tmp_path / 'nothing'}"]) == 1
+    messages = _cli_messages(caplog)
+    assert messages[2] == "nothing  not submitted"
+    # The selection flags belong to --root-dir.
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert main(["report", f"--output-root={root}", "--session", "x"]) == 1
+    assert "--root-dir" in caplog.records[-1].getMessage()
+    with pytest.raises(SystemExit):
+        main(["report", f"--output-root={root}", f"--root-dir={rendered}"])
+
+
+def test_report_clean_errors(
+    tmp_path: Path,
+    rendered: Path,
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert _report(tmp_path / "elsewhere") == 1
+    assert CONVENTIONS.effective_config in caplog.records[-1].getMessage()
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert _report(rendered, "--session", "nope") == 1
+    assert "nope" in caplog.records[-1].getMessage()
+    # A config without submit_only is reportable (unlike watchable): its
+    # nameless session renders as the application.
+    local = run_config_file(tmp_path, "local.yaml", root_dir=tmp_path / "local-root")
+    mocker.patch("cli.main.run_bash")
+    assert main(["run", f"--config-file={local}", "--dry-run"]) == 0
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert _report(tmp_path / "local-root") == 1
+    messages = [r.getMessage() for r in caplog.records]
+    assert "cece  not submitted" in messages
 
 
 # ── cancel ───────────────────────────────────────────────────────────────────

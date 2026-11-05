@@ -13,13 +13,15 @@ sessions' own pytest statuses as its exit. It owns no test logic and no
 Slurm semantics beyond "is this job still queued"; it is safe to kill and
 restart at any point (a session already evaluated is skipped by its
 ledger's evaluated_at; a resume that died is tried again by the next
-watch)."""
+watch). It ends with the run report (cli/run_report.py) over the watched
+roots — the same summary `ufs-chem-assay report` prints."""
 
 from __future__ import annotations
 
 import argparse
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -28,6 +30,7 @@ from pydantic import Field
 from applications.base import Application, Stage
 from applications.registry import get_application
 from cli.run_config import HARNESS_ROOT, ResolvedSession, RunConfig
+from cli.run_report import RunReport, render, summarize_session
 from cli.shell import run_bash
 from jobs import JobLedger, cancel_jobs, queue_states, read_ledger
 from logs import get_logger
@@ -109,22 +112,15 @@ def session_root(config: RunConfig, app: Application, session: ResolvedSession) 
     return host
 
 
-def watched_sessions(
+def configured_sessions(
     config: RunConfig,
     applications: list[Application],
     sessions: list[ResolvedSession],
     scripts_dir: Path,
 ) -> list[WatchedSession]:
     """Every (application, session) pair in config order, with its root and
-    its resume script's path; every selected session must submit only."""
-    not_submit_only = [
-        s.name or "(nameless)" for s in sessions if not s.harness.submit_only
-    ]
-    if not_submit_only:
-        raise ValueError(
-            f"nothing to watch: session(s) {not_submit_only} do not set "
-            "harness.submit_only (their harness stage evaluates in place)"
-        )
+    its resume script's path (rendered or not: `report` summarizes a session
+    evaluated in place too; `watch` checks submit_only on top)."""
     watched: list[WatchedSession] = []
     for app in applications:
         for session in sessions:
@@ -207,7 +203,9 @@ def _evaluate(watched: WatchedSession, logs_dir: Path) -> SessionReport:
     return SessionReport(state="failed", exit_status=code)
 
 
-def _load_effective(root_dir: Path) -> RunConfig:
+def load_effective(root_dir: Path) -> RunConfig:
+    """The effective config `run` wrote under root_dir; ValueError naming
+    the command that writes it when absent."""
     effective = root_dir / "scripts" / CONVENTIONS.effective_config
     if not effective.is_file():
         raise ValueError(
@@ -224,15 +222,25 @@ def watch(
 ) -> int:
     """The loop: a tick, the ready sessions evaluated one after another,
     sleep, until every selected session is evaluated or has had its one
-    attempt this watch. Exit 0 when every session's pytest status is 0, 1
-    otherwise (or a failed evaluation), 130 on an interrupt; --once reports
-    one tick and exits 0."""
+    attempt this watch; then the run report over the watched roots. Exit 0
+    when every session's pytest status is 0, 1 otherwise (or a failed
+    evaluation), 130 on an interrupt; --once reports one tick and exits 0."""
     root_dir = args.root_dir or HARNESS_ROOT.parent
     try:
-        config = _load_effective(root_dir)
+        config = load_effective(root_dir)
         applications = select_applications(config, args.application)
         sessions = select_sessions(config, args.session)
-        watched = watched_sessions(config, applications, sessions, root_dir / "scripts")
+        not_submit_only = [
+            s.name or "(nameless)" for s in sessions if not s.harness.submit_only
+        ]
+        if not_submit_only:
+            raise ValueError(
+                f"nothing to watch: session(s) {not_submit_only} do not set "
+                "harness.submit_only (their harness stage evaluates in place)"
+            )
+        watched = configured_sessions(
+            config, applications, sessions, root_dir / "scripts"
+        )
         missing = [w.script for w in watched if not w.script.is_file()]
         if missing:
             raise ValueError(
@@ -284,11 +292,20 @@ def watch(
         for w in watched
         if final[w.root].state == "evaluated" and final[w.root].exit_status != 0
     ]
-    logger.info(
-        "every session evaluated%s%s",
-        f"; evaluation failed: {', '.join(failed)}" if failed else "",
-        f"; tests failed in: {', '.join(nonzero)}" if nonzero else "",
+    if failed:
+        logger.error("evaluation failed: %s", ", ".join(failed))
+    run_report = RunReport(
+        root_dir=root_dir,
+        generated_at=datetime.now(UTC),
+        sessions=[
+            summarize_session(
+                w.root, application=w.application, session=w.session, logs_dir=logs_dir
+            )
+            for w in watched
+        ],
     )
+    for line in render(run_report):
+        logger.info("%s", line)
     return 1 if failed or nonzero else 0
 
 

@@ -529,7 +529,31 @@ already evaluated is skipped by its ledger, a resume that died is tried
 again by the next `watch`. `tmux` is a convenience for watching, not a
 requirement. `ufs-chem-assay cancel --output-root=<session root>`
 scancels a session's jobs still in the queue, and `clean_root` refuses to
-remove a root whose ledger lists queued jobs, naming that command. The
+remove a root whose ledger lists queued jobs, naming that command.
+
+**Then report.** `watch` ends with the run report, and
+`ufs-chem-assay report` prints the same thing any time later, from the
+files alone (no `squeue`, no `sacct`): one line per session of the last `run`'s effective
+config — its state (`evaluated (exit N)`, `not evaluated`, `submission
+incomplete`, `not submitted`), run ULID, test counts, combinations clean,
+how the comparisons went (`passed` / `failed` / `unpublished` / `off`),
+where it was uploaded — then one block per issue: `driver-failed`,
+`driver-timeout`, `accounting-missing`, `test-failed`,
+`comparison-failed` for a combination (job id, Slurm state, exit code,
+the failed tests, the last `--tail` lines of its `.out`, and the paths to
+open: `.out`, `cece.log`, the combination directory, the resume log), and
+`not-submitted`, `submission-incomplete`, `not-evaluated`,
+`pipeline-error` (benchmarks, publish, upload) for a session. Pytest's
+`FAILED … - message` lines and the pipeline's `ERROR` lines are read from
+the newest `06-resume-*` (or `05-harness-*`) log under `<root_dir>/logs/`
+to decorate what the files already say; a skipped comparison is never an
+issue, but it is counted. `--session`/`--application` narrow it,
+`--output-root PATH` reports one root instead (a downloaded one works;
+no logs), `--write PATH` saves the report as YAML (the `RunReport`
+model), `--quiet` keeps the session lines only. Exit 0 only when every
+selected session is evaluated with exit 0 and nothing is wrong, so a
+script can end with `report` and mean it; the report writes nothing into
+a root. The
 CLI never deletes anything except the harness output root
 (`clean_root`), and never mutates an existing checkout without
 `update_source`. `baselines.store` (`ASSAY_BASELINE_STORE`),
