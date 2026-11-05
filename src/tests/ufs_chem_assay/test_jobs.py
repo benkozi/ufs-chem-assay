@@ -10,9 +10,9 @@ import pytest
 import yaml
 from pytest_mock import MockerFixture
 
-import jobs
 from benchmarks import SlurmAccounting
 from jobs import (
+    QUEUED_UNKNOWN,
     JobLedger,
     SlurmAccountingMissing,
     SlurmJobTimeout,
@@ -183,7 +183,7 @@ def test_queue_states_unavailable_keeps_every_job_queued(mocker: MockerFixture) 
         "jobs.subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd="squeue", timeout=60),
     )
-    assert queue_states(["1"]) == {"1": jobs.QUEUED_UNKNOWN}
+    assert queue_states(["1"]) == {"1": QUEUED_UNKNOWN}
 
 
 # ── the wait ─────────────────────────────────────────────────────────────────

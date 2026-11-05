@@ -21,7 +21,6 @@ by hand on one node.
 from __future__ import annotations
 
 import fcntl
-import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -35,13 +34,15 @@ logger = get_logger("fslock")
 def locked(path: Path) -> Iterator[None]:
     """Hold an exclusive advisory lock on `path` (created empty when absent)
     for the block; released on exit, exception included."""
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
-    try:
-        logger.debug("acquiring lock on %s", path)
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        logger.debug("locked %s", path)
-        yield
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
-        logger.debug("released %s", path)
+    # Append mode: created when absent (the process umask decides the
+    # permissions, as for every other file the harness writes), never
+    # truncated, and nothing is written through this handle.
+    with open(path, "a") as handle:
+        try:
+            logger.debug("acquiring lock on %s", path)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            logger.debug("locked %s", path)
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            logger.debug("released %s", path)

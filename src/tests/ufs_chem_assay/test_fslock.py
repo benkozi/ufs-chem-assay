@@ -38,8 +38,13 @@ def test_locked_creates_a_missing_file_and_releases_on_exit(tmp_path: Path) -> N
 
 def test_locked_releases_on_exception(tmp_path: Path) -> None:
     path = tmp_path / "x"
-    with pytest.raises(RuntimeError, match="boom"), locked(path):
-        raise RuntimeError("boom")
+
+    def hold_and_fail() -> None:
+        with locked(path):
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        hold_and_fail()
     assert _try_lock(path)
 
 
