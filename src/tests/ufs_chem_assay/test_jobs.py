@@ -176,6 +176,34 @@ def test_queue_states_all_gone_is_not_an_error(mocker: MockerFixture) -> None:
     assert queue_states(["123"]) == {}
 
 
+def test_queue_states_controller_failure_keeps_every_job_queued(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A nonzero exit that is not "invalid job id" says nothing about the
+    # jobs: a drained queue must never be inferred from it.
+    for stderr in (
+        "slurm_load_jobs error: Unable to contact slurm controller (connect failure)",
+        "slurm_load_jobs error: Socket timed out on send/recv operation",
+        "",
+    ):
+        mocker.patch(
+            "jobs.subprocess.run",
+            return_value=_completed("", returncode=1, stderr=stderr),
+        )
+        with caplog.at_level("WARNING", logger="ufs-chem-assay.jobs"):
+            assert queue_states(["123", "456"]) == {
+                "123": QUEUED_UNKNOWN,
+                "456": QUEUED_UNKNOWN,
+            }
+        assert "treating 2 job(s) as queued" in caplog.records[-1].getMessage()
+    # Partial output beside a nonzero exit is still an answer for those ids.
+    mocker.patch(
+        "jobs.subprocess.run",
+        return_value=_completed("123 RUNNING\n", returncode=1, stderr="odd"),
+    )
+    assert queue_states(["123", "456"]) == {"123": "RUNNING"}
+
+
 def test_queue_states_unavailable_keeps_every_job_queued(mocker: MockerFixture) -> None:
     mocker.patch("jobs.subprocess.run", side_effect=OSError("no squeue"))
     assert queue_states(["1", "2"]) == {"1": "UNKNOWN", "2": "UNKNOWN"}

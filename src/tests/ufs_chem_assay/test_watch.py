@@ -16,6 +16,7 @@ from pytest_mock import MockerFixture
 
 from cli.main import main
 from cli.run_report import RunReport
+from cli.sessions import PendingState, SessionState, WatchedSession, tick
 from jobs import JobLedger, SubmittedJob, read_ledger, write_ledger
 from logs import LOGGER_NAME
 from models.conventions import CONVENTIONS
@@ -54,7 +55,7 @@ def _job(combo: str, combo_id: str, job_id: str, root: Path) -> SubmittedJob:
 def rendered(tmp_path: Path, mocker: MockerFixture) -> Path:
     """A `run --dry-run` of the Ursa template at tmp_path/root: the
     effective config and the scripts are on disk, nothing executed."""
-    mocker.patch("cli.main.run_bash")
+    mocker.patch("cli.commands.run.run_bash")
     config = run_config_file(tmp_path, root_dir=tmp_path / "root")
     assert main(["run", f"--config-file={config}", "--dry-run"]) == 0
     return tmp_path / "root"
@@ -104,8 +105,8 @@ def _watch(root: Path, *args: str) -> int:
 def test_watch_once_reports_unsubmitted_sessions(
     rendered: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    run_bash = mocker.patch("cli.watch.run_bash")
-    states = mocker.patch("cli.watch.queue_states", return_value={})
+    run_bash = mocker.patch("cli.sessions.run_bash")
+    states = mocker.patch("cli.sessions.queue_states", return_value={})
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert _watch(rendered, "--once") == 0
     run_bash.assert_not_called()
@@ -122,9 +123,11 @@ def test_watch_evaluates_each_session_when_its_jobs_are_gone(
     _ledger(rendered, "gcafs-anthro", ["20"])
     # Tick 1: gcafs-anthro's job is still running, the maccity jobs are
     # gone; tick 2: everything gone.
-    states = mocker.patch("cli.watch.queue_states", side_effect=[{"20": "RUNNING"}, {}])
-    run_bash = mocker.patch("cli.watch.run_bash", side_effect=_evaluating())
-    sleep = mocker.patch("cli.watch.time.sleep")
+    states = mocker.patch(
+        "cli.sessions.queue_states", side_effect=[{"20": "RUNNING"}, {}]
+    )
+    run_bash = mocker.patch("cli.sessions.run_bash", side_effect=_evaluating())
+    sleep = mocker.patch("cli.commands.watch.time.sleep")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert _watch(rendered, "--interval", "7") == 0
     # One squeue per tick, every session's ids together.
@@ -160,9 +163,9 @@ def test_watch_exit_follows_the_sessions_statuses_and_skips_evaluated_ones(
 ) -> None:
     _ledger(rendered, "simple-maccity", ["10"])
     _ledger(rendered, "gcafs-anthro", ["20"])
-    mocker.patch("cli.watch.queue_states", return_value={})
-    run_bash = mocker.patch("cli.watch.run_bash", side_effect=_evaluating(1))
-    mocker.patch("cli.watch.time.sleep")
+    mocker.patch("cli.sessions.queue_states", return_value={})
+    run_bash = mocker.patch("cli.sessions.run_bash", side_effect=_evaluating(1))
+    mocker.patch("cli.commands.watch.time.sleep")
     assert _watch(rendered) == 1  # a failed test somewhere
     assert run_bash.call_count == 2
     # Already evaluated: nothing to do, the statuses are reported.
@@ -176,7 +179,7 @@ def test_watch_reports_a_resume_that_died_and_moves_on(
 ) -> None:
     _ledger(rendered, "simple-maccity", ["10"])
     _ledger(rendered, "gcafs-anthro", ["20"])
-    mocker.patch("cli.watch.queue_states", return_value={})
+    mocker.patch("cli.sessions.queue_states", return_value={})
     # The maccity resume dies (ledger untouched); gcafs-anthro evaluates.
     evaluating = _evaluating()
 
@@ -185,8 +188,8 @@ def test_watch_reports_a_resume_that_died_and_moves_on(
             return 3
         return evaluating(path, logs_dir)
 
-    run_bash = mocker.patch("cli.watch.run_bash", side_effect=flaky)
-    mocker.patch("cli.watch.time.sleep")
+    run_bash = mocker.patch("cli.sessions.run_bash", side_effect=flaky)
+    mocker.patch("cli.commands.watch.time.sleep")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert _watch(rendered) == 1
     assert run_bash.call_count == 2  # one attempt per session per watch
@@ -200,9 +203,9 @@ def test_watch_narrows_to_sessions_and_applications(
     rendered: Path, mocker: MockerFixture
 ) -> None:
     _ledger(rendered, "gcafs-anthro", ["20"])
-    mocker.patch("cli.watch.queue_states", return_value={})
-    run_bash = mocker.patch("cli.watch.run_bash", side_effect=_evaluating())
-    mocker.patch("cli.watch.time.sleep")
+    mocker.patch("cli.sessions.queue_states", return_value={})
+    run_bash = mocker.patch("cli.sessions.run_bash", side_effect=_evaluating())
+    mocker.patch("cli.commands.watch.time.sleep")
     assert _watch(rendered, "--session", "gcafs-anthro", "--application", "cece") == 0
     ran = [call.args[0].name for call in run_bash.call_args_list]
     assert ran == ["06-resume-cece-gcafs-anthro.sh"]
@@ -213,8 +216,8 @@ def test_watch_waits_for_an_unsubmitted_session(
 ) -> None:
     # The harness stage may be about to submit it: wait, like a queued job.
     _ledger(rendered, "gcafs-anthro", ["20"])
-    mocker.patch("cli.watch.queue_states", return_value={})
-    run_bash = mocker.patch("cli.watch.run_bash", side_effect=_evaluating())
+    mocker.patch("cli.sessions.queue_states", return_value={})
+    run_bash = mocker.patch("cli.sessions.run_bash", side_effect=_evaluating())
     ticks = 0
 
     def submit_later(_seconds: float) -> None:
@@ -223,7 +226,7 @@ def test_watch_waits_for_an_unsubmitted_session(
         if ticks == 2:
             _ledger(rendered, "simple-maccity", ["10"])
 
-    mocker.patch("cli.watch.time.sleep", side_effect=submit_later)
+    mocker.patch("cli.commands.watch.time.sleep", side_effect=submit_later)
     assert _watch(rendered) == 0
     assert ticks == 2
     ran = [call.args[0].name for call in run_bash.call_args_list]
@@ -236,8 +239,8 @@ def test_watch_clean_errors(
     mocker: MockerFixture,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    mocker.patch("cli.watch.queue_states", return_value={})
-    mocker.patch("cli.watch.time.sleep")
+    mocker.patch("cli.sessions.queue_states", return_value={})
+    mocker.patch("cli.commands.watch.time.sleep")
     # No effective config: `run` writes it.
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert _watch(tmp_path / "elsewhere") == 1
@@ -258,17 +261,62 @@ def test_watch_clean_errors(
     assert "run --dry-run" in caplog.records[-1].getMessage()
     # A config without submit_only has nothing to watch.
     local = run_config_file(tmp_path, "local.yaml", root_dir=tmp_path / "local-root")
-    mocker.patch("cli.main.run_bash")
+    mocker.patch("cli.commands.run.run_bash")
     assert main(["run", f"--config-file={local}", "--dry-run"]) == 0
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert _watch(tmp_path / "local-root") == 1
     assert "submit_only" in caplog.records[-1].getMessage()
 
 
+def test_tick_counts_every_pending_state_as_queued(tmp_path: Path) -> None:
+    # squeue's not-started states — and the poll's own UNKNOWN — are queued;
+    # anything else still in the queue is running; an id gone is done.
+    pending = [
+        PendingState.PENDING,
+        PendingState.CONFIGURING,
+        PendingState.REQUEUED,
+        PendingState.REQUEUE_HOLD,
+        PendingState.SUSPENDED,
+        PendingState.UNKNOWN,
+    ]
+    assert set(pending) == set(PendingState)
+    root = tmp_path / "root"
+    root.mkdir()
+    ids = [str(i) for i in range(len(pending) + 3)]
+    ledger = JobLedger(
+        run_id="R",
+        application="cece",
+        submitted_by="t@h",
+        jobs=[_job(f"c{i}", f"ID{i}", job_id, root) for i, job_id in enumerate(ids)],
+    )
+    watched = WatchedSession(
+        application="cece", session="s", root=root, script=root / "resume.sh"
+    )
+    states = dict(zip(ids, [*pending, "RUNNING", "COMPLETING"], strict=False))
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("cli.sessions.queue_states", lambda _ids: states)
+        report = tick([watched], {root: ledger})[root]
+    assert report.state is SessionState.WAITING
+    assert (report.queued, report.running, report.done) == (6, 2, 1)
+
+
+def test_watch_refuses_a_non_positive_interval(
+    rendered: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    states = mocker.patch("cli.sessions.queue_states", return_value={})
+    sleep = mocker.patch("cli.commands.watch.time.sleep")
+    for interval in ("0", "-5"):
+        with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+            assert _watch(rendered, "--interval", interval) == 1
+        assert "--interval must be a positive" in caplog.records[-1].getMessage()
+    states.assert_not_called()
+    sleep.assert_not_called()
+
+
 def test_watch_interrupt_ends_the_tick(rendered: Path, mocker: MockerFixture) -> None:
     _ledger(rendered, "gcafs-anthro", ["20"])
-    mocker.patch("cli.watch.queue_states", return_value={"20": "PENDING"})
-    mocker.patch("cli.watch.time.sleep", side_effect=KeyboardInterrupt)
+    mocker.patch("cli.sessions.queue_states", return_value={"20": "PENDING"})
+    mocker.patch("cli.commands.watch.time.sleep", side_effect=KeyboardInterrupt)
     assert _watch(rendered) == 130
 
 
@@ -277,14 +325,14 @@ def test_watch_ends_with_the_report_of_the_evaluated_roots(
 ) -> None:
     # A resume that leaves a clean root behind: the report says so.
     _ledger(rendered, "gcafs-anthro", ["20"])
-    mocker.patch("cli.watch.queue_states", return_value={})
+    mocker.patch("cli.sessions.queue_states", return_value={})
 
     def resume(_path: Path, _logs_dir: Path) -> int:
         clean_root(_session_root(rendered, "gcafs-anthro"))
         return 0
 
-    mocker.patch("cli.watch.run_bash", side_effect=resume)
-    mocker.patch("cli.watch.time.sleep")
+    mocker.patch("cli.sessions.run_bash", side_effect=resume)
+    mocker.patch("cli.commands.watch.time.sleep")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert _watch(rendered, "--session", "gcafs-anthro") == 0
     messages = [r.getMessage() for r in caplog.records]
@@ -414,7 +462,7 @@ def test_report_clean_errors(
     # A config without submit_only is reportable (unlike watchable): its
     # nameless session renders as the application.
     local = run_config_file(tmp_path, "local.yaml", root_dir=tmp_path / "local-root")
-    mocker.patch("cli.main.run_bash")
+    mocker.patch("cli.commands.run.run_bash")
     assert main(["run", f"--config-file={local}", "--dry-run"]) == 0
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert _report(tmp_path / "local-root") == 1
@@ -430,7 +478,7 @@ def test_cancel_scancels_the_live_jobs(
 ) -> None:
     root = _session_root(rendered, "gcafs-anthro")
     _ledger(rendered, "gcafs-anthro", ["20", "21"])
-    cancel = mocker.patch("cli.watch.cancel_jobs", return_value=["21"])
+    cancel = mocker.patch("cli.commands.cancel.cancel_jobs", return_value=["21"])
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert main(["cancel", f"--output-root={root}"]) == 0
     assert cancel.call_args.kwargs == {"dry_run": False}
@@ -451,7 +499,7 @@ def test_cancel_without_a_ledger_or_live_jobs_is_a_no_op(
         assert main(["cancel", f"--output-root={root}"]) == 0
     assert "nothing submitted" in caplog.records[-1].getMessage()
     _ledger(rendered, "simple-maccity", ["10"])
-    mocker.patch("cli.watch.cancel_jobs", return_value=[])
+    mocker.patch("cli.commands.cancel.cancel_jobs", return_value=[])
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert main(["cancel", f"--output-root={root}"]) == 0
     assert "no job in the queue" in caplog.records[-1].getMessage()

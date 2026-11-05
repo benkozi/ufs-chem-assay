@@ -1135,15 +1135,25 @@ All code under `src/`; the project is `uv`-managed with its own
       strict_yaml.py      # the YAML-1.2-boolean loader (configs, override values)
       conventions.py      # CONVENTIONS: the harness-wide names (files, .staging, prefixes,
                           #   default stores, clock format) — frozen, described, never overridden
-    cli/                  # `ufs-chem-assay run`: run config model (applications map,
-                          #   sessions overlays), overrides, per-application / per-session
-                          #   stage scripts, bash execution (main.Command, the StrEnum of
-                          #   subcommands, keys the handlers);
-                          #   `ufs-chem-assay fetch`: stage the selected suites' inputs;
-                          #   `ufs-chem-assay publish-baselines`: a finished run -> the store;
-                          #   watch.py: `watch` (the monitor loop) and `cancel`;
-                          #   run_report.py: `report` — the per-root classifier
-                          #   (SessionSummary, Issue, RunReport) and its renderer
+    cli/                  # the `ufs-chem-assay` command (2026-11-05 layout)
+      main.py             # Command (the StrEnum of subcommands), COMMANDS (Command ->
+                          #   module), the parser assembled from the modules, main()
+      commands/           # one module per subcommand, each `register(subparsers, name)`
+                          #   + `handler(args)`: run, fetch, publish_baselines,
+                          #   record_benchmarks, upload_output, download_output
+                          #   (output_store.py shared by the last two), watch, cancel, report
+      run_config/         # the run config as a package: sections.py (data:, baselines:,
+                          #   outputs:, harness:, slurm:, uv:), sessions.py (the overlay,
+                          #   the resolved session, the overlay rule), config.py (RunConfig:
+                          #   from_yaml, overrides, derived values); the names re-exported
+      override.py         # KEY:PATH=VALUE overrides applied before validation
+      stages.py           # per-application / per-session stage scripts (ShellScript)
+      shell.py            # write_script, run_bash (tee to <root>/logs/)
+      selectors.py        # the requested stages / sessions / applications of a config
+      sessions.py         # the watch machinery: the effective config, each session's root
+                          #   and resume script, the squeue tick, one session's evaluation
+      run_report.py       # the per-root classifier (SessionSummary, Issue, RunReport)
+                          #   and its renderer; `report` and `watch` both end with it
     identity.py           # HARNESS_NAME, HARNESS_ROOT, harness_version/commit
     platforms.py          # Platform / Runtime enums, hostname detection
     templates/driver-job.sbatch.j2  # the slurm runtime's per-driver job script
@@ -1197,9 +1207,9 @@ registry imports the adapters. Two rules follow, each guarded by a
 subprocess test in `test_import_graph.py`. `base.py` imports nothing from
 `cli`: the `Stage` enum and the `RunConfigView` protocol (the `runtime` and
 `checkout_dir` an adapter may read of the run config) are declared in
-`base.py`, and `cli/stages.py`, `cli/main.py` and the adapters import them
-from there; `base.py`'s only typing-time imports are `combos` and
-`models/suite_config`, under `if TYPE_CHECKING:`. And `cli/run_config.py` —
+`base.py`, and `cli/stages.py`, `cli/commands/run.py` and the adapters import
+them from there; `base.py`'s only typing-time imports are `combos` and
+`models/suite_config`, under `if TYPE_CHECKING:`. And `cli/run_config/` —
 which every adapter imports through `cli/stages.py` — never imports the
 registry: `RunConfig.from_yaml` takes the registry's `get_application` as
 `resolve_application` (passed as pydantic validation context to the

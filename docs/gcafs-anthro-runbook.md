@@ -5,8 +5,11 @@ is CECE's global anthropogenic emissions case: a 0.25° global grid, 25
 hourly steps from 2021-12-20T11Z, 10 species stacked from 32 streams over
 seven input files (CEDS monthly inventories, EDGAR hour-of-day and
 CAMS-TEMPO daily/weekly/hourly weights), SO2/OC/BC written every step.
-It runs on Ursa only: the inputs are not in any bucket, and one run takes
-hours. This runbook assumes the [Ursa runbook](ursa-runbook.md) steps 1–4
+It runs on Ursa only: the inputs are not in any bucket. One run takes
+about a minute on one task (the recorded rows in
+`src/tests/config/cece/gcafs-anthro/benchmarks.csv`: ~40 s of wall time
+and up to 8 GB of memory), far below the earlier up-to-3 h estimate. This
+runbook assumes the [Ursa runbook](ursa-runbook.md) steps 1–4
 are done (`uv`, the harness, the CECE source, the driver build) and uses
 the same `$ROOT`.
 
@@ -24,11 +27,11 @@ Two things differ from the maccity runs:
   `--session gcafs-anthro` runs it alone, as shipped; the two later runs
   flip one key each. Like every Ursa session it submits its job and
   returns; `ufs-chem-assay watch` evaluates it when the job ends.
-- **The first job is meant to time out.** The suite's `timeout_s` is 30
-  minutes, deliberately short of the author's up-to-3 h runs, so the
-  first attempt shows what the time limit does before a long window is
-  requested; raising it is one line in the suite (and the QOS follows,
-  see step 2).
+- **The time limit is generous.** The suite's `timeout_s` is 30 minutes
+  against a measured ~40 s run (`benchmarks.csv`), so the job finishes
+  well inside its window; step 4 says what a timeout looks like should a
+  change to the configuration make a run longer (raising the limit is one
+  line in the suite, and the QOS follows, see step 2).
 
 ## 1. Link the inputs in place and record their digests
 
@@ -127,13 +130,15 @@ finishes the run (kill and restart `watch` at will; `tmux` is optional);
 `report` is the one-screen summary of what it left — the session line,
 one block per issue with the job's state, the `.out` tail and the paths
 to open — and exits 1 while anything is wrong or unfinished.
-With the 30-minute `timeout_s`, expect the first job to be killed by
-Slurm at `--time=30`: `test_driver_execution` fails with the job's
+The job runs about 40 s of wall time (`benchmarks.csv`: `wall_s`,
+`elapsed_s`, with queue waits from seconds to minutes), well inside the
+30-minute `timeout_s`. Should a run ever outlive its limit, Slurm kills
+it at `--time=30`: `test_driver_execution` fails with the job's
 `TIMEOUT` state (the report shows it as `[driver-timeout] … job <id>
 TIMEOUT`), the `.out` ends without `toc`, and `sacct -j <id> -o
-Elapsed,State` agrees. That is the measurement; then raise `timeout_s`
-in the suite (and the QOS, step 2) and run again. `squeue -u $USER`
-shows `ufs-chem-assay-<combo_id>` meanwhile. Results land in
+Elapsed,State` agrees; raise `timeout_s` in the suite (and the QOS,
+step 2) and run again. `squeue -u $USER` shows
+`ufs-chem-assay-<combo_id>` meanwhile. Results land in
 `$ROOT/CECE/ufs-chem-assay-output/gcafs-anthro/<combo_id>/`: the generated
 configuration, the job script, the `.out` (ending with `toc` and the
 `report-mem` table), `cece.log`, 25 NetCDF files, stats, plots and GIFs.

@@ -36,7 +36,9 @@ fi
 echo "$n;cluster"
 """
 # squeue: the ids listed in `queued` (one per line) are PENDING; the rest
-# are gone (squeue exits 1 when every id is unknown to it).
+# are gone (squeue exits 1, with its "Invalid job id" message on stderr,
+# when every id is unknown to it; a nonzero exit without that message means
+# the controller could not answer and the harness keeps waiting).
 _SQUEUE = """#!/bin/bash
 here=$(dirname "$0")
 echo "$@" >> "$here/squeue.log"
@@ -50,7 +52,7 @@ for id in ${ids//,/ }; do
     echo "$id PENDING"; shown=1
   fi
 done
-[ $shown = 1 ] || exit 1
+[ $shown = 1 ] || { echo "slurm_load_jobs error: Invalid job id specified" >&2; exit 1; }
 """
 # sacct: one COMPLETED row (the job) and one step row with a MaxRSS; the
 # state and exit code can be overridden through `state` and `exit`.

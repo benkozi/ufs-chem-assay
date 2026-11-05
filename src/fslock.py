@@ -34,9 +34,12 @@ logger = get_logger("fslock")
 def locked(path: Path) -> Iterator[None]:
     """Hold an exclusive advisory lock on `path` (created empty when absent)
     for the block; released on exit, exception included."""
-    # Append mode: created when absent (the process umask decides the
-    # permissions, as for every other file the harness writes), never
-    # truncated, and nothing is written through this handle.
+    # Append mode: created when absent — parents included, so a first
+    # rewrite into a fresh configuration directory needs no preparation
+    # (the process umask decides the permissions, as for every other file
+    # the harness writes) — never truncated, and nothing is written through
+    # this handle.
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as handle:
         try:
             logger.debug("acquiring lock on %s", path)

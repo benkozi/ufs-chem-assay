@@ -6,6 +6,7 @@ no Slurm command is called — the module has none to mock."""
 
 from __future__ import annotations
 
+from enum import StrEnum
 from pathlib import Path
 
 import pytest
@@ -19,12 +20,14 @@ from cli.run_report import (
     summarize_session,
     tail_lines,
 )
+from combos import Combo
 from models.conventions import CONVENTIONS
 from outputs import OutputUploadRecord
 from platforms import Platform, Runtime
 from report import write_test_report_csv
 from tests.ufs_chem_assay.report_roots import (
     COMBOS,
+    DIM,
     RUN_ID,
     T0,
     TESTS,
@@ -452,6 +455,54 @@ def test_test_failed_without_a_log_names_the_tests(tmp_path: Path) -> None:
     assert _kinds(summary) == ["test-failed"]
     assert summary.issues[0].detail == "test_nc_file_count"
     assert summary.comparisons == {"passed": 1}  # the comparison itself passed
+
+
+def test_an_empty_or_garbled_combos_csv_counts_nothing(tmp_path: Path) -> None:
+    # A session interrupted while writing the file: no traceback, nothing
+    # enumerated; the ledger still says what was submitted.
+    root = tmp_path / "root"
+    write_run(root, manifest())
+    write_session_ledger(root, COMBOS[:1], evaluated=False)
+    for text in ("", 'a,b\n1,2,3,4\n"unterminated\n', "run_id,suite\nx,y\n"):
+        (root / CONVENTIONS.combos_csv).write_text(text)
+        summary = summarize_session(root, application="cece", session="s1")
+        assert summary.combinations == 0
+        assert summary.jobs == 1
+        assert _kinds(summary) == ["not-evaluated"]
+
+
+def test_a_prefixed_combination_name_never_borrows_another_s_lines(
+    tmp_path: Path,
+) -> None:
+    class Algo(StrEnum):
+        CONSD = "consd"
+        CONSD_X = "consd-x"
+
+    short = Combo(values=((DIM, Algo.CONSD),), combo_id="01JCOMBOSHORT0000000000001")
+    long = Combo(values=((DIM, Algo.CONSD_X),), combo_id="01JCOMBOLONG00000000000002")
+    root = tmp_path / "root"
+    write_run(root, manifest(), [short, long])
+    write_session_ledger(root, [short, long], exit_status=1)
+    rows = report_rows(short, failed=("test_nc_file_count",)) + report_rows(
+        long, failed=("test_nc_file_count", "test_species_attributes")
+    )
+    write_outcomes(root, rows, [benchmark(short, "100"), benchmark(long, "101")])
+    logs = tmp_path / "logs"
+    write_log(
+        logs,
+        "06-resume-cece-s1-20261105-073000.log",
+        f"FAILED t.py::test_nc_file_count[{long.name}] - AssertionError: long\n"
+        f"FAILED t.py::test_species_attributes[{long.name}-co] - AssertionError: co\n",
+    )
+    summary = summarize_session(root, application="cece", session="s1", logs_dir=logs)
+    first, second = summary.issues
+    assert first.combo == short.name
+    assert first.detail == "test_nc_file_count"  # not the long combination's line
+    assert second.combo == long.name
+    assert second.detail == (
+        "test_nc_file_count: AssertionError: long; "
+        "test_species_attributes: AssertionError: co"
+    )
 
 
 def test_a_root_without_combos_csv_counts_nothing(tmp_path: Path) -> None:

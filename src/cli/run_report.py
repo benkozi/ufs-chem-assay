@@ -26,8 +26,8 @@ import os
 import re
 from collections import Counter
 from datetime import datetime
+from enum import StrEnum, unique
 from pathlib import Path
-from typing import Literal
 
 import pandas as pd
 import yaml
@@ -44,21 +44,32 @@ from platforms import Runtime
 from plotting import BIAS_PLOTS_DIRNAME
 from report import TestReportRow, TestResult
 
-IssueKind = Literal[
-    "not-submitted",
-    "submission-incomplete",
-    "not-evaluated",
-    "driver-failed",
-    "driver-timeout",
-    "accounting-missing",
-    "test-failed",
-    "comparison-failed",
-    "pipeline-error",
-]
 
-SessionState = Literal[
-    "not submitted", "submission incomplete", "not evaluated", "evaluated"
-]
+@unique
+class IssueKind(StrEnum):
+    """The closed taxonomy: a combination's worst problem (driver before
+    tests before comparison), or a session-level one."""
+
+    NOT_SUBMITTED = "not-submitted"
+    SUBMISSION_INCOMPLETE = "submission-incomplete"
+    NOT_EVALUATED = "not-evaluated"
+    DRIVER_FAILED = "driver-failed"
+    DRIVER_TIMEOUT = "driver-timeout"
+    ACCOUNTING_MISSING = "accounting-missing"
+    TEST_FAILED = "test-failed"
+    COMPARISON_FAILED = "comparison-failed"
+    PIPELINE_ERROR = "pipeline-error"
+
+
+@unique
+class SessionState(StrEnum):
+    """Where a session root stands, from its files."""
+
+    NOT_SUBMITTED = "not submitted"  # no run.yaml, or a slurm root without jobs.yaml
+    SUBMISSION_INCOMPLETE = "submission incomplete"  # jobs.yaml lacks combinations
+    NOT_EVALUATED = "not evaluated"  # no verdicts yet
+    EVALUATED = "evaluated"  # the test report is on disk
+
 
 DEFAULT_TAIL = 15
 NO_OUT = "(no .out: the job never wrote and no session judged it)"
@@ -77,7 +88,9 @@ _PIPELINE_PREFIXES = (
 )
 _ERRORISH = re.compile(r"\bERROR\b|\bError\b|\berror:|Traceback")
 _COMPARISON_ORDER = ("passed", "failed", "unpublished", "off")
-_DRIVER_KINDS = frozenset({"driver-failed", "driver-timeout", "accounting-missing"})
+_DRIVER_KINDS = frozenset(
+    {IssueKind.DRIVER_FAILED, IssueKind.DRIVER_TIMEOUT, IssueKind.ACCOUNTING_MISSING}
+)
 _TEST_RESULTS: tuple[TestResult, ...] = ("passed", "failed", "skipped")
 
 
@@ -138,13 +151,7 @@ class SessionSummary(StrictModel):
     session: str | None = Field(description="The sessions: key; None when nameless")
     root: Path = Field(description="The session's output root (host path)")
     run_id: str | None = Field(description="run.yaml's run_id; None without run.yaml")
-    state: SessionState = Field(
-        description=(
-            "not submitted: no run.yaml, or a slurm root without jobs.yaml; "
-            "submission incomplete: jobs.yaml lacks combinations; not evaluated: "
-            "no verdicts yet; evaluated: the test report is on disk"
-        )
-    )
+    state: SessionState = Field(description="Where the root stands, from its files")
     exit_status: int | None = Field(
         description="The evaluating session's exit status from the ledger; None when unknown"
     )
@@ -191,7 +198,7 @@ class SessionSummary(StrictModel):
         """Evaluated, nothing wrong, and the session did not exit nonzero (an
         unknown exit — a root without a ledger — is judged by the files)."""
         return (
-            self.state == "evaluated"
+            self.state is SessionState.EVALUATED
             and not self.issues
             and self.exit_status in (0, None)
         )
@@ -240,7 +247,12 @@ def _combinations(root: Path) -> list[tuple[str, str, str]]:
     path = root / CONVENTIONS.combos_csv
     if not path.is_file():
         return []
-    frame = pd.read_csv(path, dtype=str).drop_duplicates("combo_id")
+    try:
+        frame = pd.read_csv(path, dtype=str).drop_duplicates("combo_id")
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, KeyError):
+        # A 0-byte or garbled file (a session interrupted while writing
+        # it): nothing enumerated, as far as the report can tell.
+        return []
     return [
         (str(row["combo_id"]), str(row["suite"]), str(row["name"]))
         for row in frame.to_dict("records")
@@ -313,11 +325,16 @@ def _test_name(row: TestReportRow) -> str:
     return row.pytest_name.split("[", 1)[0]
 
 
-def _messages(log: _LogLines, test: str, suite: str, combo: str) -> list[str]:
+def _messages(
+    log: _LogLines, test: str, suite: str, combo: str, known: frozenset[str]
+) -> list[str]:
     """The FAILED messages of one test of one combination: the parameter id
     is the combination's name (suite-qualified in multi-suite sessions),
-    optionally followed by `-<species>`. Lines naming a combination the
-    files do not know are never joined."""
+    optionally followed by `-<species>`. The species form must be exactly
+    this combination plus one dash-joined token, and never another
+    combination's own id (`known`: every combination's id forms), so a
+    name that is a prefix of another's cannot borrow its lines; lines
+    naming a combination the files do not know are never joined."""
     parts = (combo, f"{suite}/{combo}")
     exact = [m for t, i, m in log.failed if t == test and i in parts]
     if exact:
@@ -325,7 +342,7 @@ def _messages(log: _LogLines, test: str, suite: str, combo: str) -> list[str]:
     return [
         m
         for t, i, m in log.failed
-        if t == test and any(i.startswith(f"{part}-") for part in parts)
+        if t == test and i not in known and i.rsplit("-", 1)[0] in parts
     ]
 
 
@@ -356,6 +373,7 @@ def _combination_issue(
     log: _LogLines,
     log_path: Path | None,
     tail: int,
+    known: frozenset[str],
 ) -> Issue | None:
     """The combination's worst issue — driver before tests before
     comparison — or None when it is clean."""
@@ -375,15 +393,15 @@ def _combination_issue(
             and bench.slurm_job_id is not None
             and bench.slurm_state is None
         )
-        messages = _messages(log, BASELINE_CONVENTIONS.driver_test, suite, combo)
+        messages = _messages(log, BASELINE_CONVENTIONS.driver_test, suite, combo, known)
         if any("sacct -j" in m for m in messages):
             missing = True
         kind = (
-            "driver-timeout"
+            IssueKind.DRIVER_TIMEOUT
             if result == "timeout"
-            else "accounting-missing"
+            else IssueKind.ACCOUNTING_MISSING
             if missing
-            else "driver-failed"
+            else IssueKind.DRIVER_FAILED
         )
         detail = (
             f"{BASELINE_CONVENTIONS.driver_test}: {'; '.join(messages)}"
@@ -392,11 +410,11 @@ def _combination_issue(
         )
         decorated = bool(messages)
     elif others:
-        kind = "test-failed"
+        kind = IssueKind.TEST_FAILED
         pieces: list[str] = []
         decorated = False
         for test in others:
-            messages = _messages(log, test, suite, combo)
+            messages = _messages(log, test, suite, combo, known)
             decorated = decorated or bool(messages)
             if messages:
                 pieces.extend(f"{test}: {m}" for m in messages)
@@ -406,8 +424,10 @@ def _combination_issue(
     elif BASELINE_CONVENTIONS.comparison_test in failed or (
         bench is not None and bench.comparison_result == "failed"
     ):
-        kind = "comparison-failed"
-        messages = _messages(log, BASELINE_CONVENTIONS.comparison_test, suite, combo)
+        kind = IssueKind.COMPARISON_FAILED
+        messages = _messages(
+            log, BASELINE_CONVENTIONS.comparison_test, suite, combo, known
+        )
         decorated = bool(messages)
         if messages:
             detail = f"{BASELINE_CONVENTIONS.comparison_test}: {'; '.join(messages)}"
@@ -426,7 +446,7 @@ def _combination_issue(
     if decorated and log_path is not None:
         existing.append(log_path)
     out_tail: list[str] = []
-    if kind != "comparison-failed":
+    if kind is not IssueKind.COMPARISON_FAILED:
         read = tail_lines(directory / f"{combo_id}.out", tail)
         out_tail = [NO_OUT] if read is None else read
     return Issue(
@@ -463,7 +483,7 @@ def _summary(
     empty filled in."""
     defaults: dict[str, object] = {
         "run_id": None,
-        "state": "not submitted",
+        "state": SessionState.NOT_SUBMITTED,
         "exit_status": None,
         "evaluated_at": None,
         "submitted_by": None,
@@ -501,7 +521,7 @@ def summarize_session(
     if not (root / CONVENTIONS.run_manifest).is_file():
         issues.append(
             Issue(
-                kind="not-submitted",
+                kind=IssueKind.NOT_SUBMITTED,
                 detail=f"no {CONVENTIONS.run_manifest} at {root}; the harness stage has not run",
             )
         )
@@ -516,17 +536,17 @@ def summarize_session(
     }
 
     ledger: JobLedger | None = None
-    state: SessionState = "evaluated"
+    state: SessionState = SessionState.EVALUATED
     if ledger_path(root).is_file():
         try:
             ledger = read_ledger(root)
         except ValueError as exc:
-            issues.append(Issue(kind="not-evaluated", detail=str(exc)))
+            issues.append(Issue(kind=IssueKind.NOT_EVALUATED, detail=str(exc)))
             return _summary(
                 root,
                 application,
                 session,
-                state="not evaluated",
+                state=SessionState.NOT_EVALUATED,
                 issues=issues,
                 **common,
             )
@@ -543,10 +563,10 @@ def summarize_session(
             if combo_id not in recorded
         ]
         if missing:
-            state = "submission incomplete"
+            state = SessionState.SUBMISSION_INCOMPLETE
             issues.append(
                 Issue(
-                    kind="submission-incomplete",
+                    kind=IssueKind.SUBMISSION_INCOMPLETE,
                     detail=(
                         f"{len(missing)} combination(s) have no recorded job: "
                         f"{', '.join(missing)}"
@@ -559,7 +579,7 @@ def summarize_session(
                 detail = f"resume log {log_path.name}: {log.last_error}"
             issues.append(
                 Issue(
-                    kind="not-evaluated",
+                    kind=IssueKind.NOT_EVALUATED,
                     detail=detail,
                     paths=[log_path] if log_path is not None else [],
                 )
@@ -568,14 +588,16 @@ def summarize_session(
                 root,
                 application,
                 session,
-                state="not evaluated" if state == "evaluated" else state,
+                state=SessionState.NOT_EVALUATED
+                if state is SessionState.EVALUATED
+                else state,
                 issues=issues,
                 **common,
             )
     elif run.runtime is Runtime.SLURM:
         issues.append(
             Issue(
-                kind="not-submitted",
+                kind=IssueKind.NOT_SUBMITTED,
                 detail=(
                     f"{CONVENTIONS.run_manifest} without {CONVENTIONS.job_ledger}: "
                     "a dry run, or a submit that never reached sbatch"
@@ -586,7 +608,7 @@ def summarize_session(
     elif not (root / CONVENTIONS.test_report).is_file():
         issues.append(
             Issue(
-                kind="not-evaluated",
+                kind=IssueKind.NOT_EVALUATED,
                 detail=(
                     f"no {CONVENTIONS.test_report} and no {CONVENTIONS.job_ledger}: "
                     "the session died before writing its verdicts"
@@ -594,7 +616,12 @@ def summarize_session(
             )
         )
         return _summary(
-            root, application, session, state="not evaluated", issues=issues, **common
+            root,
+            application,
+            session,
+            state=SessionState.NOT_EVALUATED,
+            issues=issues,
+            **common,
         )
 
     # Evaluated: the verdicts.
@@ -610,9 +637,16 @@ def summarize_session(
     tests = {result: counts.get(result, 0) for result in _TEST_RESULTS}
     issues.extend(
         Issue(
-            kind="pipeline-error", detail=message, paths=[log_path] if log_path else []
+            kind=IssueKind.PIPELINE_ERROR,
+            detail=message,
+            paths=[log_path] if log_path else [],
         )
         for message in log.pipeline
+    )
+    known = frozenset(
+        form
+        for _combo_id, suite, name in combinations
+        for form in (name, f"{suite}/{name}")
     )
     clean = not_run = 0
     comparisons: Counter[str] = Counter()
@@ -633,6 +667,7 @@ def summarize_session(
             log,
             log_path,
             tail,
+            known,
         )
         if issue is None:
             clean += 1
@@ -662,14 +697,14 @@ def _session_line(summary: SessionSummary, label: str) -> str:
     parts = [label]
     if summary.run_id is not None:
         parts.append(f"run {summary.run_id}")
-    if summary.state == "evaluated" or summary.tests:
+    if summary.state is SessionState.EVALUATED or summary.tests:
         exit_text = (
             "unknown" if summary.exit_status is None else str(summary.exit_status)
         )
         parts.append(
             f"evaluated (exit {exit_text})"
-            if summary.state == "evaluated"
-            else summary.state
+            if summary.state is SessionState.EVALUATED
+            else summary.state.value
         )
         tests = summary.tests
         parts.append(
@@ -694,7 +729,7 @@ def _session_line(summary: SessionSummary, label: str) -> str:
             f"uploaded {summary.uploaded_to}" if summary.uploaded_to else "not uploaded"
         )
     else:
-        parts.append(summary.state)
+        parts.append(summary.state.value)
     return "  ".join(parts)
 
 

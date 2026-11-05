@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import getpass
 import os
+import re
 import socket
 import subprocess
 import time
@@ -37,6 +38,11 @@ _SQUEUE_TIMEOUT_S = 60
 # The states squeue reports while a job still occupies the queue; anything a
 # poll cannot classify is treated as queued so the next poll decides.
 QUEUED_UNKNOWN = "UNKNOWN"
+
+# What squeue says on stderr when every asked-for id has left the queue
+# (`slurm_load_jobs error: Invalid job id specified`). Any other nonzero exit
+# — the controller unreachable, an RPC timeout — says nothing about the jobs.
+_IDS_GONE = re.compile(r"Invalid job id")
 
 
 class SubmittedJob(StrictModel):
@@ -195,13 +201,15 @@ def queue_states(job_ids: Iterable[str]) -> dict[str, str]:
     """The queue state (`%T`: PENDING, RUNNING, COMPLETING, ...) of every
     given job still in the queue, from one `squeue` call; ids absent from
     the result have left the queue. squeue exits nonzero when every id is
-    unknown to it — that is "nothing queued", not an error. When squeue
-    itself cannot run (missing, timed out), every id is reported as
+    unknown to it (`Invalid job id`) — that is "nothing queued", not an
+    error. When squeue itself cannot run (missing, timed out) or fails for
+    any other reason (the controller unreachable), every id is reported as
     queued with state UNKNOWN so the caller polls again rather than
     judging a job it knows nothing about."""
     ids = list(job_ids)
     if not ids:
         return {}
+    wanted = set(ids)
     argv = ["squeue", "-h", "-j", ",".join(ids), "-o", "%i %T"]
     try:
         completed = subprocess.run(
@@ -215,14 +223,23 @@ def queue_states(job_ids: Iterable[str]) -> dict[str, str]:
     states: dict[str, str] = {}
     for line in completed.stdout.splitlines():
         parts = line.split()
-        if len(parts) >= 2 and parts[0] in ids:
+        if len(parts) >= 2 and parts[0] in wanted:
             states[parts[0]] = parts[1]
     if completed.returncode != 0 and not states:
+        stderr = completed.stderr.strip()
+        if not _IDS_GONE.search(stderr):
+            logger.warning(
+                "squeue failed (exit %s: %s); treating %s job(s) as queued",
+                completed.returncode,
+                stderr or "no message",
+                len(ids),
+            )
+            return dict.fromkeys(ids, QUEUED_UNKNOWN)
         logger.debug(
             "squeue exited %s for %s (every id gone): %s",
             completed.returncode,
             ids,
-            completed.stderr.strip(),
+            stderr,
         )
     return states
 

@@ -27,8 +27,8 @@ def _try_lock(path: Path) -> bool:
 
 
 def test_locked_creates_a_missing_file_and_releases_on_exit(tmp_path: Path) -> None:
-    path = tmp_path / "sub" / "benchmarks.csv"
-    path.parent.mkdir()
+    # Parents included: nothing prepares the directory first.
+    path = tmp_path / "deep" / "nested" / "benchmarks.csv"
     with locked(path):
         assert path.is_file()
         assert path.stat().st_size == 0
