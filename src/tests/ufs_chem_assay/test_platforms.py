@@ -70,9 +70,7 @@ def test_runtime_derives_from_platform_but_env_wins(
 
 
 def test_launcher_is_split_with_shlex(clean_env: pytest.MonkeyPatch) -> None:
-    clean_env.setenv(
-        "CECE_LAUNCHER", "srun --ntasks=1 --comment='a b'"
-    )  # legacy spelling
+    clean_env.setenv("ASSAY_LAUNCHER", "srun --ntasks=1 --comment='a b'")
     assert Settings().launcher_argv == ["srun", "--ntasks=1", "--comment=a b"]
     assert Settings(launcher="").launcher_argv == []
 

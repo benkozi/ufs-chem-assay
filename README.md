@@ -66,9 +66,8 @@ EOF
 ```
 
 Real environment variables override `.env` values. Harness-wide settings
-use the `ASSAY_` prefix (the older `CECE_` spellings still work as
-fallbacks); an application's own settings keep its prefix (`CECE_ROOT_DIR`,
-`CECE_MODULEFILE`, ...). There is no command-line flag for the checkout
+use the `ASSAY_` prefix; an application's own settings keep its prefix (`CECE_ROOT_DIR`,
+`CECE_MODULEFILE`, `MONETIO_ROOT_DIR`, ...). There is no command-line flag for the checkout
 root: the variable, `.env`, or the run config (below) supplies it.
 
 ## Running
@@ -912,9 +911,7 @@ file at the repo root, read when pytest runs from there; real environment
 variables override `.env`. AWS credentials are not harness settings at
 all — the AWS CLI reads its own configuration (see
 [S3 data sync](#s3-data-sync)). Two namespaces: **harness-wide** settings under
-`ASSAY_*` (the pre-adapter `CECE_*` spellings are accepted as fallbacks
-and go away when the second application adapter lands; `ASSAY_X` wins over
-`CECE_X` when both are set), and each **application's** settings under its
+`ASSAY_*`, and each **application's** settings under its
 own prefix — `CECE_*` for the CECE adapter and `MONETIO_*` for the MONETIO adapter.
 
 Harness-wide:

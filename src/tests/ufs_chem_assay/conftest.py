@@ -18,9 +18,8 @@ def hermetic_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     another hostname patches it itself — a test-level setattr overrides
     this one."""
     monkeypatch.setattr("platforms.socket.gethostname", lambda: "localhost")
-    for prefix in (CONVENTIONS.env_prefix, CONVENTIONS.legacy_env_prefix):
-        for key in ("PLATFORM", "RUNTIME", "LAUNCHER", "APPLICATION"):
-            monkeypatch.delenv(f"{prefix}{key}", raising=False)
+    for key in ("PLATFORM", "RUNTIME", "LAUNCHER", "APPLICATION"):
+        monkeypatch.delenv(f"{CONVENTIONS.env_prefix}{key}", raising=False)
 
 
 _CONFIG_ROOT = Path(__file__).resolve().parents[1] / "config"

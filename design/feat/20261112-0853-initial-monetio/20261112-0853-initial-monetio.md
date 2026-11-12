@@ -341,7 +341,7 @@ The work is divided into **5 self-contained commit chunks** that fit cleanly in 
 - [x] **Chunk 2**: Implement the `applications/monetio` adapter package and register `monetio`
 - [x] **Chunk 3**: Add the `aeronet` configuration and suite (`src/tests/config/monetio/aeronet/`) and `config/local.yaml` entry
 - [x] **Chunk 4**: Stage AERONET inputs to `s3://ufs-chem`, run live local roundtrip (fetch, execute, publish baselines, compare, benchmark, report), and update `README.md` & `design/design.md`
-- [ ] **Chunk 5**: Retire the transitional `CECE_*` fallback on harness-wide `Settings` (`ASSAY_*` only)
+- [x] **Chunk 5**: Retire the transitional `CECE_*` fallback on harness-wide `Settings` (`ASSAY_*` only)
 
 ### Chunk 1: Generalize `Application.driver_arguments`, `analysis.py` (UGRID `node`), `comparison.py` (non-numeric variables), and per-session `runtime`
 1. **Red**:

@@ -111,10 +111,8 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     # The harness's namespace logger, level from the same variable pytest
-    # honours (settings.log_level, with the legacy spelling as fallback).
-    level = os.environ.get(CONVENTIONS.env_var("log_level")) or os.environ.get(
-        CONVENTIONS.env_var("log_level", legacy=True), "INFO"
-    )
+    # honours (settings.log_level).
+    level = os.environ.get(CONVENTIONS.env_var("log_level"), "INFO")
     configure_logging(level)
     args = _parser().parse_args(argv)
     return HANDLERS[Command(args.command)](args)

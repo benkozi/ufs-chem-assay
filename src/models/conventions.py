@@ -23,10 +23,6 @@ class Conventions(StrictModel):
     env_prefix: str = Field(
         "ASSAY_", description="Prefix of every harness setting in the environment"
     )
-    legacy_env_prefix: str = Field(
-        "CECE_",
-        description="The historical prefix, accepted as a fallback for every harness setting",
-    )
     env_file: str = Field(
         ".env", description="The cwd-relative dotenv file settings are also read from"
     )
@@ -108,10 +104,9 @@ class Conventions(StrictModel):
         ),
     )
 
-    def env_var(self, name: str, *, legacy: bool = False) -> str:
+    def env_var(self, name: str) -> str:
         """The environment variable of harness setting `name` (any case)."""
-        prefix = self.legacy_env_prefix if legacy else self.env_prefix
-        return f"{prefix}{name.upper()}"
+        return f"{self.env_prefix}{name.upper()}"
 
 
 CONVENTIONS = Conventions()

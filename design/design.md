@@ -163,8 +163,7 @@ section per application, stages rendered per application, one pytest
 session each.
 
 **Two settings namespaces.** Harness-wide settings (`settings.Settings`)
-read `ASSAY_*`, with the pre-adapter `CECE_*` spellings accepted as
-fallbacks until the second adapter lands; each adapter's
+read `ASSAY_*`; each adapter's
 `ApplicationSettings` subclass (`CeceSettings`: `root_dir`, `docker_image`,
 `driver_path`, `modulefile`) reads its own prefix. Both classes ignore the
 other's keys in the shared `.env`.
@@ -715,11 +714,8 @@ Two `pydantic-settings` classes supply environment-derived configuration,
 keeping the pytest CLI for run-shaping options only (`--application` is
 the one flag that feeds a setting; see Pytest integration):
 
-- `settings.Settings` — **harness-wide**, env prefix `ASSAY_` with the
-  pre-adapter `CECE_` spellings accepted as fallbacks through layered
-  sources (init kwargs > `ASSAY_` environment > `CECE_` environment >
-  `ASSAY_` `.env` > `CECE_` `.env` > default); the fallback goes away when
-  the second adapter lands.
+- `settings.Settings` — **harness-wide**, env prefix `ASSAY_` (init kwargs >
+  `ASSAY_` environment > `ASSAY_` `.env` > default).
 - the adapter's `ApplicationSettings` subclass (`CeceSettings`, prefix
   `CECE_`) — the checkout root, image, driver path, modulefile, and the
   checkout's commit SHA for run.yaml.
@@ -1197,7 +1193,7 @@ All code under `src/`; the project is `uv`-managed with its own
                           #   the CLI's own; one harness import (the logger)
     benchmarks.py         # BenchmarkRow, tic/toc and sacct parsing, the three benchmarks.csv writers
     outputs.py            # upload-output / download-output: a run's root <-> <store>/<run_id>/
-    settings.py           # harness-wide pydantic-settings (ASSAY_*, CECE_* fallback)
+    settings.py           # harness-wide pydantic-settings (ASSAY_*)
     tests/
       config/             # <application>/<configuration>/: the configuration's files
                           #   and the *-suite.yaml files that sweep it, side by side
