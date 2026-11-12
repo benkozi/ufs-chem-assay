@@ -121,6 +121,7 @@ exclude_also = [
 # not maintained text; uv.lock is generated.
 [tool.codespell]
 skip = "./design,./uv.lock,./.venv,./.git,*.nc"
+ignore-words-list = "siz"
 
 # Dead-code detection (pre-commit, whole tree). Names bound by frameworks
 # rather than by code are ignored: pydantic's model_config, pytest's hook

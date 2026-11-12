@@ -337,6 +337,12 @@ Carried under `src/tests/config/monetio/aeronet/`:
 
 The work is divided into **5 self-contained commit chunks** that fit cleanly in a single PR on `ufs-chem-assay` (with zero commits needed in `monetio`):
 
+- [x] **Chunk 1**: Generalize `Application.driver_arguments`, `analysis.py` (UGRID `node`), `comparison.py` (non-numeric variables), and per-session `runtime`
+- [x] **Chunk 2**: Implement the `applications/monetio` adapter package and register `monetio`
+- [ ] **Chunk 3**: Add the `aeronet` configuration and suite (`src/tests/config/monetio/aeronet/`) and `config/local.yaml` entry
+- [ ] **Chunk 4**: Stage AERONET inputs to `s3://ufs-chem`, run live local roundtrip (fetch, execute, publish baselines, compare, benchmark, report), and update `README.md` & `design/design.md`
+- [ ] **Chunk 5**: Retire the transitional `CECE_*` fallback on harness-wide `Settings` (`ASSAY_*` only)
+
 ### Chunk 1: Generalize `Application.driver_arguments`, `analysis.py` (UGRID `node`), `comparison.py` (non-numeric variables), and per-session `runtime`
 1. **Red**:
    - In `src/tests/ufs_chem_assay/test_runner.py`, add tests for `Application.driver_arguments` custom flag expansion in both `Runtime.NATIVE` and `Runtime.DOCKER`.

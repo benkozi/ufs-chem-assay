@@ -364,7 +364,7 @@ def test_unknown_application_is_a_usage_error(tmp_path: Path) -> None:
     )
     assert result.returncode == 4, result.stdout + result.stderr  # USAGE_ERROR
     assert "unknown application 'catchem'" in result.stderr
-    assert "['cece']" in result.stderr
+    assert "['cece', 'monetio']" in result.stderr
 
 
 def test_run_yaml_records_a_present_inputs_size(tmp_path: Path) -> None:

@@ -15,9 +15,12 @@ import yaml
 
 from applications.base import Application
 from applications.cece.application import CeceApplication
+from applications.monetio.application import MonetioApplication
 from models.suite_config import SuiteConfig
 
-REGISTRY: dict[str, Application] = {app.name: app for app in (CeceApplication(),)}
+REGISTRY: dict[str, Application] = {
+    app.name: app for app in (CeceApplication(), MonetioApplication())
+}
 DEFAULT_APPLICATION = "cece"
 
 
