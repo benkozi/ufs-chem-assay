@@ -106,7 +106,7 @@ class RunConfig(StrictModel):
         # Every session resolves once at load, so a bad overlay fails
         # from_yaml, not the harness stage; the same check guards the base.
         for session in self.resolved_sessions():
-            runtime = session.effective_runtime(self.runtime)
+            runtime = session.harness.effective_runtime(self.runtime)
             if session.harness.submit_only and runtime is not Runtime.SLURM:
                 where = "" if session.name is None else f"sessions.{session.name}: "
                 raise ValueError(

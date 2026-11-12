@@ -11,7 +11,6 @@ from pydantic import Field
 
 from cli.run_config.sections import BaselinesSection, HarnessSection, SlurmSection
 from models.base import StrictModel
-from platforms import Runtime
 
 # Session names become directory and script names: lower-case, digits, dashes.
 SESSION_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -51,10 +50,6 @@ class ResolvedSession(StrictModel):
         description="The effective slurm: section; None when the file has none"
     )
     baselines: BaselinesSection = Field(description="The effective baselines: section")
-
-    def effective_runtime(self, default: Runtime) -> Runtime:
-        """The session's effective runtime: its harness.runtime override, else the config's."""
-        return self.harness.runtime or default
 
 
 _Section = TypeVar("_Section", bound=StrictModel)

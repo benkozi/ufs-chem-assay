@@ -6,18 +6,38 @@ from __future__ import annotations
 
 from pathlib import PurePosixPath
 
+from pydantic import Field
+
 from applications.monetio.config import MonetioConfig
+from models.base import StrictModel
 
-STANDARD_DIMENSIONS = ("time", "node")
 
-# Static coordinate/metadata variables on `(node,)` or `(time,)` rather than `(time, node)`.
-_COORDINATE_VARIABLES = frozenset(
-    {"latitude", "longitude", "lat", "lon", "time", "siteid"}
-)
+class MonetioAssertionSpec(StrictModel):
+    """Expected NetCDF dimensions, coordinate variables, and volatile attributes
+    for a `monetio` run."""
 
-# monetio's BaseReader.log_history() stamps wall-clock `datetime.now()` into
-# the global `history` attribute on every read.
-VOLATILE_GLOBAL_ATTRIBUTES = ("history",)
+    standard_dimensions: tuple[str, ...] = Field(
+        default=("time", "node"),
+        description="Expected observation variable dimensions (CF-1.8 / UGRID-1.0)",
+    )
+    coordinate_variables: frozenset[str] = Field(
+        default=frozenset({"latitude", "longitude", "lat", "lon", "time", "siteid"}),
+        description=(
+            "Static coordinate/metadata variables on `(node,)` or `(time,)` rather "
+            "than `(time, node)`"
+        ),
+    )
+    volatile_global_attributes: tuple[str, ...] = Field(
+        default=("history",),
+        description=(
+            "Global NetCDF attributes stamped with wall-clock metadata by monetio's "
+            "BaseReader.log_history()"
+        ),
+    )
+
+    def output_variable_names(self, config: MonetioConfig) -> list[str]:
+        """Expected observation output variables configured to check against `standard_dimensions`."""
+        return [v for v in config.variables if v not in self.coordinate_variables]
 
 
 def expected_output_count(_config: MonetioConfig) -> int:
@@ -31,5 +51,5 @@ def expected_output_filenames(config: MonetioConfig) -> set[str]:
 
 
 def output_variable_names(config: MonetioConfig) -> list[str]:
-    """Expected observation output variables configured to check against `STANDARD_DIMENSIONS`."""
-    return [v for v in config.variables if v not in _COORDINATE_VARIABLES]
+    """Expected observation output variables configured to check against `standard_dimensions`."""
+    return MonetioAssertionSpec().output_variable_names(config)

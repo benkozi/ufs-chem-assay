@@ -1,20 +1,21 @@
 """CECE's settings: the CECE_* namespace."""
 
 from pathlib import PurePosixPath
+from typing import ClassVar
 
 from pydantic import Field
 from pydantic_settings import SettingsConfigDict
 
 from applications.base import ApplicationSettings
 
-ENV_PREFIX = "CECE_"
-# Where the checkout is bind-mounted inside cece/cece-dev: the driver's cwd,
-# so relative driver and data paths resolve as they do natively.
-CONTAINER_WORKDIR = PurePosixPath("/work")
-
 
 class CeceSettings(ApplicationSettings):
-    model_config = SettingsConfigDict(env_prefix=ENV_PREFIX)
+    env_prefix: ClassVar[str] = "CECE_"
+    # Where the checkout is bind-mounted inside cece/cece-dev: the driver's cwd,
+    # so relative driver and data paths resolve as they do natively.
+    container_workdir: ClassVar[PurePosixPath] = PurePosixPath("/work")
+
+    model_config = SettingsConfigDict(env_prefix=env_prefix)
 
     docker_image: str = Field(
         "cece/cece-dev",

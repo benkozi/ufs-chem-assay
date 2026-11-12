@@ -32,7 +32,6 @@ the pytest session's --publish-baselines does the same at session end)."""
 from __future__ import annotations
 
 import argparse
-import os
 from collections.abc import Callable
 from enum import StrEnum, unique
 from typing import Protocol
@@ -50,7 +49,7 @@ from cli.commands import (
     watch,
 )
 from logs import configure_logging
-from models.conventions import CONVENTIONS
+from settings import Settings
 
 
 @unique
@@ -110,10 +109,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # The harness's namespace logger, level from the same variable pytest
-    # honours (settings.log_level).
-    level = os.environ.get(CONVENTIONS.env_var("log_level"), "INFO")
-    configure_logging(level)
+    configure_logging(Settings().log_level)
     args = _parser().parse_args(argv)
     return HANDLERS[Command(args.command)](args)
 

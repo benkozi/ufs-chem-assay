@@ -18,8 +18,7 @@ from applications.monetio import (
     MonetioConfig,
 )
 from applications.monetio.assertions import (
-    STANDARD_DIMENSIONS,
-    VOLATILE_GLOBAL_ATTRIBUTES,
+    MonetioAssertionSpec,
     expected_output_count,
     expected_output_filenames,
     output_variable_names,
@@ -30,11 +29,7 @@ from applications.monetio.combos import (
     dimensions,
     effective_parameters,
 )
-from applications.monetio.settings import (
-    CONTAINER_WORKDIR,
-    ENV_PREFIX,
-    MonetioSettings,
-)
+from applications.monetio.settings import MonetioSettings
 from applications.monetio.suite import (
     MonetioBaselineComparison,
     MonetioSuiteConfig,
@@ -119,8 +114,8 @@ def test_monetio_settings_defaults_and_env(
     assert settings.docker_image == "monetio/monetio-dev"
     assert settings.driver_path == ".venv/bin/monetio"
     assert settings.modulefile is None
-    assert ENV_PREFIX == "MONETIO_"
-    assert str(CONTAINER_WORKDIR) == "/work"
+    assert MonetioSettings.env_prefix == "MONETIO_"
+    assert str(MonetioSettings.container_workdir) == "/work"
 
     clean_monetio_env.setenv("MONETIO_ROOT_DIR", "/host/monetio")
     assert MonetioSettings().root_dir == Path("/host/monetio")
@@ -162,8 +157,13 @@ def test_monetio_assertions_and_fingerprint(
     app = get_application("monetio")
     config = MonetioConfig.from_yaml(aeronet_base_yaml)
 
-    assert app.standard_dimensions == STANDARD_DIMENSIONS == ("time", "node")
-    assert app.volatile_global_attributes == VOLATILE_GLOBAL_ATTRIBUTES == ("history",)
+    spec = MonetioAssertionSpec()
+    assert app.standard_dimensions == spec.standard_dimensions == ("time", "node")
+    assert (
+        app.volatile_global_attributes
+        == spec.volatile_global_attributes
+        == ("history",)
+    )
     assert app.expected_output_count(config) == expected_output_count(config) == 1
     assert (
         app.expected_output_filenames(config)
@@ -267,7 +267,7 @@ def test_monetio_sweep_validation_and_empty_sweep(aeronet_base_yaml: Path) -> No
         identity, output_directory="/out", config_path=aeronet_base_yaml
     )
     assert built.output == "/out/aeronet.nc"
-    rows = effective_parameters(identity, built)
+    rows = effective_parameters(identity, built, target="monetio")
     assert ("monetio", "case", "", False) in rows
 
     # Unknown case fails against base_config.cases

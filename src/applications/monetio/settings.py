@@ -1,18 +1,19 @@
 """monetio's settings: the MONETIO_* namespace."""
 
 from pathlib import PurePosixPath
+from typing import ClassVar
 
 from pydantic import Field
 from pydantic_settings import SettingsConfigDict
 
 from applications.base import ApplicationSettings
 
-ENV_PREFIX = "MONETIO_"
-CONTAINER_WORKDIR = PurePosixPath("/work")
-
 
 class MonetioSettings(ApplicationSettings):
-    model_config = SettingsConfigDict(env_prefix=ENV_PREFIX)
+    env_prefix: ClassVar[str] = "MONETIO_"
+    container_workdir: ClassVar[PurePosixPath] = PurePosixPath("/work")
+
+    model_config = SettingsConfigDict(env_prefix=env_prefix)
 
     docker_image: str = Field(
         "monetio/monetio-dev",

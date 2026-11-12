@@ -495,3 +495,55 @@ The work is divided into **5 self-contained commit chunks** that fit cleanly in 
   2. `config/local.yaml`: include `monetio` under `applications:` (inactive by default until a `monetio` suite or session is selected).
   3. Retire the transitional `CECE_*` env-var fallback on harness-wide `Settings` (`ASSAY_*` only) as a 5th commit chunk in this PR.
 - Identified the four harness generalizations needed for `monetio` and UGRID point datasets (`Application.driver_arguments`, `analysis.py:spatial_variables` for `node` dimensions, `comparison.py:_compare_variable` for non-numeric string variables, and per-session `runtime` in `RunConfig`), and structured the implementation plan into 5 independently committable TDD chunks within a single PR.
+
+---
+
+# appendix: PR #45 review response & refinement plan
+
+Refinement of review comments from [PR #45 review 5881253902](https://github.com/benkozi/ufs-chem-assay/pull/45#pullrequestreview-5881253902).
+
+## Comment-by-comment analysis & response strategy
+
+1. **`config/local.yaml:19` — Uncomment `monetio`, make `--application` mandatory with `"all"` and multi-selector support (`"monetio cece"`)**
+   - **Agreement & design**: Uncomment `monetio:` in `config/local.yaml`. Change `--application` on `ufs-chem-assay run` (and `fetch` / `watch` / `record-benchmarks` / `publish-baselines` / `report` where appropriate, or keep `run` mandatory and require explicit `--application` when multiple applications are present) so `--application` is required (`required=True`) and accepts:
+     - `all`: selects every application configured in `config.applications` (in config order).
+     - Multiple application names via either repeatable `--application`, `nargs="+"`, or space-delimited strings (e.g., `--application "monetio cece"` or `--application monetio cece`), normalized by splitting tokens on whitespace in `cli/selectors.py`.
+   - **Impact**: Update `src/cli/commands/run.py`, `src/cli/selectors.py`, `config/local.yaml`, `README.md`, `design/design.md`, and CLI/stage tests (`test_cli.py`, `test_stages.py`, `test_watch.py`, `test_run_config.py`).
+
+2. **`src/applications/registry.py:11` — Remove `DEFAULT_APPLICATION = "cece"`**
+   - **Agreement & design**: Remove `DEFAULT_APPLICATION` from `src/applications/registry.py` and `src/selection.py`.
+     - In `selection.py:resolve_application`: when `--application` / `ASSAY_APPLICATION` is unset and selected suites span multiple applications (or no suites match / `--suite-config` is omitted on a multi-application repo), raise a clear `UsageError` / `ValueError` telling the user to pass `--application` (or `--suite-config` to infer a single application) instead of silently falling back to `"cece"`.
+     - In `registry.py:default_application_for_suite`: infer only when `--suite-config` uniquely identifies a single application's suite; otherwise require `--application`.
+
+3. **`src/applications/monetio/assertions.py:35` — Replace module-level globals with a Pydantic model**
+   - **Agreement & design**: Replace `STANDARD_DIMENSIONS`, `_COORDINATE_VARIABLES`, and `VOLATILE_GLOBAL_ATTRIBUTES` globals with a `StrictModel` (e.g., `MonetioAssertionSpec`) carrying `Field(description=...)` fields and methods (`expected_output_count`, `expected_output_filenames`, `output_variable_names`). Instantiate it on `MonetioApplication` (supplying `standard_dimensions` and `volatile_global_attributes` from the model instance).
+
+4. **`src/applications/monetio/combos.py:15` — Move `_TARGET = "monetio"` out of module globals**
+   - **Agreement & design**: Remove `_TARGET` from `combos.py`; pass `target=self.name` from `MonetioApplication.effective_parameters(...)` into `combos.effective_parameters(combo, _config(config), target=self.name)`.
+
+5. **`src/applications/monetio/settings.py:11` — Move `ENV_PREFIX` and `CONTAINER_WORKDIR` onto Settings**
+   - **Agreement & design**: Move `container_workdir: PurePosixPath = Field(PurePosixPath("/work"), description=...)` onto `MonetioSettings` (and `ApplicationSettings` / `CeceSettings` for consistency), and keep `env_prefix="MONETIO_"` directly inside `SettingsConfigDict(env_prefix="MONETIO_")` (exposing `env_prefix` from `MonetioSettings.model_config["env_prefix"]` rather than a bare module global).
+
+6. **`src/cli/run_config/sessions.py:7` — `effective_runtime` / `Runtime` import feels setting-level**
+   - **Response & cleanup**: `runtime` is already a setting on `HarnessSection` (`Settings.runtime`), and `effective_runtime` was only a small helper to resolve the session override (`session.harness.runtime`) against the config-level default (`config.runtime`). Move `effective_runtime` onto `HarnessSection` (or inline `session.harness.runtime or config.runtime` in `cli/stages.py`) so `sessions.py` does not need to import `Runtime`.
+
+7. **`src/cli/main.py:9` — Use Pydantic `Settings` for `log_level` instead of `os.environ.get(...)`**
+   - **Agreement & design**: Now that the `CECE_` fallback is retired, replace `os.environ.get(CONVENTIONS.env_var("log_level"), "INFO")` in `cli/main.py:main()` with `Settings().log_level` so all harness env-var reading goes through Pydantic `Settings`.
+
+8. **`src/tests/config/monetio/aeronet/aeronet_base.yaml:1` — Underscore in filename**
+   - **Agreement & design**: No — existing `cece` base configs use hyphens (`maccity.yaml`, `gcafs-anthro.yaml`), and `aeronet-suite.yaml` uses a hyphen. Rename `aeronet_base.yaml` to `aeronet.yaml` (matching `maccity.yaml` and `gcafs-anthro.yaml`) and update `base_config: aeronet.yaml` in `aeronet-suite.yaml`, docs, and tests.
+
+## Implementation chunks
+
+1. **Chunk A (Pydantic settings & model cleanups — Comments 2, 3, 4, 5, 6, 7)**:
+   - `assertions.py` -> `MonetioAssertionSpec(StrictModel)`
+   - `combos.py` -> pass `target=self.name` from `MonetioApplication`
+   - `settings.py` (monetio & base/cece) -> move `container_workdir` and `env_prefix` onto settings models
+   - `sessions.py` / `stages.py` -> remove `Runtime` import from `sessions.py`
+   - `cli/main.py` -> `configure_logging(Settings().log_level)`
+2. **Chunk B (Base config naming — Comment 8)**:
+   - Rename `aeronet_base.yaml` -> `aeronet.yaml` and update `aeronet-suite.yaml`, tests, and docs.
+3. **Chunk C (Mandatory `--application` with `all` + multi-selector, uncomment `monetio`, remove `DEFAULT_APPLICATION` — Comments 1 & 5)**:
+   - Uncomment `monetio:` in `config/local.yaml`.
+   - Require `--application` on `ufs-chem-assay run`, support `all` and space-separated/repeatable selectors (`"monetio cece"`), and remove `DEFAULT_APPLICATION` from `registry.py` / `selection.py`.
+   - Update CLI, stage, selection, and doc tests, plus `README.md` and `design/design.md`.

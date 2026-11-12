@@ -131,7 +131,7 @@ def _exports(
     harness = session.harness
     slurm = session.slurm
     baselines = session.baselines
-    runtime = session.effective_runtime(config.runtime)
+    runtime = session.harness.effective_runtime(config.runtime)
     prefix = app.env_prefix
     exports: list[tuple[str, str]] = [
         (f"{prefix}ROOT_DIR", q(config.checkout_dir(app)))

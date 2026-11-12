@@ -187,6 +187,10 @@ class HarnessSection(StrictModel):
             )
         return self
 
+    def effective_runtime(self, default: Runtime) -> Runtime:
+        """The session's effective runtime: its harness.runtime override, else the config's."""
+        return self.runtime or default
+
 
 class SlurmSection(StrictModel):
     """The per-driver Slurm job (slurm runtime): one job per driver call,

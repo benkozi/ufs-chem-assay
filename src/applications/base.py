@@ -64,6 +64,8 @@ class ApplicationSettings(BaseSettings):
 
     model_config = SettingsConfigDict(frozen=True, env_file=".env", extra="ignore")
 
+    container_workdir: ClassVar[PurePosixPath] = PurePosixPath("/work")
+
     root_dir: Path | None = Field(
         None,
         description=(

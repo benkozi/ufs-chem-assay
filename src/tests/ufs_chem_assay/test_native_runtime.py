@@ -5,7 +5,7 @@ from pathlib import Path, PurePosixPath
 
 from pytest_mock import MockerFixture
 
-from applications.cece.settings import CONTAINER_WORKDIR, CeceSettings
+from applications.cece.settings import CeceSettings
 from applications.registry import get_application
 from platforms import Platform, Runtime
 from resolution import resolve_output_roots
@@ -80,7 +80,10 @@ def test_docker_run_driver_sets_no_cwd(mocker: MockerFixture, tmp_path: Path) ->
 
 def test_native_output_roots_relative_lands_in_checkout() -> None:
     host, driver = resolve_output_roots(
-        "runs", Path("/host/cece"), Runtime.NATIVE, container_workdir=CONTAINER_WORKDIR
+        "runs",
+        Path("/host/cece"),
+        Runtime.NATIVE,
+        container_workdir=CeceSettings.container_workdir,
     )
     assert host == Path("/host/cece/runs")
     assert driver == PurePosixPath("/host/cece/runs")
@@ -91,7 +94,7 @@ def test_native_output_roots_accepts_any_absolute_path() -> None:
         "/scratch/out",
         Path("/host/cece"),
         Runtime.NATIVE,
-        container_workdir=CONTAINER_WORKDIR,
+        container_workdir=CeceSettings.container_workdir,
     )
     assert host == Path("/scratch/out")
     assert driver == PurePosixPath("/scratch/out")
@@ -99,7 +102,10 @@ def test_native_output_roots_accepts_any_absolute_path() -> None:
 
 def test_docker_output_roots_keep_the_work_rule() -> None:
     host, driver = resolve_output_roots(
-        "runs", Path("/host/cece"), Runtime.DOCKER, container_workdir=CONTAINER_WORKDIR
+        "runs",
+        Path("/host/cece"),
+        Runtime.DOCKER,
+        container_workdir=CeceSettings.container_workdir,
     )
     assert host == Path("/host/cece/runs")
     assert driver == PurePosixPath("/work/runs")
@@ -110,7 +116,7 @@ def test_docker_prefix_precedes_the_driver_command() -> None:
     # driver and its config.
     settings = Settings(platform=Platform.LOCAL)
     app_settings = CeceSettings(root_dir=Path("/host/cece"), docker_image="img:tag")
-    prefix = docker_prefix(app_settings, CONTAINER_WORKDIR)
+    prefix = docker_prefix(app_settings, CeceSettings.container_workdir)
     assert prefix[0:3] == ["docker", "run", "--rm"]
     assert prefix[-1] == "img:tag"
     driver = build_command(settings, _APP, app_settings, PurePosixPath("/work/x.yaml"))

@@ -18,11 +18,7 @@ from applications.base import (
 )
 from applications.monetio import assertions, cli, combos, suite
 from applications.monetio.config import KwargValue, MonetioConfig, ScalarKwarg
-from applications.monetio.settings import (
-    CONTAINER_WORKDIR,
-    ENV_PREFIX,
-    MonetioSettings,
-)
+from applications.monetio.settings import MonetioSettings
 from combos import Combo, Dimension, ParameterRow
 
 
@@ -54,19 +50,22 @@ def _resolve_yaml_path(driver_yaml: PurePosixPath) -> Path:
     path = Path(driver_yaml)
     if path.is_file():
         return path
-    root = os.environ.get(f"{ENV_PREFIX}ROOT_DIR")
+    root = os.environ.get(f"{MonetioSettings.env_prefix}ROOT_DIR")
     return Path(root) / path if root is not None else path
+
+
+_ASSERTION_SPEC = assertions.MonetioAssertionSpec()
 
 
 class MonetioApplication(Application):
     name = "monetio"
-    env_prefix = ENV_PREFIX
-    container_workdir = CONTAINER_WORKDIR
+    env_prefix = MonetioSettings.env_prefix
+    container_workdir = MonetioSettings.container_workdir
     default_suite = "aeronet-suite.yaml"
     checkout_dirname = "monetio"
     data_dirname = "data"
-    standard_dimensions = assertions.STANDARD_DIMENSIONS
-    volatile_global_attributes = assertions.VOLATILE_GLOBAL_ATTRIBUTES
+    standard_dimensions = _ASSERTION_SPEC.standard_dimensions
+    volatile_global_attributes = _ASSERTION_SPEC.volatile_global_attributes
     settings_model = MonetioSettings
     config_model = MonetioConfig
     suite_model = suite.MonetioSuiteConfig
@@ -76,7 +75,7 @@ class MonetioApplication(Application):
         self, sweep: SweepBase, base_config: DriverConfig
     ) -> list[tuple[Dimension, tuple[StrEnum, ...]]]:
         assert isinstance(sweep, suite.MonetioSweep), type(sweep)
-        return combos.dimensions(sweep, _config(base_config))
+        return combos.dimensions(sweep, _config(base_config), target=self.name)
 
     def build_config(
         self, combo: Combo, output_directory: str, config_path: Path
@@ -86,7 +85,7 @@ class MonetioApplication(Application):
     def effective_parameters(
         self, combo: Combo, config: DriverConfig
     ) -> list[ParameterRow]:
-        return combos.effective_parameters(combo, _config(config))
+        return combos.effective_parameters(combo, _config(config), target=self.name)
 
     def expected_output_count(self, config: DriverConfig) -> int:
         return assertions.expected_output_count(_config(config))

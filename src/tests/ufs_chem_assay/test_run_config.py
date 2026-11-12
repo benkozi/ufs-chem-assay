@@ -641,8 +641,8 @@ def test_session_can_override_runtime(tmp_path: Path) -> None:
     )
     config = load_run_config(path)
     docker_session, native_session = config.resolved_sessions()
-    assert docker_session.effective_runtime(config.runtime) is Runtime.DOCKER
-    assert native_session.effective_runtime(config.runtime) is Runtime.NATIVE
+    assert docker_session.harness.effective_runtime(config.runtime) is Runtime.DOCKER
+    assert native_session.harness.effective_runtime(config.runtime) is Runtime.NATIVE
 
 
 def test_slurm_overlay_needs_a_slurm_section(tmp_path: Path) -> None:

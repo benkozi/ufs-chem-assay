@@ -12,8 +12,6 @@ from applications.monetio.config import MonetioConfig
 from applications.monetio.suite import MonetioSweep
 from combos import Combo, Dimension, ParameterRow, sorted_values
 
-_TARGET = "monetio"
-
 
 def _as_monetio(config: object) -> MonetioConfig:
     assert isinstance(config, MonetioConfig), type(config)
@@ -44,7 +42,7 @@ def _apply_freq(config: object, value: StrEnum) -> None:
 
 
 def dimensions(
-    sweep: MonetioSweep, base_config: MonetioConfig
+    sweep: MonetioSweep, base_config: MonetioConfig, *, target: str = "monetio"
 ) -> list[tuple[Dimension, tuple[StrEnum, ...]]]:
     """Validate `sweep` against `base_config` and return canonical dimensions
     (`case` first, then `freq`)."""
@@ -60,12 +58,12 @@ def dimensions(
         dims.append(
             (
                 Dimension(
-                    target=_TARGET,
+                    target=target,
                     field="case",
                     tag="case",
                     apply=_apply_case,
                     group="reader",
-                    key=_TARGET,
+                    key=target,
                     index=0,
                 ),
                 _dynamic_str_enum("SweptCase", sweep.case),
@@ -76,12 +74,12 @@ def dimensions(
         dims.append(
             (
                 Dimension(
-                    target=_TARGET,
+                    target=target,
                     field="freq",
                     tag="freq",
                     apply=apply_fn,
                     group="reader",
-                    key=_TARGET,
+                    key=target,
                     index=0,
                 ),
                 _dynamic_str_enum("SweptFreq", sweep.freq),
@@ -104,19 +102,21 @@ def build_config(
     return config
 
 
-def effective_parameters(combo: Combo, config: MonetioConfig) -> list[ParameterRow]:
+def effective_parameters(
+    combo: Combo, config: MonetioConfig, *, target: str = "monetio"
+) -> list[ParameterRow]:
     """`(target, field, value, swept)` rows for `combos.csv`."""
     swept_values = {
         (dimension.target, dimension.field): value.value
         for dimension, value in combo.values
     }
-    case_val = swept_values.get((_TARGET, "case"), "")
+    case_val = swept_values.get((target, "case"), "")
     rows: list[ParameterRow] = [
-        (_TARGET, "source", config.source, False),
-        (_TARGET, "case", case_val, (_TARGET, "case") in swept_values),
+        (target, "source", config.source, False),
+        (target, "case", case_val, (target, "case") in swept_values),
     ]
     for key in sorted(config.kwargs):
         raw_val = config.kwargs[key]
         str_val = "" if raw_val is None else str(raw_val)
-        rows.append((_TARGET, key, str_val, (_TARGET, key) in swept_values))
+        rows.append((target, key, str_val, (target, key) in swept_values))
     return rows
