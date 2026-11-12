@@ -1161,6 +1161,7 @@ def generated_combos(
                     driver_yaml,
                     combo_dir / f"{combo.combo_id}.out",
                     timeout_s=min(context.suite.timeout_s, settings.run_timeout_s),
+                    app=app,
                 )
             generated[combo.combo_id] = GeneratedCombo(
                 host_dir=combo_dir, driver_yaml=driver_yaml, config=config
@@ -1212,7 +1213,12 @@ def submitted_jobs(
             timeout_s = min(context.suite.timeout_s, settings.run_timeout_s)
             try:
                 script, job_id = submit_driver_job(
-                    settings, app_settings, generated.driver_yaml, out_path, timeout_s
+                    settings,
+                    app_settings,
+                    generated.driver_yaml,
+                    out_path,
+                    timeout_s,
+                    app=app,
                 )
             except subprocess.CalledProcessError as exc:
                 write_ledger(ledger, combo_roots.host)

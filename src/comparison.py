@@ -254,6 +254,34 @@ def _compare_variable(
             detail="; ".join(detail_parts),
         )
 
+    if not (
+        np.issubdtype(realization.dtype, np.number)
+        and np.issubdtype(baseline.dtype, np.number)
+    ):
+        real_arr = np.asarray(realization.values)
+        base_arr = np.asarray(baseline.values)
+        mismatches = int(np.sum(real_arr != base_arr))
+        equal = mismatches == 0
+        if not equal:
+            detail_parts.append(f"data differs ({mismatches} element(s))")
+        return VariableComparison(
+            name=name,
+            dtype_match=dtype_match,
+            data_match=equal and dtype_match,
+            attributes_match=attributes_match,
+            max_abs_diff=0.0 if equal else None,
+            rmse=0.0 if equal else None,
+            n_evaluated=int(real_arr.size),
+            n_mismatched=mismatches,
+            diff_sum=0.0 if equal else None,
+            diff_mean=0.0 if equal else None,
+            diff_std=0.0 if equal else None,
+            diff_min=0.0 if equal else None,
+            diff_max=0.0 if equal else None,
+            diff_median=0.0 if equal else None,
+            detail="; ".join(detail_parts) or None,
+        )
+
     real = dsa.asarray(realization.data)
     base = dsa.asarray(baseline.data)
     if np.issubdtype(realization.dtype, np.floating) and np.issubdtype(

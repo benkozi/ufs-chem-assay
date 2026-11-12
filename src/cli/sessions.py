@@ -98,7 +98,7 @@ def session_root(config: RunConfig, app: Application, session: ResolvedSession) 
     host, _driver = resolve_output_roots(
         config.session_output_root(app, session),
         config.checkout_dir(app),
-        config.runtime,
+        session.effective_runtime(config.runtime),
         container_workdir=app.container_workdir,
     )
     return host

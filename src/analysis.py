@@ -118,15 +118,16 @@ def _time_fields(when: datetime | None) -> _TimeFields:
 
 
 def spatial_variables(ds: xr.Dataset) -> list[str]:
-    """The data variables that are spatial fields — those carrying both lat
-    and lon dimensions — in file order. Anything else (CF cell bounds the
-    driver writes as data variables, since its coordinates carry no
-    `bounds` attribute; any future auxiliary table) is not a field and is
-    skipped by stats and plots alike."""
+    """The data variables that are spatial or UGRID point fields — numeric
+    data variables carrying either `(lat, lon)` or UGRID `node` dimensions —
+    in file order. Anything else (CF cell bounds, scalar mesh topology
+    variables, or string metadata columns) is skipped."""
     fields: list[str] = []
-    for name in ds.data_vars:
-        dims = set(ds[name].dims)
-        if {"lat", "lon"} <= dims:
+    for name, var in ds.data_vars.items():
+        dims = set(var.dims)
+        if np.issubdtype(var.dtype, np.number) and (
+            {"lat", "lon"} <= dims or "node" in dims
+        ):
             fields.append(str(name))
         else:
             logger.debug("skipping non-spatial variable %s %s", name, tuple(dims))

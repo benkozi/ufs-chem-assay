@@ -612,12 +612,32 @@ def test_session_overlay_errors_name_the_session(tmp_path: Path) -> None:
             {"x": {"harness": {"no_suite_update": True}}},
             "sessions.x.harness",
         ),  # the section's own rule, under the session's name
-        ({"x": {"harness": {"runtime": "native"}}}, "runtime"),  # config-wide
+        (
+            {"x": {"harness": {"runtime": "native", "submit_only": True}}},
+            "sessions.x: submit_only needs the slurm runtime",
+        ),
     ]
     for sessions, needle in cases:
         path = run_config_file(tmp_path, overrides={"sessions": sessions})
         with pytest.raises(ValidationError, match=needle):
             load_run_config(path)
+
+
+def test_session_can_override_runtime(tmp_path: Path) -> None:
+    path = run_config_file(
+        tmp_path,
+        "local.yaml",
+        overrides={
+            "sessions": {
+                "docker-session": {},
+                "native-session": {"harness": {"runtime": "native"}},
+            }
+        },
+    )
+    config = load_run_config(path)
+    docker_session, native_session = config.resolved_sessions()
+    assert docker_session.effective_runtime(config.runtime) is Runtime.DOCKER
+    assert native_session.effective_runtime(config.runtime) is Runtime.NATIVE
 
 
 def test_slurm_overlay_needs_a_slurm_section(tmp_path: Path) -> None:

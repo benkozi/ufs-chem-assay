@@ -119,11 +119,15 @@ def render_job_script(
 
 
 def driver_command(
-    app_settings: ApplicationSettings, driver_yaml: PurePosixPath
+    app_settings: ApplicationSettings,
+    driver_yaml: PurePosixPath,
+    *,
+    app: Application | None = None,
 ) -> list[str]:
     """The driver invocation as the job (or host process) runs it, relative
     to the checkout it runs in."""
-    return [app_settings.driver_path, str(driver_yaml)]
+    args = [str(driver_yaml)] if app is None else app.driver_arguments(driver_yaml)
+    return [app_settings.driver_path, *args]
 
 
 def job_script_path(out_path: Path) -> Path:
@@ -137,6 +141,8 @@ def write_job_script(
     driver_yaml: PurePosixPath,
     out_path: Path,
     timeout_s: int,
+    *,
+    app: Application | None = None,
 ) -> Path:
     """Render and write the combo's job script from the settings; returns
     its path. Idempotent — the dry run writes it as a recorded artifact and
@@ -153,7 +159,8 @@ def write_job_script(
             modulefile=app_settings.modulefile,
             env=settings.job_env_pairs,
             command=" ".join(
-                shlex.quote(part) for part in driver_command(app_settings, driver_yaml)
+                shlex.quote(part)
+                for part in driver_command(app_settings, driver_yaml, app=app)
             ),
             srun_args=settings.srun_args,
         )
@@ -257,13 +264,17 @@ def build_command(
     if settings.runtime is Runtime.NATIVE:
         assert app_settings.root_dir is not None  # guarded at collection
         driver = app_settings.root_dir / app_settings.driver_path
-        return [*settings.launcher_argv, str(driver), str(driver_yaml)]
+        return [
+            *settings.launcher_argv,
+            str(driver),
+            *app.driver_arguments(driver_yaml),
+        ]
     if settings.runtime is Runtime.SLURM:
         assert job_script is not None, "slurm submits a rendered job script"
         return submission_command(job_script)
     return [
         *docker_prefix(app_settings, app.container_workdir, output_mount),
-        *driver_command(app_settings, driver_yaml),
+        *driver_command(app_settings, driver_yaml, app=app),
     ]
 
 
@@ -330,12 +341,16 @@ def submit_driver_job(
     driver_yaml: PurePosixPath,
     out_path: Path,
     timeout_s: int,
+    *,
+    app: Application | None = None,
 ) -> tuple[Path, str]:
     """The first half of a slurm driver call: write the combo's job script
     (`<combo_id>.sbatch`, kept beside the yaml and out so the job is
     reproducible by hand) and submit it; returns the script and the job
     id. Nothing waits: the job is the ledger's from here (jobs.py)."""
-    script = write_job_script(settings, app_settings, driver_yaml, out_path, timeout_s)
+    script = write_job_script(
+        settings, app_settings, driver_yaml, out_path, timeout_s, app=app
+    )
     return script, submit_job(script)
 
 

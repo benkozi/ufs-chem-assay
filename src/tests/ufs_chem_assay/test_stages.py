@@ -585,3 +585,27 @@ def test_env_value_renders_an_enum_by_its_value() -> None:
 
     assert _env_value(Runtime.SLURM) == "slurm"
     assert _env_value(None) is None
+
+
+def test_session_runtime_override_exports_per_session_runtime(tmp_path: Path) -> None:
+    config = load_run_config(
+        run_config_file(
+            tmp_path,
+            "local.yaml",
+            root_dir=tmp_path / "runs",
+            overrides={
+                "sessions": {
+                    "docker-s": {},
+                    "native-s": {"harness": {"runtime": "native"}},
+                }
+            },
+        )
+    )
+    docker_text = render_stage(
+        Stage.HARNESS, config, _CECE, _session(config, "docker-s")
+    ).text
+    native_text = render_stage(
+        Stage.HARNESS, config, _CECE, _session(config, "native-s")
+    ).text
+    assert "export ASSAY_RUNTIME=docker" in docker_text
+    assert "export ASSAY_RUNTIME=native" in native_text

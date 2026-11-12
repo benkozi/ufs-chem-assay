@@ -106,7 +106,6 @@ def test_compute_file_stats_matches_numpy(
     assert stats.median == pytest.approx(np.nanmedian(data))
 
 
-@pytest.mark.usefixtures("dask_client")
 def _field_nc(path: Path, values: np.ndarray) -> None:
     xr.Dataset(
         {"co": (("time", "lat", "lon"), values)},
@@ -118,17 +117,19 @@ def _field_nc(path: Path, values: np.ndarray) -> None:
     ).to_netcdf(path, engine="netcdf4")
 
 
+@pytest.mark.usefixtures("dask_client")
 def test_compute_file_stats_min_positive_is_null_for_an_all_zero_field(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / "zeros.nc"
-    _field_nc(path, np.zeros((1, 3, 4)))
-    (stats,) = compute_file_stats(path, "c", "01JCOMBO", _RUN)
+    zeros_path = tmp_path / "zeros.nc"
+    _field_nc(zeros_path, np.zeros((1, 3, 4)))
+    (stats,) = compute_file_stats(zeros_path, "c", "01JCOMBO", _RUN)
     assert stats.min == 0.0
     assert stats.min_positive is None
     # Zeros beside positives: the smallest positive value, not zero.
-    _field_nc(path, np.array([[[0.0, 2.0, 0.5, 0.0]] * 3]))
-    (stats,) = compute_file_stats(path, "c", "01JCOMBO", _RUN)
+    positives_path = tmp_path / "positives.nc"
+    _field_nc(positives_path, np.array([[[0.0, 2.0, 0.5, 0.0]] * 3]))
+    (stats,) = compute_file_stats(positives_path, "c", "01JCOMBO", _RUN)
     assert stats.min_positive == 0.5
 
 
@@ -236,3 +237,37 @@ def test_file_time_is_null_for_a_non_datetime_time_coordinate() -> None:
         coords={"time": [0.0], "lat": [0.0, 1.0], "lon": [0.0, 1.0, 2.0]},
     )
     assert _file_time(dataset) is None
+
+
+@pytest.mark.usefixtures("dask_client")
+def test_ugrid_point_dataset_summarizes_numeric_node_variables_and_skips_mesh_and_strings(
+    tmp_path: Path,
+) -> None:
+    aod = np.array([[0.15], [0.25]], dtype=np.float64)
+    dataset = xr.Dataset(
+        {
+            "aod_500nm": (("time", "node"), aod),
+            "data_quality_level": (("time", "node"), np.array([["lev15"], ["lev15"]])),
+            "mesh": ((), np.int32(0), {"cf_role": "mesh_topology"}),
+        },
+        coords={
+            "time": pd.date_range("2000-06-01T12:00:00", periods=2, freq="D"),
+            "node": np.array([0], dtype=np.int64),
+            "latitude": ("node", np.array([36.6], dtype=np.float64)),
+            "longitude": ("node", np.array([-97.5], dtype=np.float64)),
+            "siteid": ("node", np.array(["Cart_Site"])),
+        },
+    )
+    path = tmp_path / "aeronet.nc"
+    dataset.to_netcdf(path, engine="netcdf4")
+
+    with xr.open_dataset(path) as reopened:
+        assert spatial_variables(reopened) == ["aod_500nm"]
+
+    run = RunContext(run_id=_RUN_ID, application="monetio", suite="aeronet")
+    (stats,) = compute_file_stats(path, combo="case-aod15", combo_id=_COMBO_ID, run=run)
+    assert stats.variable == "aod_500nm"
+    assert stats.count == 2
+    assert stats.mean == pytest.approx(0.20)
+    assert stats.min == pytest.approx(0.15)
+    assert stats.max == pytest.approx(0.25)

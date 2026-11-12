@@ -152,3 +152,65 @@ def test_output_banner_names_no_application(
     out = capsys.readouterr().out
     assert "----- driver output [x] -----" in out
     assert "cece driver" not in out
+
+
+def test_build_command_uses_application_driver_arguments_in_docker_and_native(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    from platforms import Runtime
+    from runner import driver_command, write_job_script
+    from tests.ufs_chem_assay.stubs import stub_application
+
+    stub = stub_application()
+    mocker.patch.object(
+        stub,
+        "driver_arguments",
+        side_effect=lambda yaml_path: ["load", "aeronet", "--config", str(yaml_path)],
+    )
+    app_settings = _app_settings()
+
+    docker_cmd = build_command(
+        _settings(), stub, app_settings, PurePosixPath("/work/x/x.yaml")
+    )
+    assert docker_cmd[-5:] == [
+        "./build/cece_standalone_driver",
+        "load",
+        "aeronet",
+        "--config",
+        "/work/x/x.yaml",
+    ]
+
+    native_cmd = build_command(
+        Settings(platform=Platform.LOCAL, runtime=Runtime.NATIVE),
+        stub,
+        app_settings,
+        PurePosixPath("/host/out/x/x.yaml"),
+    )
+    assert native_cmd == [
+        "/host/cece/build/cece_standalone_driver",
+        "load",
+        "aeronet",
+        "--config",
+        "/host/out/x/x.yaml",
+    ]
+
+    assert driver_command(app_settings, PurePosixPath("/work/x/x.yaml"), app=stub) == [
+        "./build/cece_standalone_driver",
+        "load",
+        "aeronet",
+        "--config",
+        "/work/x/x.yaml",
+    ]
+
+    script = write_job_script(
+        Settings(platform=Platform.URSA),
+        app_settings,
+        PurePosixPath("/host/out/x/x.yaml"),
+        tmp_path / "x.out",
+        timeout_s=60,
+        app=stub,
+    )
+    assert (
+        "./build/cece_standalone_driver load aeronet --config /host/out/x/x.yaml"
+        in script.read_text()
+    )

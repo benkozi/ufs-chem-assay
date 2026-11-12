@@ -131,6 +131,7 @@ def _exports(
     harness = session.harness
     slurm = session.slurm
     baselines = session.baselines
+    runtime = session.effective_runtime(config.runtime)
     prefix = app.env_prefix
     exports: list[tuple[str, str]] = [
         (f"{prefix}ROOT_DIR", q(config.checkout_dir(app)))
@@ -143,7 +144,7 @@ def _exports(
             exports.append((f"{prefix}{field.upper()}", value))
     exports += [
         (CONVENTIONS.env_var("PLATFORM"), config.platform.value),
-        (CONVENTIONS.env_var("RUNTIME"), config.runtime.value),
+        (CONVENTIONS.env_var("RUNTIME"), runtime.value),
     ]
     for field in settings_mirror_fields():
         if field == "runtime":
@@ -151,7 +152,7 @@ def _exports(
         value = _env_value(getattr(harness, field))
         if value is not None:
             exports.append((CONVENTIONS.env_var(field), value))
-    if config.runtime is Runtime.SLURM:
+    if runtime is Runtime.SLURM:
         assert slurm is not None, "slurm runtime needs a slurm: section"
         exports.append((CONVENTIONS.env_var("SBATCH_ARGS"), q(slurm.sbatch_args)))
         exports.append((CONVENTIONS.env_var("SRUN_ARGS"), q(slurm.srun_args_value)))
@@ -193,7 +194,7 @@ def _exports(
         )
     exports.append(("PATH", '"$HOME/.local/bin:$PATH"'))
     exports.append(("UV_CACHE_DIR", q(config.uv_cache_dir)))
-    if config.runtime is not Runtime.SLURM:
+    if runtime is not Runtime.SLURM:
         # docker/native run the driver as a local process: env applies here.
         exports += [(key, q(value)) for key, value in harness.env.items()]
     return exports
