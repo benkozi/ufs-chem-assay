@@ -474,7 +474,10 @@ def test_harness_stage_needs_a_session_when_the_config_names_them(
     # A config without sessions: the one nameless session is implied.
     script = render_stage(Stage.HARNESS, local, _CECE)
     assert script.name == "harness-cece"
-    assert "--combo-output-root=ufs-chem-assay-output --combo-clean-root" in script.text
+    assert (
+        "--combo-output-root=ufs-chem-assay-output/cece --combo-clean-root"
+        in script.text
+    )
     assert "--submit-only" not in script.text
 
 
@@ -532,7 +535,9 @@ def test_regex_suite_selector_survives_quoting(tmp_path: Path) -> None:
 def test_output_root_is_suffixed_with_the_application_and_the_session(
     tmp_path: Path, stub: Application, local: RunConfig
 ) -> None:
-    assert local.session_output_root(_CECE, _first(local)) == "ufs-chem-assay-output"
+    assert (
+        local.session_output_root(_CECE, _first(local)) == "ufs-chem-assay-output/cece"
+    )
     two = _ursa(tmp_path, {"applications.stub": {"git_url": "u", "ref": "main"}})
     simple = _session(two, "simple-maccity")
     assert (

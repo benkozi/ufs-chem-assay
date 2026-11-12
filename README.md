@@ -460,13 +460,15 @@ derived defaults (hostname detection; the harness checkout's parent as
 the root).
 
 ```sh
-uv run ufs-chem-assay run --config-file=config/ursa.yaml --dry-run   # render only
-uv run ufs-chem-assay run --config-file=config/ursa.yaml             # clone, build,
-                                                                     #   data, harness
-uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage harness \
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --application cece --dry-run   # render only
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --application cece             # clone, build,
+                                                                                        #   data, harness
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --application cece --stage harness \
   --override harness:suite_config=exhaustive-maccity-run-only-suite.yaml harness:pytest_args='[-x]' \
              applications:cece:ref=develop slurm:qos=batch
-uv run ufs-chem-assay run --config-file=config/ursa.yaml --session gcafs-anthro  # one session
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --application cece --session gcafs-anthro  # one session
+uv run ufs-chem-assay run --config-file=config/local.yaml --application all --dry-run   # all configured apps
+uv run ufs-chem-assay run --config-file=config/local.yaml --application "monetio cece" --dry-run
 uv run ufs-chem-assay watch                                           # evaluate as jobs finish
 ```
 

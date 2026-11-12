@@ -58,12 +58,14 @@ def register(subparsers: Subparsers, name: str) -> None:
     )
     run.add_argument(
         "--application",
-        action="append",
-        default=None,
+        action="extend",
+        nargs="+",
+        required=True,
         metavar="NAME",
         help=(
-            "run only this configured application (repeatable); default: every "
-            "application in the config's applications: map"
+            "configured application(s) to run, or 'all' for every application in "
+            "the config's applications: map (repeatable or space-separated, e.g. "
+            "--application cece, --application 'monetio cece', or --application all)"
         ),
     )
     run.add_argument(

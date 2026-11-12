@@ -94,7 +94,14 @@ def test_dry_run_renders_every_script_and_executes_nothing(
 ) -> None:
     run_bash = mocker.patch("cli.commands.run.run_bash")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
-        code = main(["run", f"--config-file={_config(tmp_path)}", "--dry-run"])
+        code = main(
+            [
+                "run",
+                f"--config-file={_config(tmp_path)}",
+                "--application=cece",
+                "--dry-run",
+            ]
+        )
     assert code == 0
     assert _scripts(tmp_path) == _CECE_SCRIPTS
     run_bash.assert_not_called()
@@ -114,6 +121,7 @@ def test_effective_config_records_overrides(
             [
                 "run",
                 f"--config-file={_config(tmp_path)}",
+                "--application=cece",
                 "--dry-run",
                 "-o",
                 "applications:cece:ref=develop",
@@ -145,7 +153,14 @@ def test_bad_override_is_a_clean_error(
     mocker.patch("cli.commands.run.run_bash")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(
-            ["run", f"--config-file={_config(tmp_path)}", "--dry-run", "-o", "nonsense"]
+            [
+                "run",
+                f"--config-file={_config(tmp_path)}",
+                "--application=cece",
+                "--dry-run",
+                "-o",
+                "nonsense",
+            ]
         )
     assert code == 1
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
@@ -161,6 +176,7 @@ def test_stage_selection_renders_only_those(
         [
             "run",
             f"--config-file={_config(tmp_path)}",
+            "--application=cece",
             "--stage",
             "build",
             "--stage",
@@ -183,7 +199,7 @@ def test_all_stages_run_with_bash_in_order(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
     run_bash = mocker.patch("cli.commands.run.run_bash", return_value=0)
-    code = main(["run", f"--config-file={_config(tmp_path)}"])
+    code = main(["run", f"--config-file={_config(tmp_path)}", "--application=cece"])
     assert code == 0
     ran = [call.args[0].name for call in run_bash.call_args_list]
     assert ran == _CECE_RUN_ORDER  # the resume scripts are rendered, not run
@@ -195,7 +211,7 @@ def test_failed_stage_stops_the_run_and_logs_at_error(
 ) -> None:
     run_bash = mocker.patch("cli.commands.run.run_bash", side_effect=[0, 2])
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
-        code = main(["run", f"--config-file={_config(tmp_path)}"])
+        code = main(["run", f"--config-file={_config(tmp_path)}", "--application=cece"])
     assert code == 2
     assert run_bash.call_count == 2
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
@@ -207,7 +223,13 @@ def test_local_config_runs_the_same_stages(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
     run_bash = mocker.patch("cli.commands.run.run_bash", return_value=0)
-    code = main(["run", f"--config-file={_config(tmp_path, 'local.yaml')}"])
+    code = main(
+        [
+            "run",
+            f"--config-file={_config(tmp_path, 'local.yaml')}",
+            "--application=cece",
+        ]
+    )
     assert code == 0
     ran = [call.args[0].name for call in run_bash.call_args_list]
     assert ran == _LOCAL_SCRIPTS
@@ -219,7 +241,17 @@ def test_harness_keeps_slot_05_without_a_04(
 ) -> None:
     # Slot 04 is held for the application-tests stage of issue #9.
     mocker.patch("cli.commands.run.run_bash")
-    assert main(["run", f"--config-file={_config(tmp_path)}", "--dry-run"]) == 0
+    assert (
+        main(
+            [
+                "run",
+                f"--config-file={_config(tmp_path)}",
+                "--application=cece",
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
     assert _scripts(tmp_path) == _CECE_SCRIPTS
 
 
@@ -227,7 +259,17 @@ def test_platform_flag_overrides_file(tmp_path: Path, mocker: MockerFixture) -> 
     mocker.patch("cli.commands.run.run_bash")
     path = _config(tmp_path, overrides={"harness.submit_only": False})
     assert (
-        main(["run", f"--config-file={path}", "--platform", "local", "--dry-run"]) == 0
+        main(
+            [
+                "run",
+                f"--config-file={path}",
+                "--application=cece",
+                "--platform",
+                "local",
+                "--dry-run",
+            ]
+        )
+        == 0
     )
     # The exports follow the overridden platform (local -> docker runtime).
     harness = tmp_path / "root" / "scripts" / "05-harness-cece-simple-maccity.sh"
@@ -242,6 +284,7 @@ def test_python_m_cli_entrypoint(tmp_path: Path) -> None:
             "cli",
             "run",
             f"--config-file={_config(tmp_path)}",
+            "--application=cece",
             "--dry-run",
         ],
         check=False,
@@ -257,7 +300,15 @@ def test_python_m_cli_entrypoint(tmp_path: Path) -> None:
 
 def test_bad_stage_name_is_a_usage_error(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as excinfo:
-        main(["run", f"--config-file={_config(tmp_path)}", "--stage", "bogus"])
+        main(
+            [
+                "run",
+                f"--config-file={_config(tmp_path)}",
+                "--application=cece",
+                "--stage",
+                "bogus",
+            ]
+        )
     assert excinfo.value.code == 2
 
 
@@ -271,7 +322,7 @@ def test_uncreatable_root_dir_is_a_clean_error(
     blocker.write_text("not a directory")
     path = run_config_file(tmp_path, root_dir=blocker / "root")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
-        code = main(["run", f"--config-file={path}", "--dry-run"])
+        code = main(["run", f"--config-file={path}", "--application=cece", "--dry-run"])
     assert code == 1
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
     assert len(errors) == 1
@@ -285,7 +336,15 @@ def test_root_dir_flag_overrides_the_derived_root(
     mocker.patch("cli.commands.run.run_bash")
     config = run_config_file(tmp_path)  # no root_dir in the template
     root = tmp_path / "elsewhere"
-    code = main(["run", f"--config-file={config}", f"--root-dir={root}", "--dry-run"])
+    code = main(
+        [
+            "run",
+            f"--config-file={config}",
+            f"--root-dir={root}",
+            "--application=cece",
+            "--dry-run",
+        ]
+    )
     assert code == 0
     harness = root / "scripts" / "05-harness-cece-simple-maccity.sh"
     assert harness.is_file()
@@ -303,7 +362,7 @@ def test_comprehensive_run_renders_stage_major_per_application(
     path = _config(
         tmp_path, overrides={"applications.stub": {"git_url": "u", "ref": "main"}}
     )
-    assert main(["run", f"--config-file={path}"]) == 0
+    assert main(["run", f"--config-file={path}", "--application", "all"]) == 0
     ran = [call.args[0].name for call in run_bash.call_args_list]
     assert ran == [
         "01-source-cece.sh",
@@ -358,7 +417,13 @@ def test_session_flag_narrows_the_run(
     run_bash = mocker.patch("cli.commands.run.run_bash", return_value=0)
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         code = main(
-            ["run", f"--config-file={_config(tmp_path)}", "--session", "gcafs-anthro"]
+            [
+                "run",
+                f"--config-file={_config(tmp_path)}",
+                "--application=cece",
+                "--session",
+                "gcafs-anthro",
+            ]
         )
     assert code == 0
     assert _scripts(tmp_path) == [
@@ -391,6 +456,7 @@ def test_unconfigured_session_is_a_clean_error(
             [
                 "run",
                 f"--config-file={_config(tmp_path)}",
+                "--application=cece",
                 "--session",
                 "nope",
                 "--dry-run",
@@ -407,6 +473,7 @@ def test_unconfigured_session_is_a_clean_error(
             [
                 "run",
                 f"--config-file={_config(tmp_path, 'local.yaml')}",
+                "--application=cece",
                 "--session",
                 "x",
                 "--dry-run",
@@ -420,7 +487,18 @@ def test_stage_resume_runs_the_resume_scripts_only(
     tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
     run_bash = mocker.patch("cli.commands.run.run_bash", return_value=0)
-    assert main(["run", f"--config-file={_config(tmp_path)}", "--stage", "resume"]) == 0
+    assert (
+        main(
+            [
+                "run",
+                f"--config-file={_config(tmp_path)}",
+                "--application=cece",
+                "--stage",
+                "resume",
+            ]
+        )
+        == 0
+    )
     ran = [call.args[0].name for call in run_bash.call_args_list]
     assert ran == ["06-resume-cece-simple-maccity.sh", "06-resume-cece-gcafs-anthro.sh"]
     assert _scripts(tmp_path) == [
@@ -434,6 +512,7 @@ def test_stage_resume_runs_the_resume_scripts_only(
             [
                 "run",
                 f"--config-file={_config(tmp_path, 'local.yaml')}",
+                "--application=cece",
                 "--stage",
                 "resume",
             ]
@@ -463,6 +542,72 @@ def test_unconfigured_application_is_a_clean_error(
     assert len(errors) == 1
     assert "catchem" in errors[0]
     assert "['cece']" in errors[0]
+
+
+def test_missing_application_is_a_usage_error(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(["run", f"--config-file={_config(tmp_path)}", "--dry-run"])
+    assert excinfo.value.code == 2
+
+
+def test_application_all_and_multi_selectors(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch("cli.commands.run.run_bash")
+    expected = [
+        "01-source-cece.sh",
+        "01-source-monetio.sh",
+        "02-build-cece.sh",
+        "02-build-monetio.sh",
+        "03-data-cece.sh",
+        "03-data-monetio.sh",
+        "05-harness-cece.sh",
+        "05-harness-monetio.sh",
+    ]
+    for flag_args in (
+        ["--application", "all"],
+        ["--application", "monetio cece"],
+        ["--application", "monetio", "cece"],
+    ):
+        root = tmp_path / f"root-{len(flag_args)}-{flag_args[-1].replace(' ', '_')}"
+        code = main(
+            [
+                "run",
+                f"--config-file={_config(tmp_path, 'local.yaml')}",
+                f"--root-dir={root}",
+                *flag_args,
+                "--dry-run",
+            ]
+        )
+        assert code == 0
+        assert sorted(p.name for p in (root / "scripts").glob("*.sh")) == expected
+
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert (
+            main(
+                [
+                    "run",
+                    f"--config-file={_config(tmp_path, 'local.yaml')}",
+                    "--application",
+                    "",
+                    "--dry-run",
+                ]
+            )
+            == 1
+        )
+        assert (
+            main(
+                [
+                    "run",
+                    f"--config-file={_config(tmp_path, 'local.yaml')}",
+                    "--application",
+                    "all",
+                    "bogus",
+                    "--dry-run",
+                ]
+            )
+            == 1
+        )
 
 
 # ── `ufs-chem-assay fetch` ───────────────────────────────────────────────────
@@ -551,7 +696,8 @@ def test_fetch_default_selects_the_applications_default_suite(
     fetch_env: Path, mocker: MockerFixture
 ) -> None:
     stage = mocker.patch("cli.commands.fetch.stage_inputs", return_value=[])
-    assert main(["fetch"]) == 0
+    assert main(["fetch"]) == 1
+    assert main(["fetch", "--application=cece"]) == 0
     inputs, data_dir = stage.call_args.args
     assert data_dir == fetch_env / "data"
     # The checked-in simple-maccity suite's own declaration.

@@ -57,7 +57,9 @@ def rendered(tmp_path: Path, mocker: MockerFixture) -> Path:
     effective config and the scripts are on disk, nothing executed."""
     mocker.patch("cli.commands.run.run_bash")
     config = run_config_file(tmp_path, root_dir=tmp_path / "root")
-    assert main(["run", f"--config-file={config}", "--dry-run"]) == 0
+    assert (
+        main(["run", f"--config-file={config}", "--application=cece", "--dry-run"]) == 0
+    )
     return tmp_path / "root"
 
 
@@ -262,7 +264,9 @@ def test_watch_clean_errors(
     # A config without submit_only has nothing to watch.
     local = run_config_file(tmp_path, "local.yaml", root_dir=tmp_path / "local-root")
     mocker.patch("cli.commands.run.run_bash")
-    assert main(["run", f"--config-file={local}", "--dry-run"]) == 0
+    assert (
+        main(["run", f"--config-file={local}", "--application=cece", "--dry-run"]) == 0
+    )
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert _watch(tmp_path / "local-root") == 1
     assert "submit_only" in caplog.records[-1].getMessage()
@@ -463,11 +467,13 @@ def test_report_clean_errors(
     # nameless session renders as the application.
     local = run_config_file(tmp_path, "local.yaml", root_dir=tmp_path / "local-root")
     mocker.patch("cli.commands.run.run_bash")
-    assert main(["run", f"--config-file={local}", "--dry-run"]) == 0
+    assert (
+        main(["run", f"--config-file={local}", "--application=cece", "--dry-run"]) == 0
+    )
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert _report(tmp_path / "local-root") == 1
     messages = [r.getMessage() for r in caplog.records]
-    assert "cece  not submitted" in messages
+    assert "cece     not submitted" in messages
 
 
 # ── cancel ───────────────────────────────────────────────────────────────────

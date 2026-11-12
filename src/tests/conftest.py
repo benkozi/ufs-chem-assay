@@ -292,6 +292,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     except ValidationError as exc:
         raise pytest.UsageError(str(exc)) from exc
     configure_logging(settings.log_level)
+    config.stash[_SETTINGS] = settings
     submit_only = bool(config.getoption("--submit-only"))
     resume = bool(config.getoption("--resume"))
     for flag, given in (("--submit-only", submit_only), ("--resume", resume)):
@@ -366,6 +367,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     if deferred:
         # The probes above ran; the actions belong to the evaluating session.
         logger.info("--submit-only: %s deferred to --resume", ", ".join(deferred))
+
+    if config.args and all(
+        "ufs_chem_assay" in Path(arg.split("::")[0]).parts for arg in config.args
+    ):
+        return
 
     # Selection, application, suite loading: the same sequence the CLI's
     # fetch runs (selection.resolve_suites); every failure is a usage error.

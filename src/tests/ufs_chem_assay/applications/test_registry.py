@@ -10,7 +10,6 @@ from pytest_mock import MockerFixture
 from applications.base import Application
 from applications.cece.suite import CeceSuiteConfig
 from applications.registry import (
-    DEFAULT_APPLICATION,
     REGISTRY,
     get_application,
     load_suite,
@@ -20,7 +19,6 @@ from applications.registry import (
 
 def test_registry_holds_cece_and_monetio() -> None:
     assert list(REGISTRY) == ["cece", "monetio"]
-    assert DEFAULT_APPLICATION == "cece"
     assert isinstance(get_application("cece"), Application)
     assert get_application("cece").name == "cece"
     assert isinstance(get_application("monetio"), Application)

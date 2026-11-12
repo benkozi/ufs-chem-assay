@@ -683,7 +683,7 @@ def test_session_output_root_four_shapes(tmp_path: Path) -> None:
     try:
         one = load_run_config(TEMPLATES_DIR / "local.yaml")
         (nameless,) = one.resolved_sessions()
-        assert one.session_output_root(cece, nameless) == "ufs-chem-assay-output"
+        assert one.session_output_root(cece, nameless) == "ufs-chem-assay-output/cece"
         two_apps = load_run_config(
             run_config_file(
                 tmp_path,

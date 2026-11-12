@@ -135,6 +135,7 @@ def _pytest(
             "-m",
             "pytest",
             str(_DRIVER_COMBOS),
+            "--application=cece",
             "-q",
             "-p",
             "no:cacheprovider",

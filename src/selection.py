@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, InstanceOf
 
 from applications.base import Application, ApplicationSettings
 from applications.registry import (
-    DEFAULT_APPLICATION,
+    REGISTRY,
     get_application,
     load_suite,
     peek_application,
@@ -88,8 +88,15 @@ def resolve_suites(settings: Settings, suite_option: str | None) -> ResolvedSuit
     loaded suites of one application. ValueError on every failure: no match,
     unknown or disagreeing applications, an unloadable suite, a missing
     config_path, or two selected suites sharing a name."""
-    default_app = get_application(settings.application or DEFAULT_APPLICATION)
-    option = suite_option or default_app.default_suite
+    if suite_option is not None:
+        option = suite_option
+    elif settings.application is not None:
+        option = get_application(settings.application).default_suite
+    else:
+        raise ValueError(
+            "pass --application or --suite-config "
+            f"(registered applications: {sorted(REGISTRY)})"
+        )
     suite_paths = select_suites(
         option, [*settings.suite_config_search_path, BUILTIN_CONFIG_DIR]
     )

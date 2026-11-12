@@ -32,7 +32,8 @@ def test_templates_live_in_config() -> None:
 @pytest.mark.parametrize("name", ["local.yaml", "ursa.yaml"])
 def test_templates_carry_the_applications_map(name: str) -> None:
     raw = yaml.safe_load((TEMPLATES_DIR / name).read_text())
-    assert list(raw["applications"]) == ["cece"]
+    expected = ["monetio", "cece"] if name == "local.yaml" else ["cece"]
+    assert list(raw["applications"]) == expected
     assert "cece" not in raw  # the old top-level section is gone
     assert "example" not in (TEMPLATES_DIR / name).read_text().lower()  # retired
     assert raw["applications"]["cece"]["ref"] == "develop"
