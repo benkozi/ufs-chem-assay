@@ -76,7 +76,7 @@ def _build(
         *modules,
         f"uv venv --allow-existing {q(venv)}",
         f"uv pip install --python {q(python_bin)} -e {q(target)}",
-        f"{q(monetio_bin)} --version",
+        f"{q(monetio_bin)} --help >/dev/null",
     ]
 
 

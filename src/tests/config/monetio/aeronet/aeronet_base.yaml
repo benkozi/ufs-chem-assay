@@ -29,7 +29,7 @@ cases:
     files:
       - data/aeronet/aeronet-alm15-siz-cart-site-200206-200305.txt
     variables:
-      - bin_0_050000
+      - '0.050000'
       - latitude
       - longitude
     kwargs:

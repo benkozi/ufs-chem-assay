@@ -11,16 +11,18 @@ YAML configs and each runs in its own Docker container, followed by
 per-combo assertions on the output (exit code, file counts/names,
 attributes) and a statistics/plotting analysis step. Everything that knows
 the application under test — its driver config, sweep schema, image,
-checkout, data directory — lives in an application adapter; CECE is the
-shipped one (`application: cece`, the default in every suite and run
-config), and a session runs one application. Configurations the harness
-carries live under `src/tests/config/<application>/<configuration>/`, each
+checkout, data directory — lives in an application adapter; CECE (`application: cece`,
+the default in every suite and run config) and MONETIO (`application: monetio`)
+are the shipped adapters, and a session runs one application. Configurations the
+harness carries live under `src/tests/config/<application>/<configuration>/`, each
 beside the suites that sweep it: `cece/maccity/` (a 4x5 CO configuration
-over one public input; the default suite and the CI integration run) and
+over one public input; the default suite and the CI integration run),
 `cece/gcafs-anthro/` (the global anthropogenic use case — 0.25°, 25 hourly
 steps, 32 streams over seven placed inputs; Ursa only, see
-[docs/gcafs-anthro-runbook.md](docs/gcafs-anthro-runbook.md)). Design
-rationale lives in [design/design.md](design/design.md).
+[docs/gcafs-anthro-runbook.md](docs/gcafs-anthro-runbook.md)), and
+`monetio/aeronet/` (a native Python CLI configuration reading AERONET
+direct-sun AOD and inversion datasets into CF-1.8 / UGRID-1.0 `(time, node)`
+NetCDF files). Design rationale lives in [design/design.md](design/design.md).
 
 ## Prerequisites
 
@@ -75,6 +77,7 @@ root: the variable, `.env`, or the run config (below) supplies it.
 uv run pytest                      # everything: integration + runner harness tests
 uv run pytest --application=cece   # only this application's suites (the default suite when
                                    #   no --suite-config is given); a session runs one application
+ASSAY_RUNTIME=native uv run pytest --application=monetio  # runs monetio's default aeronet-suite.yaml natively
 uv run pytest -vs                  # show each driver's output as it runs
 uv run pytest -x                   # fail fast: stop at the first failure
 uv run pytest -k map-consd         # run a subset by combo name
@@ -912,7 +915,7 @@ all — the AWS CLI reads its own configuration (see
 `ASSAY_*` (the pre-adapter `CECE_*` spellings are accepted as fallbacks
 and go away when the second application adapter lands; `ASSAY_X` wins over
 `CECE_X` when both are set), and each **application's** settings under its
-own prefix — `CECE_*` for the CECE adapter.
+own prefix — `CECE_*` for the CECE adapter and `MONETIO_*` for the MONETIO adapter.
 
 Harness-wide:
 
@@ -948,6 +951,15 @@ The CECE adapter:
 | `CECE_DOCKER_IMAGE`             | container image (docker runtime)               | `cece/cece-dev`                  |
 | `CECE_DRIVER_PATH`              | driver path, relative to the checkout          | `./build/cece_standalone_driver` |
 | `CECE_MODULEFILE`               | modulefile each driver job loads before the driver (slurm runtime; recorded in `run.yaml`) | unset |
+
+The MONETIO adapter:
+
+| Env var                         | Meaning                                        | Default                          |
+|---------------------------------|------------------------------------------------|----------------------------------|
+| `MONETIO_ROOT_DIR`              | host `monetio` checkout root                   | unset — required to run the CLI  |
+| `MONETIO_DOCKER_IMAGE`          | container image (docker runtime)               | `monetio/monetio-dev`            |
+| `MONETIO_DRIVER_PATH`           | CLI executable path, relative to the checkout  | `.venv/bin/monetio`              |
+| `MONETIO_MODULEFILE`            | modulefile each driver job loads before the CLI (slurm runtime; recorded in `run.yaml`) | unset |
 
 There is no AWS table: the AWS CLI's own `~/.aws/credentials`,
 `~/.aws/config`, and `AWS_*` variables apply unchanged to

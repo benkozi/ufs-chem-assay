@@ -27,7 +27,15 @@ locations, run as shipped by the `gcafs-anthro` session of `config/ursa.yaml`, U
 `design/feat/20261019-1447-global-anthro-use-case/20261019-1447-global-anthro-use-case.md`,
 which also brought `grid.nz`, the driver-level AMIO input knobs, stream
 `time_label`, and the full cadence set into the CECE model, source-less
-inputs, and the job geometry below). The
+inputs, and the job geometry below; `monetio/aeronet/` since 2026-11-12: the
+second application adapter (`application: monetio`), exercising `monetio load
+aeronet` natively via `<MONETIO_ROOT_DIR>/.venv/bin/monetio` over S3-staged
+AERONET direct-sun AOD and inversion datasets into CF-1.8 / UGRID-1.0 `(time,
+node)` NetCDF outputs — see
+`design/feat/20261112-0853-initial-monetio/20261112-0853-initial-monetio.md`,
+which also introduced `Application.driver_arguments`, UGRID `node` spatial
+variable detection in `analysis.py`, non-numeric variable comparison in
+`comparison.py`, and per-session `runtime` overrides in `RunConfig`). The
 earlier notion of an application's shipped "examples" — run verbatim
 through its own tooling, or wrapped as suites — is retired entirely; see
 `design/feat/20261007-1555-retire-examples/20261007-1555-retire-examples.md`.
@@ -1128,6 +1136,14 @@ All code under `src/`; the project is `uv`-managed with its own
         combos.py         # dimensions, build_config (cece.log), effective-parameter rows
         assertions.py     # expected count/filenames/variable names, STANDARD_DIMENSIONS
         cli.py            # CeceRunSection, source/build stage bodies
+      monetio/
+        application.py    # MonetioApplication: CLI driver_arguments, volatile history attr
+        config.py         # MonetioConfig (source, files, output, variables, kwargs, cases)
+        settings.py       # MonetioSettings (MONETIO_*), .venv/bin/monetio default
+        suite.py          # MonetioSweep, MonetioSweepSelector, MonetioSuiteConfig
+        combos.py         # case/freq dimensions, build_config, effective-parameter rows
+        assertions.py     # expected count/filenames, UGRID (time, node) standard dims
+        cli.py            # MonetioRunSection, uv venv + editable install stage bodies
     models/
       base.py             # StrictModel: extra="forbid" base for all config models
       suite_config.py     # generic SuiteConfig, InputFile, Assertions, Analysis, Plotting,
@@ -1192,10 +1208,13 @@ All code under `src/`; the project is `uv`-managed with its own
                                           #   regex sweeps; on-demand, run-only
         cece/gcafs-anthro/gcafs-anthro.yaml           # the global anthropogenic use case (issue #33)
         cece/gcafs-anthro/gcafs-anthro-suite.yaml     # sweep-less; seven placed inputs; Ursa only
+        monetio/aeronet/aeronet_base.yaml             # base monetio AERONET configuration + cases
+        monetio/aeronet/aeronet-suite.yaml            # AERONET AOD15 + ALM15-SIZ suite (native)
         <application>/<configuration>/benchmarks.csv  # the committed benchmark rows (append-only,
                                           #   written by --record-benchmarks / record-benchmarks)
       ufs_chem_assay/     # the harness's own tests: mocked process call, no docker
         applications/cece/  # the CECE adapter's tests (test_cece_*.py)
+        applications/test_monetio.py  # the MONETIO adapter and aeronet suite tests
         stubs.py          # an inert second adapter for several-application tests
       conftest.py         # options, session fixture (generate yamls), param fixture
       test_driver_combos.py               # integration tests (real docker)

@@ -11,11 +11,11 @@ inputs:
   - url: s3://ufs-chem/inputs/monetio/aeronet/aeronet-aod15-cart-site-200006.txt
     public: false
     dst: aeronet/aeronet-aod15-cart-site-200006.txt
-    sha256: 653599c2f0d5b54ca5f0218015ed7a4fdbe44f32040a4ffcb9da457da836f99f
+    sha256: 71db20e4b91390cfd0d21af2dd0a490ba341dbb229ae9e6524a3ef1eb7a6031c
   - url: s3://ufs-chem/inputs/monetio/aeronet/aeronet-alm15-siz-cart-site-200206-200305.txt
     public: false
     dst: aeronet/aeronet-alm15-siz-cart-site-200206-200305.txt
-    sha256: dcf37a4361e80b23809093c4397023c6c025d8f02875fc4e94b83dc863421cb9
+    sha256: d943c96f6fdb7e83b5717a7a61008e17b5650d9b483265043a027ad9d933a633
 assertions:
   expected_nc_file_count:
   validate_filenames: true
@@ -31,6 +31,15 @@ assertions:
         exact: false
         expected:
           units: degrees_east
+baseline_comparisons:
+  - sweep_selector:
+      case: aod15
+    ulid: 01M78KZ51F3PJC51N5GQCSYTTB
+    plot: false
+  - sweep_selector:
+      case: alm15-siz
+    ulid: 01M78KZ51F3PJC51N5GQCSYTTA
+    plot: false
 analysis:
   compute_descriptive_stats: true
 plotting:

@@ -10,6 +10,11 @@ from applications.monetio.config import MonetioConfig
 
 STANDARD_DIMENSIONS = ("time", "node")
 
+# Static coordinate/metadata variables on `(node,)` or `(time,)` rather than `(time, node)`.
+_COORDINATE_VARIABLES = frozenset(
+    {"latitude", "longitude", "lat", "lon", "time", "siteid"}
+)
+
 # monetio's BaseReader.log_history() stamps wall-clock `datetime.now()` into
 # the global `history` attribute on every read.
 VOLATILE_GLOBAL_ATTRIBUTES = ("history",)
@@ -26,5 +31,5 @@ def expected_output_filenames(config: MonetioConfig) -> set[str]:
 
 
 def output_variable_names(config: MonetioConfig) -> list[str]:
-    """Expected output variables configured to check against `STANDARD_DIMENSIONS`."""
-    return list(config.variables)
+    """Expected observation output variables configured to check against `STANDARD_DIMENSIONS`."""
+    return [v for v in config.variables if v not in _COORDINATE_VARIABLES]

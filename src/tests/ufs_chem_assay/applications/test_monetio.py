@@ -173,7 +173,7 @@ def test_monetio_assertions_and_fingerprint(
     assert (
         app.output_variable_names(config)
         == output_variable_names(config)
-        == ["aod_500nm", "latitude", "longitude"]
+        == ["aod_500nm"]
     )
 
     a = tmp_path / "a.yaml"
@@ -441,7 +441,7 @@ def test_monetio_stage_lines_source_build_and_data(tmp_path: Path) -> None:
     assert any("module load monetio_ursa" in line for line in build_lines)
     assert any("uv venv --allow-existing" in line for line in build_lines)
     assert any("[viz,test]" in line for line in build_lines)
-    assert any("--version" in line for line in build_lines)
+    assert any("--help" in line for line in build_lines)
 
     # Build without extras or modulefile
     build_plain = stage_lines(Stage.BUILD, view, section, checkout)
