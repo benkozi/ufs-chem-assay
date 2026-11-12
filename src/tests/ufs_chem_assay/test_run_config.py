@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from applications.base import ApplicationRunSection, ApplicationSettings
 from applications.cece.cli import CeceRunSection
+from applications.monetio.cli import MonetioRunSection
 from applications.registry import REGISTRY, get_application
 from cli.run_config import (
     HARNESS_ROOT,
@@ -67,6 +68,10 @@ def test_templates_list_every_accepted_key() -> None:
         assert set(raw["applications"]["cece"]) == set(CeceRunSection.model_fields), (
             name
         )
+        if name == "local.yaml":
+            assert set(raw["applications"]["monetio"]) == set(
+                MonetioRunSection.model_fields
+            )
         # Every overlay names only keys its section accepts (the commented
         # exhaustive-maccity example included: it must stay valid).
         for session, overlay in (raw.get("sessions") or {}).items():

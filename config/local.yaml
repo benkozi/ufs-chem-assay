@@ -5,10 +5,22 @@
 #   ufs-chem-assay run --config-file=config/local.yaml [--dry-run]
 # Every key is listed; command-line overrides change any of them:
 #   --override harness:suite_config=exhaustive-maccity-run-only-suite.yaml applications:cece:ref=develop
+# A commented `monetio:` entry is also listed under `applications:` — uncomment it
+# (and pass `--application monetio --override harness:suite_config=aeronet-suite.yaml harness:runtime=native`)
+# to run the AERONET suite natively against `<root_dir>/monetio`.
 platform: local
 # root_dir is derived: the parent of this harness checkout. Set it here, or pass
 # --root-dir, only if your layout differs.
 applications:  # one section per application in the run, keyed by adapter name
+  # monetio:  # uncomment to enable `monetio` with `--application monetio`
+  #   git_url: git@github.com:noaa-oar-arl/monetio.git
+  #   ref: feature/v1
+  #   clone_dir:  # default <root_dir>/monetio (MONETIO_ROOT_DIR)
+  #   update_source: false
+  #   modulefile:  # MONETIO_MODULEFILE; none locally
+  #   docker_image:  # MONETIO_DOCKER_IMAGE; null = monetio/monetio-dev (unused under native)
+  #   driver_path:  # MONETIO_DRIVER_PATH; null = .venv/bin/monetio
+  #   extras: []  # optional pyproject extras installed into <clone>/.venv
   cece:
     git_url: git@github.com:ufs-community/CECE.git
     ref: develop

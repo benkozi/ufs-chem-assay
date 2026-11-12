@@ -104,9 +104,7 @@ def build_config(
     return config
 
 
-def effective_parameters(
-    combo: Combo, config: MonetioConfig
-) -> list[ParameterRow]:
+def effective_parameters(combo: Combo, config: MonetioConfig) -> list[ParameterRow]:
     """`(target, field, value, swept)` rows for `combos.csv`."""
     swept_values = {
         (dimension.target, dimension.field): value.value

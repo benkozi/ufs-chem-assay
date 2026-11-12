@@ -69,13 +69,9 @@ def _build(
     python_bin = venv / "bin" / "python"
     monetio_bin = venv / "bin" / "monetio"
     target = (
-        f"{checkout}[{','.join(section.extras)}]"
-        if section.extras
-        else str(checkout)
+        f"{checkout}[{','.join(section.extras)}]" if section.extras else str(checkout)
     )
-    modules = (
-        _module_block(checkout, section) if section.modulefile is not None else []
-    )
+    modules = _module_block(checkout, section) if section.modulefile is not None else []
     return [
         *modules,
         f"uv venv --allow-existing {q(venv)}",

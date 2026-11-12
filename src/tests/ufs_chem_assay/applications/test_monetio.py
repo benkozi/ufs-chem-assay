@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path, PurePosixPath
 
+import pandas as pd
 import pytest
 import yaml
 from pydantic import ValidationError
@@ -41,7 +45,9 @@ from applications.monetio.suite import (
 from applications.registry import get_application, load_suite
 from combos import enumerate_combos, write_combos_csv
 from comparison import resolve_baseline_comparisons
-from platforms import Platform, Runtime
+from platforms import Runtime
+from resolution import select_suites
+from selection import BUILTIN_CONFIG_DIR
 
 
 @pytest.fixture
@@ -105,7 +111,9 @@ def aeronet_base_yaml(tmp_path: Path) -> Path:
 
 
 @pytest.mark.usefixtures("clean_monetio_env")
-def test_monetio_settings_defaults_and_env(clean_monetio_env: pytest.MonkeyPatch) -> None:
+def test_monetio_settings_defaults_and_env(
+    clean_monetio_env: pytest.MonkeyPatch,
+) -> None:
     settings = MonetioSettings()
     assert settings.root_dir is None
     assert settings.docker_image == "monetio/monetio-dev"
@@ -155,11 +163,7 @@ def test_monetio_assertions_and_fingerprint(
     config = MonetioConfig.from_yaml(aeronet_base_yaml)
 
     assert app.standard_dimensions == STANDARD_DIMENSIONS == ("time", "node")
-    assert (
-        app.volatile_global_attributes
-        == VOLATILE_GLOBAL_ATTRIBUTES
-        == ("history",)
-    )
+    assert app.volatile_global_attributes == VOLATILE_GLOBAL_ATTRIBUTES == ("history",)
     assert app.expected_output_count(config) == expected_output_count(config) == 1
     assert (
         app.expected_output_filenames(config)
@@ -282,9 +286,7 @@ def test_monetio_sweep_validation_and_empty_sweep(aeronet_base_yaml: Path) -> No
         dimensions(MonetioSweep(case=["aod15"]), base_no_cases)
 
     # Case with partial fields (no files/variables/kwargs) leaves base values untouched
-    base_partial = base.model_copy(
-        update={"cases": {"minimal": MonetioCaseConfig()}}
-    )
+    base_partial = base.model_copy(update={"cases": {"minimal": MonetioCaseConfig()}})
     (minimal_combo,) = enumerate_combos(
         dimensions(MonetioSweep(case=["minimal"]), base_partial)
     )
@@ -457,3 +459,85 @@ def test_monetio_stage_lines_source_build_and_data(tmp_path: Path) -> None:
     # Shared stages raise ValueError
     with pytest.raises(ValueError, match="shared, not the adapter's"):
         stage_lines(Stage.HARNESS, view, section, checkout)
+
+
+# ── Built-in AERONET suite & --dry-run ────────────────────────────────────────
+
+
+def test_builtin_aeronet_suite_loads_and_enumerates() -> None:
+    app = get_application("monetio")
+    (suite_path,) = select_suites("aeronet-suite.yaml", [BUILTIN_CONFIG_DIR])
+    suite = load_suite(suite_path, config_search_path=None, root_dir=None)
+    assert isinstance(suite, MonetioSuiteConfig)
+    assert suite.name == "aeronet"
+    assert suite.application == "monetio"
+    assert len(suite.inputs) == 2
+    base = MonetioConfig.from_yaml(suite.config_path)
+    combos = enumerate_combos(app.dimensions(suite.sweep, base))
+    assert [c.name for c in combos] == [
+        "monetio.case-alm15-siz",
+        "monetio.case-aod15",
+    ]
+
+
+def test_aeronet_suite_dry_run_subprocess(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[4]
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("CECE_", "MONETIO_", "ASSAY_"))
+    }
+    env["MONETIO_ROOT_DIR"] = str(tmp_path)
+    env["ASSAY_PLATFORM"] = "local"
+    env["ASSAY_RUNTIME"] = "native"
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "fabricated",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(repo_root / "src" / "tests" / "test_driver_combos.py"),
+            "--application=monetio",
+            "--suite-config=aeronet-suite.yaml",
+            "--dry-run",
+            "--combo-output-root=combo_runs",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        check=False,
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    root = tmp_path / "combo_runs"
+    manifest = yaml.safe_load((root / "run.yaml").read_text())
+    assert manifest["application"] == "monetio"
+    assert manifest["suites"][0]["application"] == "monetio"
+    assert len(manifest["inputs"]) == 2
+
+    combos = pd.read_csv(root / "combos.csv")
+    assert set(combos["application"]) == {"monetio"}
+    assert set(combos["name"]) == {"monetio.case-alm15-siz", "monetio.case-aod15"}
+    for combo_id in combos["combo_id"]:
+        assert (root / combo_id / f"{combo_id}.yaml").is_file()

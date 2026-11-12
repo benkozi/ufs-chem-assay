@@ -1,0 +1,39 @@
+# Base driver configuration for the monetio AERONET suite (see design/design.md).
+# Loaded by MonetioConfig and expanded by MonetioApplication.driver_arguments
+# into `monetio load aeronet -f ... -o ... -v ... -k ...`.
+source: aeronet
+files:
+  - data/aeronet/aeronet-aod15-cart-site-200006.txt
+output: aeronet.nc
+variables:
+  - aod_500nm
+  - latitude
+  - longitude
+kwargs:
+  product: AOD15
+  freq: 1D
+  expand2d: true
+cases:
+  aod15:
+    files:
+      - data/aeronet/aeronet-aod15-cart-site-200006.txt
+    variables:
+      - aod_500nm
+      - latitude
+      - longitude
+    kwargs:
+      product: AOD15
+      freq: 1D
+      expand2d: true
+  alm15-siz:
+    files:
+      - data/aeronet/aeronet-alm15-siz-cart-site-200206-200305.txt
+    variables:
+      - bin_0_050000
+      - latitude
+      - longitude
+    kwargs:
+      product: ALM15
+      inv_type: SIZ
+      freq: 30D
+      expand2d: true

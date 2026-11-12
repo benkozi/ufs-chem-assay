@@ -1,0 +1,42 @@
+# Test-suite configuration for monetio AERONET point datasets (see design/design.md).
+# Sweeps the two AERONET reader pathways in aeronet_base.yaml (`aod15` direct-sun
+# AOD and `alm15-siz` inversion size distribution).
+name: aeronet
+application: monetio
+config_path: aeronet_base.yaml
+timeout_s: 60
+# Inputs staged from s3://ufs-chem/inputs/monetio/aeronet/ into <MONETIO_ROOT_DIR>/data/aeronet/
+# via `uv run ufs-chem-assay fetch --application=monetio --suite-config=aeronet-suite.yaml`.
+inputs:
+  - url: s3://ufs-chem/inputs/monetio/aeronet/aeronet-aod15-cart-site-200006.txt
+    public: false
+    dst: aeronet/aeronet-aod15-cart-site-200006.txt
+    sha256: 653599c2f0d5b54ca5f0218015ed7a4fdbe44f32040a4ffcb9da457da836f99f
+  - url: s3://ufs-chem/inputs/monetio/aeronet/aeronet-alm15-siz-cart-site-200206-200305.txt
+    public: false
+    dst: aeronet/aeronet-alm15-siz-cart-site-200206-200305.txt
+    sha256: dcf37a4361e80b23809093c4397023c6c025d8f02875fc4e94b83dc863421cb9
+assertions:
+  expected_nc_file_count:
+  validate_filenames: true
+  validate_dimensions: true
+  species:
+    latitude:
+      attributes:
+        exact: false
+        expected:
+          units: degrees_north
+    longitude:
+      attributes:
+        exact: false
+        expected:
+          units: degrees_east
+analysis:
+  compute_descriptive_stats: true
+plotting:
+  enabled: false  # AERONET is a single-site UGRID (time, node) point dataset
+  gif_enabled: false
+sweep:
+  case:
+    - aod15
+    - alm15-siz

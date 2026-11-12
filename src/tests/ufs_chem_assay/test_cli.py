@@ -724,7 +724,7 @@ def test_fetch_conflicting_inputs_is_a_clean_error(
     )
     stage = mocker.patch("cli.commands.fetch.stage_inputs")
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
-        code = main(["fetch", r"--suite-config=.*-suite\.yaml"])
+        code = main(["fetch", "--application=cece", r"--suite-config=.*-suite\.yaml"])
     assert code == 1
     stage.assert_not_called()
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
