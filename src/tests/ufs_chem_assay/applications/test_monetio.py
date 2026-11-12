@@ -63,7 +63,7 @@ def clean_monetio_env(
 
 @pytest.fixture
 def aeronet_base_yaml(tmp_path: Path) -> Path:
-    path = tmp_path / "aeronet_base.yaml"
+    path = tmp_path / "aeronet.yaml"
     path.write_text(
         yaml.dump(
             {

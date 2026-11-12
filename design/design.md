@@ -1204,7 +1204,7 @@ All code under `src/`; the project is `uv`-managed with its own
                                           #   regex sweeps; on-demand, run-only
         cece/gcafs-anthro/gcafs-anthro.yaml           # the global anthropogenic use case (issue #33)
         cece/gcafs-anthro/gcafs-anthro-suite.yaml     # sweep-less; seven placed inputs; Ursa only
-        monetio/aeronet/aeronet_base.yaml             # base monetio AERONET configuration + cases
+        monetio/aeronet/aeronet.yaml                  # base monetio AERONET configuration + cases
         monetio/aeronet/aeronet-suite.yaml            # AERONET AOD15 + ALM15-SIZ suite (native)
         <application>/<configuration>/benchmarks.csv  # the committed benchmark rows (append-only,
                                           #   written by --record-benchmarks / record-benchmarks)

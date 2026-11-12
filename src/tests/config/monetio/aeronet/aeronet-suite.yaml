@@ -1,9 +1,9 @@
 # Test-suite configuration for monetio AERONET point datasets (see design/design.md).
-# Sweeps the two AERONET reader pathways in aeronet_base.yaml (`aod15` direct-sun
+# Sweeps the two AERONET reader pathways in aeronet.yaml (`aod15` direct-sun
 # AOD and `alm15-siz` inversion size distribution).
 name: aeronet
 application: monetio
-config_path: aeronet_base.yaml
+config_path: aeronet.yaml
 timeout_s: 60
 # Inputs staged from s3://ufs-chem/inputs/monetio/aeronet/ into <MONETIO_ROOT_DIR>/data/aeronet/
 # via `uv run ufs-chem-assay fetch --application=monetio --suite-config=aeronet-suite.yaml`.
