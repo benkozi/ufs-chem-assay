@@ -27,7 +27,15 @@ locations, run as shipped by the `gcafs-anthro` session of `config/ursa.yaml`, U
 `design/feat/20261019-1447-global-anthro-use-case/20261019-1447-global-anthro-use-case.md`,
 which also brought `grid.nz`, the driver-level AMIO input knobs, stream
 `time_label`, and the full cadence set into the CECE model, source-less
-inputs, and the job geometry below). The
+inputs, and the job geometry below; `monetio/aeronet/` since 2026-11-12: the
+second application adapter (`application: monetio`), exercising `monetio load
+aeronet` natively via `<MONETIO_ROOT_DIR>/.venv/bin/monetio` over S3-staged
+AERONET direct-sun AOD and inversion datasets into CF-1.8 / UGRID-1.0 `(time,
+node)` NetCDF outputs — see
+`design/feat/20261112-0853-initial-monetio/20261112-0853-initial-monetio.md`,
+which also introduced `Application.driver_arguments`, UGRID `node` spatial
+variable detection in `analysis.py`, non-numeric variable comparison in
+`comparison.py`, and per-session `runtime` overrides in `RunConfig`). The
 earlier notion of an application's shipped "examples" — run verbatim
 through its own tooling, or wrapped as suites — is retired entirely; see
 `design/feat/20261007-1555-retire-examples/20261007-1555-retire-examples.md`.
@@ -155,8 +163,7 @@ section per application, stages rendered per application, one pytest
 session each.
 
 **Two settings namespaces.** Harness-wide settings (`settings.Settings`)
-read `ASSAY_*`, with the pre-adapter `CECE_*` spellings accepted as
-fallbacks until the second adapter lands; each adapter's
+read `ASSAY_*`; each adapter's
 `ApplicationSettings` subclass (`CeceSettings`: `root_dir`, `docker_image`,
 `driver_path`, `modulefile`) reads its own prefix. Both classes ignore the
 other's keys in the shared `.env`.
@@ -707,11 +714,8 @@ Two `pydantic-settings` classes supply environment-derived configuration,
 keeping the pytest CLI for run-shaping options only (`--application` is
 the one flag that feeds a setting; see Pytest integration):
 
-- `settings.Settings` — **harness-wide**, env prefix `ASSAY_` with the
-  pre-adapter `CECE_` spellings accepted as fallbacks through layered
-  sources (init kwargs > `ASSAY_` environment > `CECE_` environment >
-  `ASSAY_` `.env` > `CECE_` `.env` > default); the fallback goes away when
-  the second adapter lands.
+- `settings.Settings` — **harness-wide**, env prefix `ASSAY_` (init kwargs >
+  `ASSAY_` environment > `ASSAY_` `.env` > default).
 - the adapter's `ApplicationSettings` subclass (`CeceSettings`, prefix
   `CECE_`) — the checkout root, image, driver path, modulefile, and the
   checkout's commit SHA for run.yaml.
@@ -1128,6 +1132,14 @@ All code under `src/`; the project is `uv`-managed with its own
         combos.py         # dimensions, build_config (cece.log), effective-parameter rows
         assertions.py     # expected count/filenames/variable names, STANDARD_DIMENSIONS
         cli.py            # CeceRunSection, source/build stage bodies
+      monetio/
+        application.py    # MonetioApplication: CLI driver_arguments, volatile history attr
+        config.py         # MonetioConfig (source, files, output, variables, kwargs, cases)
+        settings.py       # MonetioSettings (MONETIO_*), .venv/bin/monetio default
+        suite.py          # MonetioSweep, MonetioSweepSelector, MonetioSuiteConfig
+        combos.py         # case/freq dimensions, build_config, effective-parameter rows
+        assertions.py     # expected count/filenames, UGRID (time, node) standard dims
+        cli.py            # MonetioRunSection, uv venv + editable install stage bodies
     models/
       base.py             # StrictModel: extra="forbid" base for all config models
       suite_config.py     # generic SuiteConfig, InputFile, Assertions, Analysis, Plotting,
@@ -1181,7 +1193,7 @@ All code under `src/`; the project is `uv`-managed with its own
                           #   the CLI's own; one harness import (the logger)
     benchmarks.py         # BenchmarkRow, tic/toc and sacct parsing, the three benchmarks.csv writers
     outputs.py            # upload-output / download-output: a run's root <-> <store>/<run_id>/
-    settings.py           # harness-wide pydantic-settings (ASSAY_*, CECE_* fallback)
+    settings.py           # harness-wide pydantic-settings (ASSAY_*)
     tests/
       config/             # <application>/<configuration>/: the configuration's files
                           #   and the *-suite.yaml files that sweep it, side by side
@@ -1192,10 +1204,13 @@ All code under `src/`; the project is `uv`-managed with its own
                                           #   regex sweeps; on-demand, run-only
         cece/gcafs-anthro/gcafs-anthro.yaml           # the global anthropogenic use case (issue #33)
         cece/gcafs-anthro/gcafs-anthro-suite.yaml     # sweep-less; seven placed inputs; Ursa only
+        monetio/aeronet/aeronet.yaml                  # base monetio AERONET configuration + cases
+        monetio/aeronet/aeronet-suite.yaml            # AERONET AOD15 + ALM15-SIZ suite (native)
         <application>/<configuration>/benchmarks.csv  # the committed benchmark rows (append-only,
                                           #   written by --record-benchmarks / record-benchmarks)
       ufs_chem_assay/     # the harness's own tests: mocked process call, no docker
         applications/cece/  # the CECE adapter's tests (test_cece_*.py)
+        applications/test_monetio.py  # the MONETIO adapter and aeronet suite tests
         stubs.py          # an inert second adapter for several-application tests
       conftest.py         # options, session fixture (generate yamls), param fixture
       test_driver_combos.py               # integration tests (real docker)

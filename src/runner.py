@@ -119,11 +119,20 @@ def render_job_script(
 
 
 def driver_command(
-    app_settings: ApplicationSettings, driver_yaml: PurePosixPath
+    app_settings: ApplicationSettings,
+    driver_yaml: PurePosixPath,
+    *,
+    app: Application | None = None,
+    host_yaml: Path | None = None,
 ) -> list[str]:
     """The driver invocation as the job (or host process) runs it, relative
     to the checkout it runs in."""
-    return [app_settings.driver_path, str(driver_yaml)]
+    args = (
+        [str(driver_yaml)]
+        if app is None
+        else app.driver_arguments(driver_yaml, host_yaml=host_yaml)
+    )
+    return [app_settings.driver_path, *args]
 
 
 def job_script_path(out_path: Path) -> Path:
@@ -137,6 +146,9 @@ def write_job_script(
     driver_yaml: PurePosixPath,
     out_path: Path,
     timeout_s: int,
+    *,
+    app: Application | None = None,
+    host_yaml: Path | None = None,
 ) -> Path:
     """Render and write the combo's job script from the settings; returns
     its path. Idempotent — the dry run writes it as a recorded artifact and
@@ -153,7 +165,10 @@ def write_job_script(
             modulefile=app_settings.modulefile,
             env=settings.job_env_pairs,
             command=" ".join(
-                shlex.quote(part) for part in driver_command(app_settings, driver_yaml)
+                shlex.quote(part)
+                for part in driver_command(
+                    app_settings, driver_yaml, app=app, host_yaml=host_yaml
+                )
             ),
             srun_args=settings.srun_args,
         )
@@ -243,6 +258,7 @@ def build_command(
     output_mount: tuple[Path, PurePosixPath] | None = None,
     *,
     job_script: Path | None = None,
+    host_yaml: Path | None = None,
 ) -> list[str]:
     """The command the harness runs for one combination, per settings.runtime.
 
@@ -257,13 +273,17 @@ def build_command(
     if settings.runtime is Runtime.NATIVE:
         assert app_settings.root_dir is not None  # guarded at collection
         driver = app_settings.root_dir / app_settings.driver_path
-        return [*settings.launcher_argv, str(driver), str(driver_yaml)]
+        return [
+            *settings.launcher_argv,
+            str(driver),
+            *app.driver_arguments(driver_yaml, host_yaml=host_yaml),
+        ]
     if settings.runtime is Runtime.SLURM:
         assert job_script is not None, "slurm submits a rendered job script"
         return submission_command(job_script)
     return [
         *docker_prefix(app_settings, app.container_workdir, output_mount),
-        *driver_command(app_settings, driver_yaml),
+        *driver_command(app_settings, driver_yaml, app=app, host_yaml=host_yaml),
     ]
 
 
@@ -283,6 +303,8 @@ def run_driver(
     out_path: Path,
     timeout_s: int,
     output_mount: tuple[Path, PurePosixPath] | None = None,
+    *,
+    host_yaml: Path | None = None,
 ) -> DriverExecution:
     """Run one driver invocation (a fresh container, a host process, or a
     Slurm job); returns what the runner knows about the launch (the job id
@@ -305,7 +327,12 @@ def run_driver(
             "submit_driver_job and evaluates with finish_driver_job"
         )
     command = build_command(
-        settings, app, app_settings, driver_yaml, output_mount=output_mount
+        settings,
+        app,
+        app_settings,
+        driver_yaml,
+        output_mount=output_mount,
+        host_yaml=host_yaml,
     )
     cwd = app_settings.root_dir if settings.runtime is Runtime.NATIVE else None
     tic = _clock_line("tic")
@@ -330,12 +357,23 @@ def submit_driver_job(
     driver_yaml: PurePosixPath,
     out_path: Path,
     timeout_s: int,
+    *,
+    app: Application | None = None,
+    host_yaml: Path | None = None,
 ) -> tuple[Path, str]:
     """The first half of a slurm driver call: write the combo's job script
     (`<combo_id>.sbatch`, kept beside the yaml and out so the job is
     reproducible by hand) and submit it; returns the script and the job
     id. Nothing waits: the job is the ledger's from here (jobs.py)."""
-    script = write_job_script(settings, app_settings, driver_yaml, out_path, timeout_s)
+    script = write_job_script(
+        settings,
+        app_settings,
+        driver_yaml,
+        out_path,
+        timeout_s,
+        app=app,
+        host_yaml=host_yaml,
+    )
     return script, submit_job(script)
 
 

@@ -1,14 +1,10 @@
 """Harness-wide settings: everything that is about the machine, the runtime,
 and the session — never about one application. Application settings (the
 checkout, image, driver, modulefile) live on each adapter's
-ApplicationSettings subclass under its own prefix (CECE_*).
+ApplicationSettings subclass under its own prefix (e.g. CECE_*, MONETIO_*).
 
-Environment prefix ASSAY_, with the historical CECE_ spellings accepted as
-fallbacks until the second adapter lands (Phase C): ASSAY_X beats CECE_X
-within a source, and the environment beats a cwd-relative .env file as
-before (init kwargs > ASSAY_ env > CECE_ env > ASSAY_ .env > CECE_ .env >
-field default). Frozen: constructed once at sessionstart and read-only
-thereafter.
+Environment prefix ASSAY_ (init kwargs > ASSAY_ env > ASSAY_ .env > field
+default). Frozen: constructed once at sessionstart and read-only thereafter.
 """
 
 import os
@@ -20,10 +16,7 @@ from typing import Annotated
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
-    DotEnvSettingsSource,
-    EnvSettingsSource,
     NoDecode,
-    PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
 
@@ -198,31 +191,6 @@ class Settings(BaseSettings):
             "environment; per-machine, never in a suite"
         ),
     )
-
-    @classmethod
-    def settings_customise_sources(
-        cls,
-        settings_cls: type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
-    ) -> tuple[PydanticBaseSettingsSource, ...]:
-        # Highest first. The legacy sources read the same environment and the
-        # same .env file under the CECE_ prefix; a value present under both
-        # spellings resolves to ASSAY_ within a source.
-        return (
-            init_settings,
-            env_settings,
-            EnvSettingsSource(settings_cls, env_prefix=CONVENTIONS.legacy_env_prefix),
-            dotenv_settings,
-            DotEnvSettingsSource(
-                settings_cls,
-                env_file=CONVENTIONS.env_file,
-                env_prefix=CONVENTIONS.legacy_env_prefix,
-            ),
-            file_secret_settings,
-        )
 
     @model_validator(mode="before")
     @classmethod

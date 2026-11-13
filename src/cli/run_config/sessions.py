@@ -26,7 +26,7 @@ class SessionOverlay(StrictModel):
 
     harness: dict[str, object] = Field(
         default_factory=dict,
-        description="harness: keys this session overrides (runtime is config-wide and refused)",
+        description="harness: keys this session overrides",
     )
     slurm: dict[str, object] = Field(
         default_factory=dict,

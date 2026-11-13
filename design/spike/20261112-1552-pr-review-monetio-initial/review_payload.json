@@ -1,0 +1,74 @@
+{
+  "commit_id": "4241e200d56cc01bc1d8c158ba7b03365e7aae3e",
+  "body": "Machine-generated comments by [ufs-chem-pr-review-mcp](https://github.com/benkozi/ufs-chem-pr-review-mcp) @ ef332888632dd4d4afa20891a1319da37bfedf0f\n\nPending code review (9 inline diff comment(s), 1 file/out-of-diff finding(s)).\n\n### File-Level & Out-of-Diff Findings\n\n#### `.github/workflows/integration.yaml:183-186`\n\n**[P1 - Major] CI integration workflow does not exercise `monetio` or `aeronet-suite.yaml`**\n\n**Testing: `monetio` and `aeronet-suite.yaml` have no end-to-end CI execution**\n\n`ci/tests` only runs `src/tests/ufs_chem_assay` with mocked driver subprocesses, and `integration/simple-macci` only stages and runs `simple-maccity-suite.yaml` against `cece`. Consequently, the new `MonetioApplication` adapter, `aeronet-suite.yaml` S3 input staging, and real `monetio load aeronet` execution are unverified in CI.\n\n**Suggested fix:** Add an integration job (or matrix entry) in `.github/workflows/integration.yaml` that installs `monetio` natively and runs `aeronet-suite.yaml` (or document the follow-up issue if private S3 inputs block public PR runners).\n\n**Test:** Trigger the integration workflow on a PR and verify `pytest src/tests/test_driver_combos.py --application=monetio --suite-config=aeronet-suite.yaml` completes with exit code 0.",
+  "comments": [
+    {
+      "path": "src/applications/monetio/application.py",
+      "line": 55,
+      "side": "RIGHT",
+      "start_line": 49,
+      "start_side": "RIGHT",
+      "body": "**[P0 - Blocker] `MonetioApplication.driver_arguments` fails under `Runtime.DOCKER`**\n\n**Runtime: `driver_arguments` cannot resolve container-scoped `driver_yaml` paths under Docker**\n\nIn `Runtime.DOCKER` (the default for `platform: local` in `config/local.yaml`), `runner.build_command` calls `driver_command(app_settings, driver_yaml, app=app)` with a container path such as `/work/.../combo.yaml` or `/assay-output/.../combo.yaml`. `_resolve_yaml_path` checks `Path(driver_yaml).is_file()` on the host (which is `False`) and then computes `Path(root) / Path(driver_yaml)`, which in `pathlib` discards `Path(root)` whenever `driver_yaml` is absolute, causing `MonetioConfig.from_yaml(...)` to raise `FileNotFoundError` before `docker run` starts. Additionally, reading `os.environ.get(\"MONETIO_ROOT_DIR\")` directly misses `MONETIO_ROOT_DIR` when it is configured only in `.env`.\n\n**Suggested fix:** Pass the host `Path` (or the already-loaded `DriverConfig` from `GeneratedCombo`) into `Application.driver_arguments` from `runner.driver_command` and `runner.build_command` so `MonetioApplication.driver_arguments` never has to map a container path back to the host.\n\n**Test:** Add a test in `src/tests/ufs_chem_assay/applications/test_monetio.py` that calls `build_command` with `Runtime.DOCKER`, `MonetioApplication()`, and a container-scoped `PurePosixPath(\"/work/ufs-chem-assay-output/01JB/01JB.yaml\")` (plus `/assay-output/...`) while the generated YAML exists only under `tmp_path` on the host."
+    },
+    {
+      "path": "src/tests/config/monetio/aeronet/benchmarks.csv",
+      "line": 3,
+      "side": "RIGHT",
+      "start_line": 2,
+      "start_side": "RIGHT",
+      "body": "**[P1 - Major] Committed `benchmarks.csv` records `baseline_state=local` from a dirty commit**\n\n**Provenance: `benchmarks.csv` was recorded from a `-dirty` checkout with `baseline_state=local`**\n\nBoth rows in `src/tests/config/monetio/aeronet/benchmarks.csv` record `harness_commit=7037213d8c25f62e34a105f884571ab3badb3707-dirty` and `baseline_state=local` rather than published S3 baselines. Committed benchmark histories are meant to anchor reproducible runs against clean commits and published baselines.\n\n**Suggested fix:** Re-record `src/tests/config/monetio/aeronet/benchmarks.csv` from a clean commit against the published S3 baselines (`01M78KZ51F3PJC51N5GQCSYTTA` and `01M78KZ51F3PJC51N5GQCSYTTB`), or remove `benchmarks.csv` from the PR until baselines are published.\n\n**Test:** Verify `harness_commit` in `src/tests/config/monetio/aeronet/benchmarks.csv` has no `-dirty` suffix and `baseline_state` is `published` (or `git ls-files src/tests/config/monetio/aeronet/benchmarks.csv` is empty if deferred)."
+    },
+    {
+      "path": "src/comparison.py",
+      "line": 266,
+      "side": "RIGHT",
+      "start_line": 257,
+      "start_side": "RIGHT",
+      "body": "**[P2 - Moderate] Non-numeric comparison treats `NaT != NaT` as mismatched**\n\n**Correctness: `real_arr != base_arr` flags identical `NaT` timestamps as mismatches**\n\nIn `_compare_variable`, `datetime64` coordinate arrays (such as `time`) are not `np.number` dtypes and therefore enter the new non-numeric branch. Because NumPy evaluates `NaT != NaT` as `True`, any identical missing timestamp in a `datetime64` array will be reported as a data mismatch.\n\n**Suggested fix:** Mask out positions where both arrays are `NaT` when both dtypes are `np.datetime64` before counting mismatches.\n\n**Test:** Add a case to `src/tests/ufs_chem_assay/test_comparison.py` comparing two `datetime64[ns]` `DataArray`s containing `np.datetime64(\"NaT\")` and assert `data_match is True` and `n_mismatched == 0`.\n\n````suggestion\n    if not (\n        np.issubdtype(realization.dtype, np.number)\n        and np.issubdtype(baseline.dtype, np.number)\n    ):\n        real_arr = np.asarray(realization.values)\n        base_arr = np.asarray(baseline.values)\n        both_na = (\n            np.isnat(real_arr) & np.isnat(base_arr)\n            if np.issubdtype(real_arr.dtype, np.datetime64)\n            and np.issubdtype(base_arr.dtype, np.datetime64)\n            else False\n        )\n        mismatches = int(np.sum((real_arr != base_arr) & ~both_na))\n````"
+    },
+    {
+      "path": "src/applications/monetio/cli.py",
+      "line": 59,
+      "side": "RIGHT",
+      "start_line": 28,
+      "start_side": "RIGHT",
+      "body": "**[P2 - Moderate] Ponytail: Duplicate `_module_block` and `_source` across `monetio/cli.py` and `cece/cli.py`**\n\n**Simplification: `_module_block` and `_source` duplicate `src/applications/cece/cli.py`**\n\n`_module_block` (lines 28–36) is identical to `src/applications/cece/cli.py:38-50`, and `_source` (lines 39–59) duplicates `src/applications/cece/cli.py:53-79` except for `--recurse-submodules` and the `extern/helm/libs` guard. Keeping two copies of git clone/fetch/checkout and Lmod module setup invites drift between adapters.\n\n**Suggested fix:** Extract shared `module_block(checkout, section)` and `source_lines(checkout, section, *, recurse_submodules=False)` helpers into `src/cli/stages.py` and call them from both `cece/cli.py` and `monetio/cli.py`.\n\n**Test:** Run `uv run pytest src/tests/ufs_chem_assay/applications/test_monetio.py src/tests/ufs_chem_assay/test_stages.py` to confirm rendered `SOURCE` and `BUILD` scripts are unchanged."
+    },
+    {
+      "path": "src/applications/monetio/cli.py",
+      "line": 66,
+      "side": "RIGHT",
+      "body": "**[P2 - Moderate] Ponytail: Hardcoded `\"monetio/monetio-dev\"` default duplicates `MonetioSettings.docker_image`**\n\n**Simplification: `docker_image` fallback duplicates `MonetioSettings.docker_image`**\n\n`_build` falls back to the hardcoded literal `\"monetio/monetio-dev\"` when `section.docker_image` is `None`, duplicating the default already declared on `MonetioSettings.docker_image` in `src/applications/monetio/settings.py:18-21`. If the default image changes or `MONETIO_DOCKER_IMAGE` is configured in `.env`, `Stage.BUILD` and `runner.docker_prefix` can diverge.\n\n**Suggested fix:** Read the default from `MonetioSettings().docker_image` instead of repeating the string literal.\n\n**Test:** Run `uv run pytest src/tests/ufs_chem_assay/applications/test_monetio.py -k stage_lines` with `MONETIO_DOCKER_IMAGE` set and unset.\n\n````suggestion\n        image = section.docker_image or MonetioSettings().docker_image\n````"
+    },
+    {
+      "path": "src/applications/monetio/assertions.py",
+      "line": 55,
+      "side": "RIGHT",
+      "start_line": 53,
+      "start_side": "RIGHT",
+      "body": "**[P2 - Moderate] Ponytail: Redundant `output_variable_names()` wrapper re-instantiates `MonetioAssertionSpec`**\n\n**Simplification: `assertions.output_variable_names()` wraps `_ASSERTION_SPEC.output_variable_names()` unnecessarily**\n\n`MonetioApplication` already instantiates `_ASSERTION_SPEC = assertions.MonetioAssertionSpec()` at module scope (`src/applications/monetio/application.py:57`), yet `MonetioApplication.output_variable_names` calls `assertions.output_variable_names()`, which constructs a fresh `MonetioAssertionSpec()` on every invocation.\n\n**Suggested fix:** Call `_ASSERTION_SPEC.output_variable_names(_config(config))` directly in `src/applications/monetio/application.py:97` and delete `assertions.output_variable_names`.\n\n**Test:** Run `uv run pytest src/tests/ufs_chem_assay/applications/test_monetio.py -k assertions`."
+    },
+    {
+      "path": "src/cli/selectors.py",
+      "line": 69,
+      "side": "RIGHT",
+      "start_line": 56,
+      "start_side": "RIGHT",
+      "body": "**[P2 - Moderate] Ponytail: Duplicated `unknown` application validation in `selected_applications`**\n\n**Simplification: `unknown` application check is duplicated across both branches**\n\nThe `unknown = sorted(...)` check and `ValueError` raise appear identically in both the `\"all\" in tokens` branch and the normal branch. Validating `unknown = sorted((set(tokens) - {\"all\"}) - set(config.applications))` once before the `if \"all\" in tokens:` branch removes 6 lines and keeps one error path.\n\n**Suggested fix:** Consolidate the `unknown` check before checking `\"all\" in tokens`.\n\n**Test:** Run `uv run pytest src/tests/ufs_chem_assay/test_cli.py -k application`.\n\n````suggestion\n    unknown = sorted((set(tokens) - {\"all\"}) - set(config.applications))\n    if unknown:\n        raise ValueError(\n            f\"--application {unknown} not in the run config's applications \"\n            f\"({config.application_names})\"\n        )\n    if \"all\" in tokens:\n        return [get_application(name) for name in config.application_names]\n````"
+    },
+    {
+      "path": "README.md",
+      "line": 15,
+      "side": "RIGHT",
+      "start_line": 14,
+      "start_side": "RIGHT",
+      "body": "**[P3 - Minor] Stale `README.md` prose claims CECE is the default in every run config**\n\n**Docs: `README.md` still states `cece` is the default in every suite and run config**\n\nThis PR removed `DEFAULT_APPLICATION` from `registry.py`/`selection.py` and made `--application` required on `ufs-chem-assay run`, so `cece` is no longer defaulted in run configs or CLI suite selection.\n\n**Suggested fix:** Clarify that `cece` is only the default `application:` field in `SuiteConfig` YAML files, while CLI commands require `--application` (or `--suite-config`).\n\n**Test:** Verify `uv run pytest src/tests/ufs_chem_assay/test_user_docs.py` passes.\n\n````suggestion\ncheckout, data directory — lives in an application adapter; CECE (`application: cece`,\nthe default `SuiteConfig` application) and MONETIO (`application: monetio`)\n````"
+    },
+    {
+      "path": "src/tests/config/monetio/aeronet/aeronet.yaml",
+      "line": 3,
+      "side": "RIGHT",
+      "body": "**[P3 - Minor] `aeronet.yaml` header comment mentions `-v` flags not emitted by `driver_arguments`**\n\n**Docs: Header comment lists `-v ...` flag that `MonetioApplication.driver_arguments` does not pass**\n\n`MonetioApplication.driver_arguments` emits `monetio load <source> -f ... -o ... -k ...` and uses `variables:` only for harness output assertions, not `-v` CLI flags.\n\n**Suggested fix:** Remove `-v ...` from the header comment in `src/tests/config/monetio/aeronet/aeronet.yaml`.\n\n**Test:** Compare `src/tests/config/monetio/aeronet/aeronet.yaml:3` against `MonetioApplication.driver_arguments` in `src/applications/monetio/application.py:99-107`.\n\n````suggestion\n# into `monetio load aeronet -f ... -o ... -k ...`.\n````"
+    }
+  ]
+}

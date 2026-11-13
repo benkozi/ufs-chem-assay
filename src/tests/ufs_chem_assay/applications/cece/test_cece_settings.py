@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from applications.cece.settings import CONTAINER_WORKDIR, ENV_PREFIX, CeceSettings
+from applications.cece.settings import CeceSettings
 
 
 @pytest.fixture
@@ -33,8 +33,8 @@ def test_defaults() -> None:
     assert settings.docker_image == "cece/cece-dev"
     assert settings.driver_path == "./build/cece_standalone_driver"
     assert settings.modulefile is None
-    assert ENV_PREFIX == "CECE_"
-    assert str(CONTAINER_WORKDIR) == "/work"
+    assert CeceSettings.env_prefix == "CECE_"
+    assert str(CeceSettings.container_workdir) == "/work"
 
 
 def test_root_dir_reads_cece_root_dir_env(clean_cece_env: pytest.MonkeyPatch) -> None:

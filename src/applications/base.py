@@ -64,6 +64,8 @@ class ApplicationSettings(BaseSettings):
 
     model_config = SettingsConfigDict(frozen=True, env_file=".env", extra="ignore")
 
+    container_workdir: ClassVar[PurePosixPath] = PurePosixPath("/work")
+
     root_dir: Path | None = Field(
         None,
         description=(
@@ -234,6 +236,19 @@ class Application(ABC):
         """Where write_config put a combination's generated configuration —
         the same convention read back from a published baseline directory."""
         return combo_dir / f"{combo_id}.yaml"
+
+    def driver_arguments(
+        self, driver_yaml: PurePosixPath, *, host_yaml: Path | None = None
+    ) -> list[str]:
+        """The CLI arguments following `driver_path` for one combination.
+        `driver_yaml` is the config path as the runtime sees it; `host_yaml`,
+        when provided, is its host-side path so applications that inspect the
+        YAML from the host (e.g. under Docker) can read it without resolving
+        container paths. The default passes `driver_yaml` as a single
+        positional argument; an application whose CLI takes subcommands or
+        flags overrides it."""
+        _ = host_yaml
+        return [str(driver_yaml)]
 
     def config_fingerprint(self, path: Path) -> str:
         """A generated configuration with its per-run paths normalised, as a

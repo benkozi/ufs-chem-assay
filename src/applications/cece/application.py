@@ -17,7 +17,7 @@ from applications.base import (
 )
 from applications.cece import assertions, cli, combos, suite
 from applications.cece.config import CeceConfig
-from applications.cece.settings import CONTAINER_WORKDIR, ENV_PREFIX, CeceSettings
+from applications.cece.settings import CeceSettings
 from combos import Combo, Dimension, ParameterRow
 
 
@@ -30,8 +30,8 @@ def _config(config: DriverConfig) -> CeceConfig:
 
 class CeceApplication(Application):
     name = "cece"
-    env_prefix = ENV_PREFIX
-    container_workdir = CONTAINER_WORKDIR
+    env_prefix = CeceSettings.env_prefix
+    container_workdir = CeceSettings.container_workdir
     default_suite = "simple-maccity-suite.yaml"
     checkout_dirname = "CECE"
     data_dirname = "data"

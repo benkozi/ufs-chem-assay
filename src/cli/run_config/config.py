@@ -106,11 +106,12 @@ class RunConfig(StrictModel):
         # Every session resolves once at load, so a bad overlay fails
         # from_yaml, not the harness stage; the same check guards the base.
         for session in self.resolved_sessions():
-            if session.harness.submit_only and self.runtime is not Runtime.SLURM:
+            runtime = session.harness.effective_runtime(self.runtime)
+            if session.harness.submit_only and runtime is not Runtime.SLURM:
                 where = "" if session.name is None else f"sessions.{session.name}: "
                 raise ValueError(
                     f"{where}submit_only needs the slurm runtime; "
-                    f"{self.platform.value} runs {self.runtime.value} "
+                    f"{self.platform.value} runs {runtime.value} "
                     "(--override harness:submit_only=false to run this config here)"
                 )
         return self
@@ -228,11 +229,6 @@ class RunConfig(StrictModel):
         ]
 
     def _resolve_session(self, name: str, overlay: SessionOverlay) -> ResolvedSession:
-        if "runtime" in overlay.harness:
-            raise ValueError(
-                f"sessions.{name}.harness: runtime is config-wide (the platform's "
-                "runtime is one thing); it cannot be overlaid per session"
-            )
         if overlay.slurm and self.slurm is None:
             raise ValueError(
                 f"session {name} overlays slurm: but the config has no slurm: section"

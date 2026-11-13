@@ -10,7 +10,6 @@ from pytest_mock import MockerFixture
 from applications.base import Application
 from applications.cece.suite import CeceSuiteConfig
 from applications.registry import (
-    DEFAULT_APPLICATION,
     REGISTRY,
     get_application,
     load_suite,
@@ -18,15 +17,18 @@ from applications.registry import (
 )
 
 
-def test_registry_holds_cece_only() -> None:
-    assert list(REGISTRY) == ["cece"]
-    assert DEFAULT_APPLICATION == "cece"
+def test_registry_holds_cece_and_monetio() -> None:
+    assert list(REGISTRY) == ["cece", "monetio"]
     assert isinstance(get_application("cece"), Application)
     assert get_application("cece").name == "cece"
+    assert isinstance(get_application("monetio"), Application)
+    assert get_application("monetio").name == "monetio"
 
 
 def test_unknown_application_lists_the_registry() -> None:
-    with pytest.raises(ValueError, match=r"unknown application 'nope'.*\['cece'\]"):
+    with pytest.raises(
+        ValueError, match=r"unknown application 'nope'.*\['cece', 'monetio'\]"
+    ):
         get_application("nope")
     with pytest.raises(ValueError, match="unknown application 5"):
         get_application(5)
@@ -42,6 +44,17 @@ def test_adapter_constants() -> None:
     assert app.standard_dimensions == ("time", "lev", "lat", "lon")
     assert app.data_dirname == "data"
     assert app.data_dir(Path("/checkout")) == Path("/checkout/data")
+
+    monetio = get_application("monetio")
+    assert monetio.env_prefix == "MONETIO_"
+    assert monetio.root_dir_token == "${MONETIO_ROOT_DIR}"
+    assert str(monetio.container_workdir) == "/work"
+    assert monetio.default_suite == "aeronet-suite.yaml"
+    assert monetio.checkout_dirname == "monetio"
+    assert monetio.standard_dimensions == ("time", "node")
+    assert monetio.volatile_global_attributes == ("history",)
+    assert monetio.data_dirname == "data"
+    assert monetio.data_dir(Path("/checkout")) == Path("/checkout/data")
 
 
 def test_every_adapter_names_its_data_directory() -> None:

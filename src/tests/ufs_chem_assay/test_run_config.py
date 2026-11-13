@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from applications.base import ApplicationRunSection, ApplicationSettings
 from applications.cece.cli import CeceRunSection
+from applications.monetio.cli import MonetioRunSection
 from applications.registry import REGISTRY, get_application
 from cli.run_config import (
     HARNESS_ROOT,
@@ -67,6 +68,10 @@ def test_templates_list_every_accepted_key() -> None:
         assert set(raw["applications"]["cece"]) == set(CeceRunSection.model_fields), (
             name
         )
+        if name == "local.yaml":
+            assert set(raw["applications"]["monetio"]) == set(
+                MonetioRunSection.model_fields
+            )
         # Every overlay names only keys its section accepts (the commented
         # exhaustive-maccity example included: it must stay valid).
         for session, overlay in (raw.get("sessions") or {}).items():
@@ -612,12 +617,32 @@ def test_session_overlay_errors_name_the_session(tmp_path: Path) -> None:
             {"x": {"harness": {"no_suite_update": True}}},
             "sessions.x.harness",
         ),  # the section's own rule, under the session's name
-        ({"x": {"harness": {"runtime": "native"}}}, "runtime"),  # config-wide
+        (
+            {"x": {"harness": {"runtime": "native", "submit_only": True}}},
+            "sessions.x: submit_only needs the slurm runtime",
+        ),
     ]
     for sessions, needle in cases:
         path = run_config_file(tmp_path, overrides={"sessions": sessions})
         with pytest.raises(ValidationError, match=needle):
             load_run_config(path)
+
+
+def test_session_can_override_runtime(tmp_path: Path) -> None:
+    path = run_config_file(
+        tmp_path,
+        "local.yaml",
+        overrides={
+            "sessions": {
+                "docker-session": {},
+                "native-session": {"harness": {"runtime": "native"}},
+            }
+        },
+    )
+    config = load_run_config(path)
+    docker_session, native_session = config.resolved_sessions()
+    assert docker_session.harness.effective_runtime(config.runtime) is Runtime.DOCKER
+    assert native_session.harness.effective_runtime(config.runtime) is Runtime.NATIVE
 
 
 def test_slurm_overlay_needs_a_slurm_section(tmp_path: Path) -> None:
@@ -658,7 +683,7 @@ def test_session_output_root_four_shapes(tmp_path: Path) -> None:
     try:
         one = load_run_config(TEMPLATES_DIR / "local.yaml")
         (nameless,) = one.resolved_sessions()
-        assert one.session_output_root(cece, nameless) == "ufs-chem-assay-output"
+        assert one.session_output_root(cece, nameless) == "ufs-chem-assay-output/cece"
         two_apps = load_run_config(
             run_config_file(
                 tmp_path,

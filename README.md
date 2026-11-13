@@ -11,16 +11,18 @@ YAML configs and each runs in its own Docker container, followed by
 per-combo assertions on the output (exit code, file counts/names,
 attributes) and a statistics/plotting analysis step. Everything that knows
 the application under test — its driver config, sweep schema, image,
-checkout, data directory — lives in an application adapter; CECE is the
-shipped one (`application: cece`, the default in every suite and run
-config), and a session runs one application. Configurations the harness
-carries live under `src/tests/config/<application>/<configuration>/`, each
+checkout, data directory — lives in an application adapter; CECE (`application: cece`,
+the default `SuiteConfig` application) and MONETIO (`application: monetio`)
+are the shipped adapters, and a session runs one application. Configurations the
+harness carries live under `src/tests/config/<application>/<configuration>/`, each
 beside the suites that sweep it: `cece/maccity/` (a 4x5 CO configuration
-over one public input; the default suite and the CI integration run) and
+over one public input; the default suite and the CI integration run),
 `cece/gcafs-anthro/` (the global anthropogenic use case — 0.25°, 25 hourly
 steps, 32 streams over seven placed inputs; Ursa only, see
-[docs/gcafs-anthro-runbook.md](docs/gcafs-anthro-runbook.md)). Design
-rationale lives in [design/design.md](design/design.md).
+[docs/gcafs-anthro-runbook.md](docs/gcafs-anthro-runbook.md)), and
+`monetio/aeronet/` (a native Python CLI configuration reading AERONET
+direct-sun AOD and inversion datasets into CF-1.8 / UGRID-1.0 `(time, node)`
+NetCDF files). Design rationale lives in [design/design.md](design/design.md).
 
 ## Prerequisites
 
@@ -64,9 +66,8 @@ EOF
 ```
 
 Real environment variables override `.env` values. Harness-wide settings
-use the `ASSAY_` prefix (the older `CECE_` spellings still work as
-fallbacks); an application's own settings keep its prefix (`CECE_ROOT_DIR`,
-`CECE_MODULEFILE`, ...). There is no command-line flag for the checkout
+use the `ASSAY_` prefix; an application's own settings keep its prefix (`CECE_ROOT_DIR`,
+`CECE_MODULEFILE`, `MONETIO_ROOT_DIR`, ...). There is no command-line flag for the checkout
 root: the variable, `.env`, or the run config (below) supplies it.
 
 ## Running
@@ -75,6 +76,7 @@ root: the variable, `.env`, or the run config (below) supplies it.
 uv run pytest                      # everything: integration + runner harness tests
 uv run pytest --application=cece   # only this application's suites (the default suite when
                                    #   no --suite-config is given); a session runs one application
+ASSAY_RUNTIME=native uv run pytest --application=monetio  # runs monetio's default aeronet-suite.yaml natively
 uv run pytest -vs                  # show each driver's output as it runs
 uv run pytest -x                   # fail fast: stop at the first failure
 uv run pytest -k map-consd         # run a subset by combo name
@@ -458,13 +460,15 @@ derived defaults (hostname detection; the harness checkout's parent as
 the root).
 
 ```sh
-uv run ufs-chem-assay run --config-file=config/ursa.yaml --dry-run   # render only
-uv run ufs-chem-assay run --config-file=config/ursa.yaml             # clone, build,
-                                                                     #   data, harness
-uv run ufs-chem-assay run --config-file=config/ursa.yaml --stage harness \
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --application cece --dry-run   # render only
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --application cece             # clone, build,
+                                                                                        #   data, harness
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --application cece --stage harness \
   --override harness:suite_config=exhaustive-maccity-run-only-suite.yaml harness:pytest_args='[-x]' \
              applications:cece:ref=develop slurm:qos=batch
-uv run ufs-chem-assay run --config-file=config/ursa.yaml --session gcafs-anthro  # one session
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --application cece --session gcafs-anthro  # one session
+uv run ufs-chem-assay run --config-file=config/local.yaml --application all --dry-run   # all configured apps
+uv run ufs-chem-assay run --config-file=config/local.yaml --application "monetio cece" --dry-run
 uv run ufs-chem-assay watch                                           # evaluate as jobs finish
 ```
 
@@ -909,10 +913,8 @@ file at the repo root, read when pytest runs from there; real environment
 variables override `.env`. AWS credentials are not harness settings at
 all — the AWS CLI reads its own configuration (see
 [S3 data sync](#s3-data-sync)). Two namespaces: **harness-wide** settings under
-`ASSAY_*` (the pre-adapter `CECE_*` spellings are accepted as fallbacks
-and go away when the second application adapter lands; `ASSAY_X` wins over
-`CECE_X` when both are set), and each **application's** settings under its
-own prefix — `CECE_*` for the CECE adapter.
+`ASSAY_*`, and each **application's** settings under its
+own prefix — `CECE_*` for the CECE adapter and `MONETIO_*` for the MONETIO adapter.
 
 Harness-wide:
 
@@ -948,6 +950,15 @@ The CECE adapter:
 | `CECE_DOCKER_IMAGE`             | container image (docker runtime)               | `cece/cece-dev`                  |
 | `CECE_DRIVER_PATH`              | driver path, relative to the checkout          | `./build/cece_standalone_driver` |
 | `CECE_MODULEFILE`               | modulefile each driver job loads before the driver (slurm runtime; recorded in `run.yaml`) | unset |
+
+The MONETIO adapter:
+
+| Env var                         | Meaning                                        | Default                          |
+|---------------------------------|------------------------------------------------|----------------------------------|
+| `MONETIO_ROOT_DIR`              | host `monetio` checkout root                   | unset — required to run the CLI  |
+| `MONETIO_DOCKER_IMAGE`          | container image (docker runtime)               | `monetio/monetio-dev`            |
+| `MONETIO_DRIVER_PATH`           | CLI executable path, relative to the checkout  | `.venv/bin/monetio`              |
+| `MONETIO_MODULEFILE`            | modulefile each driver job loads before the CLI (slurm runtime; recorded in `run.yaml`) | unset |
 
 There is no AWS table: the AWS CLI's own `~/.aws/credentials`,
 `~/.aws/config`, and `AWS_*` variables apply unchanged to

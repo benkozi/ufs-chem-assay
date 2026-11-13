@@ -63,18 +63,18 @@ def load_run_config(
 
 
 def uncommented_sessions(template: Path) -> str:
-    """The template's text with its commented `sessions:` example entries
-    enabled: inside the sessions: block a line commented at the entry's
-    indentation (`  # key: ...`) loses its `# `. The shipped example must
-    stay a valid overlay, and this is how the tests load it."""
+    """The template's text with its commented `applications:` or `sessions:`
+    example entries enabled: inside those blocks a line commented at the
+    entry's indentation (`  # key: ...`) loses its `# `. The shipped example
+    must stay a valid overlay/section, and this is how the tests load it."""
     commented_key = re.compile(r"^  # (?: {2})*[A-Za-z0-9_.*-]+:(?:\s|$)")
     lines = template.read_text().splitlines(keepends=True)
     out: list[str] = []
-    in_sessions = False
+    in_block = False
     for line in lines:
         if not line.startswith((" ", "#", "\n")):
-            in_sessions = line.startswith("sessions:")
-        if in_sessions and commented_key.match(line):
+            in_block = line.startswith(("sessions:", "applications:"))
+        if in_block and commented_key.match(line):
             line = "  " + line[4:]
         out.append(line)
     return "".join(out)

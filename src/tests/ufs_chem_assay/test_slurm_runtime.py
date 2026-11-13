@@ -10,7 +10,7 @@ import pytest
 from jinja2 import UndefinedError
 from pytest_mock import MockerFixture
 
-from applications.cece.settings import CONTAINER_WORKDIR, CeceSettings
+from applications.cece.settings import CeceSettings
 from applications.registry import get_application
 from benchmarks import SlurmAccounting
 from jobs import SlurmJobError, SlurmJobTimeout, SubmittedJob
@@ -359,7 +359,10 @@ def test_run_driver_refuses_the_slurm_runtime(tmp_path: Path) -> None:
 
 def test_slurm_roots_are_host_roots() -> None:
     host, driver = resolve_output_roots(
-        "runs", Path("/host/cece"), Runtime.SLURM, container_workdir=CONTAINER_WORKDIR
+        "runs",
+        Path("/host/cece"),
+        Runtime.SLURM,
+        container_workdir=CeceSettings.container_workdir,
     )
     assert host == Path("/host/cece/runs")
     assert driver == PurePosixPath("/host/cece/runs")

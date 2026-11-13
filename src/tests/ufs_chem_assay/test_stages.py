@@ -474,7 +474,10 @@ def test_harness_stage_needs_a_session_when_the_config_names_them(
     # A config without sessions: the one nameless session is implied.
     script = render_stage(Stage.HARNESS, local, _CECE)
     assert script.name == "harness-cece"
-    assert "--combo-output-root=ufs-chem-assay-output --combo-clean-root" in script.text
+    assert (
+        "--combo-output-root=ufs-chem-assay-output/cece --combo-clean-root"
+        in script.text
+    )
     assert "--submit-only" not in script.text
 
 
@@ -532,7 +535,9 @@ def test_regex_suite_selector_survives_quoting(tmp_path: Path) -> None:
 def test_output_root_is_suffixed_with_the_application_and_the_session(
     tmp_path: Path, stub: Application, local: RunConfig
 ) -> None:
-    assert local.session_output_root(_CECE, _first(local)) == "ufs-chem-assay-output"
+    assert (
+        local.session_output_root(_CECE, _first(local)) == "ufs-chem-assay-output/cece"
+    )
     two = _ursa(tmp_path, {"applications.stub": {"git_url": "u", "ref": "main"}})
     simple = _session(two, "simple-maccity")
     assert (
@@ -585,3 +590,27 @@ def test_env_value_renders_an_enum_by_its_value() -> None:
 
     assert _env_value(Runtime.SLURM) == "slurm"
     assert _env_value(None) is None
+
+
+def test_session_runtime_override_exports_per_session_runtime(tmp_path: Path) -> None:
+    config = load_run_config(
+        run_config_file(
+            tmp_path,
+            "local.yaml",
+            root_dir=tmp_path / "runs",
+            overrides={
+                "sessions": {
+                    "docker-s": {},
+                    "native-s": {"harness": {"runtime": "native"}},
+                }
+            },
+        )
+    )
+    docker_text = render_stage(
+        Stage.HARNESS, config, _CECE, _session(config, "docker-s")
+    ).text
+    native_text = render_stage(
+        Stage.HARNESS, config, _CECE, _session(config, "native-s")
+    ).text
+    assert "export ASSAY_RUNTIME=docker" in docker_text
+    assert "export ASSAY_RUNTIME=native" in native_text

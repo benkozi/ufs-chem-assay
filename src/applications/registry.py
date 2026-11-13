@@ -15,10 +15,12 @@ import yaml
 
 from applications.base import Application
 from applications.cece.application import CeceApplication
+from applications.monetio.application import MonetioApplication
 from models.suite_config import SuiteConfig
 
-REGISTRY: dict[str, Application] = {app.name: app for app in (CeceApplication(),)}
-DEFAULT_APPLICATION = "cece"
+REGISTRY: dict[str, Application] = {
+    app.name: app for app in (CeceApplication(), MonetioApplication())
+}
 
 
 def get_application(name: object) -> Application:
@@ -31,9 +33,10 @@ def get_application(name: object) -> Application:
 
 
 def _application_key(raw: object) -> object:
+    default = SuiteConfig.model_fields["application"].default
     if isinstance(raw, dict):
-        return raw.get("application", DEFAULT_APPLICATION)
-    return DEFAULT_APPLICATION
+        return raw.get("application", default)
+    return default
 
 
 def peek_application(path: Path) -> str:

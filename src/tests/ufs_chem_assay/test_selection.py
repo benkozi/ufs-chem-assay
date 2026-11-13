@@ -25,8 +25,13 @@ def test_builtin_config_dir_is_the_checked_in_tree() -> None:
     ).is_file()
 
 
-def test_default_suite_resolves_without_an_option() -> None:
-    resolved = resolve_suites(_settings(), None)
+def test_bare_selection_without_application_or_suite_is_an_error() -> None:
+    with pytest.raises(ValueError, match="pass --application or --suite-config"):
+        resolve_suites(_settings(), None)
+
+
+def test_default_suite_resolves_with_explicit_application() -> None:
+    resolved = resolve_suites(_settings(application="cece"), None)
     assert isinstance(resolved, ResolvedSuites)
     assert resolved.application.name == "cece"
     assert [suite.name for _, suite in resolved.suites] == ["simple-maccity"]

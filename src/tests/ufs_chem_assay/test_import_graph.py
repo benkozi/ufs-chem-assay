@@ -30,7 +30,8 @@ assert config.checkout_dir(stub) == config.root_dir / "STUB", config.checkout_di
 loaded = sorted(
     name
     for name in sys.modules
-    if name == "applications.registry" or name.startswith("applications.cece")
+    if name == "applications.registry"
+    or name.startswith(("applications.cece", "applications.monetio"))
 )
 print(json.dumps(loaded))
 """
@@ -58,7 +59,7 @@ def test_base_imports_nothing_from_cli() -> None:
         "import json, sys\n"
         "import applications.base\n"
         "print(json.dumps(sorted(m for m in sys.modules "
-        "if m == 'cli' or m.startswith(('cli.', 'applications.registry', 'applications.cece')))))\n"
+        "if m == 'cli' or m.startswith(('cli.', 'applications.registry', 'applications.cece', 'applications.monetio')))))\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", probe],

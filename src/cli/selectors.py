@@ -44,16 +44,23 @@ def selected_applications(
     config: RunConfig, requested: list[str] | None
 ) -> list[Application]:
     """The configured applications, in the config's order, narrowed to the
-    requested ones; naming an unconfigured application is an error."""
-    if requested is not None:
-        unknown = sorted(set(requested) - set(config.applications))
-        if unknown:
-            raise ValueError(
-                f"--application {unknown} not in the run config's applications "
-                f"({config.application_names})"
-            )
+    requested ones ('all' selects every configured application; tokens may be
+    space-separated); naming an unconfigured application is a ValueError."""
+    if requested is None:
+        return [get_application(name) for name in config.application_names]
+    tokens = [token for item in requested for token in item.split()]
+    if not tokens:
+        raise ValueError(
+            "--application requires at least one application name or 'all'"
+        )
+    unknown = sorted(set(tokens) - {"all"} - set(config.applications))
+    if unknown:
+        raise ValueError(
+            f"--application {unknown} not in the run config's applications "
+            f"({config.application_names})"
+        )
+    if "all" in tokens:
+        return [get_application(name) for name in config.application_names]
     return [
-        get_application(name)
-        for name in config.application_names
-        if requested is None or name in requested
+        get_application(name) for name in config.application_names if name in tokens
     ]

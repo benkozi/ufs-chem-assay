@@ -48,6 +48,7 @@ def test_dry_run_generates_everything_but_never_executes(tmp_path: Path) -> None
             "-m",
             "pytest",
             str(_RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"),
+            "--application=cece",
             "--dry-run",
             "--combo-output-root=combo_runs",
             "-q",
@@ -170,6 +171,7 @@ def test_run_yaml_records_the_application_commit_sha(tmp_path: Path) -> None:
             "-m",
             "pytest",
             str(_RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"),
+            "--application=cece",
             "--dry-run",
             "--combo-output-root=combo_runs",
             "-q",
@@ -222,6 +224,7 @@ def test_slurm_dry_run_writes_a_job_script_per_combo(tmp_path: Path) -> None:
             "-m",
             "pytest",
             str(_RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"),
+            "--application=cece",
             "--dry-run",
             "--combo-output-root=combo_runs",
             "-q",
@@ -276,6 +279,7 @@ def test_slurm_dry_run_without_a_checkout_writes_no_job_scripts(tmp_path: Path) 
             "-m",
             "pytest",
             str(_RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"),
+            "--application=cece",
             "--dry-run",
             "-q",
             "-p",
@@ -364,7 +368,7 @@ def test_unknown_application_is_a_usage_error(tmp_path: Path) -> None:
     )
     assert result.returncode == 4, result.stdout + result.stderr  # USAGE_ERROR
     assert "unknown application 'catchem'" in result.stderr
-    assert "['cece']" in result.stderr
+    assert "['cece', 'monetio']" in result.stderr
 
 
 def test_run_yaml_records_a_present_inputs_size(tmp_path: Path) -> None:
@@ -396,6 +400,7 @@ def test_run_yaml_records_a_present_inputs_size(tmp_path: Path) -> None:
             "-m",
             "pytest",
             str(_RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"),
+            "--application=cece",
             "--dry-run",
             "--combo-output-root=combo_runs",
             "-q",
@@ -447,6 +452,7 @@ def _pytest(
             "-m",
             "pytest",
             str(_RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"),
+            "--application=cece",
             "--dry-run",
             "--combo-output-root=combo_runs",
             "-q",
@@ -560,6 +566,7 @@ def test_session_start_syncs_missing_baselines_from_the_store(tmp_path: Path) ->
             "-m",
             "pytest",
             str(_RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"),
+            "--application=cece",
             "--combo-output-root=combo_runs",
             "-q",
             "-p",

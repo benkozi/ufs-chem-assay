@@ -31,6 +31,7 @@ def _run_pytest(
             "-m",
             "pytest",
             str(_INTEGRATION_TESTS),
+            "--application=cece",
             *args,
             "-q",
             "-p",

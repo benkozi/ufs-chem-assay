@@ -25,7 +25,7 @@ def test_pinned_values() -> None:
     # A change to any of these renames something on disk or in the
     # environment: deliberate, never incidental.
     assert CONVENTIONS.env_prefix == "ASSAY_"
-    assert CONVENTIONS.legacy_env_prefix == "CECE_"
+    assert "legacy_env_prefix" not in type(CONVENTIONS).model_fields
     assert CONVENTIONS.env_file == ".env"
     assert CONVENTIONS.default_baseline_store == "s3://ufs-chem/baselines"
     assert CONVENTIONS.default_output_store == "s3://ufs-chem/assay-output"
@@ -45,7 +45,8 @@ def test_pinned_values() -> None:
 def test_env_var_spells_a_harness_variable() -> None:
     assert CONVENTIONS.env_var("input_search_path") == "ASSAY_INPUT_SEARCH_PATH"
     assert CONVENTIONS.env_var("LOG_LEVEL") == "ASSAY_LOG_LEVEL"
-    assert CONVENTIONS.env_var("log_level", legacy=True) == "CECE_LOG_LEVEL"
+    with pytest.raises(TypeError):
+        CONVENTIONS.env_var("log_level", legacy=True)  # type: ignore[call-arg]
 
 
 def test_baseline_conventions_hold_only_baseline_names() -> None:

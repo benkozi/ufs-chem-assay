@@ -563,3 +563,81 @@ def test_integer_data_compares_exactly_and_within_tolerance(
     _write_nc(baseline / "cece_a.nc", base)
     assert not _compare(realization, baseline).passed
     assert _compare(realization, baseline, atol=1.0).passed
+
+
+def _write_ugrid_nc(
+    path: Path, aod: np.ndarray, siteid: str = "Cart_Site", quality: str = "lev15"
+) -> None:
+    dataset = xr.Dataset(
+        {
+            "aod_500nm": (("time", "node"), aod),
+            "data_quality_level": (
+                ("time", "node"),
+                np.full(aod.shape, quality, dtype="<U5"),
+            ),
+        },
+        coords={
+            "time": np.arange(aod.shape[0], dtype=np.int64),
+            "node": np.arange(aod.shape[1], dtype=np.int64),
+            "siteid": ("node", np.array([siteid], dtype="<U9")),
+        },
+    )
+    dataset.to_netcdf(path, format="NETCDF4", engine="netcdf4")
+
+
+def test_string_variables_compare_by_exact_equality(
+    pair_dirs: tuple[Path, Path],
+) -> None:
+    realization, baseline = pair_dirs
+    aod = np.array([[0.1], [0.2]], dtype=np.float64)
+    _write_ugrid_nc(realization / "aeronet.nc", aod)
+    _write_ugrid_nc(baseline / "aeronet.nc", aod)
+
+    matched = _compare(realization, baseline)
+    assert matched.passed
+    by_name = {v.name: v for v in matched.files[0].variables}
+    assert by_name["siteid"].passed
+    assert by_name["siteid"].data_match
+    assert by_name["siteid"].n_evaluated == 1
+    assert by_name["siteid"].n_mismatched == 0
+    assert by_name["data_quality_level"].passed
+    assert by_name["data_quality_level"].n_evaluated == 2
+    assert by_name["data_quality_level"].n_mismatched == 0
+
+    _write_ugrid_nc(
+        realization / "aeronet_diff.nc", aod, siteid="OtherSite", quality="lev20"
+    )
+    _write_ugrid_nc(baseline / "aeronet_diff.nc", aod)
+    (realization / "aeronet.nc").unlink()
+    (baseline / "aeronet.nc").unlink()
+
+    mismatched = _compare(realization, baseline)
+    assert not mismatched.passed
+    diff_by_name = {v.name: v for v in mismatched.files[0].variables}
+    assert not diff_by_name["siteid"].passed
+    assert not diff_by_name["siteid"].data_match
+    assert diff_by_name["siteid"].n_mismatched == 1
+    assert diff_by_name["siteid"].detail is not None
+    assert "data differs" in diff_by_name["siteid"].detail
+    assert not diff_by_name["data_quality_level"].passed
+    assert diff_by_name["data_quality_level"].n_mismatched == 2
+
+
+def test_datetime_variables_treat_matching_nat_as_equal() -> None:
+    from comparison import _compare_variable
+
+    times = np.array(["2020-01-01T00:00:00", "NaT"], dtype="datetime64[ns]")
+    da = xr.DataArray(times, dims=["time"])
+    matched = _compare_variable("valid_time", da, da, atol=0.0, rtol=0.0)
+    assert matched.passed
+    assert matched.n_mismatched == 0
+
+    da_diff = xr.DataArray(
+        np.array(
+            ["2020-01-01T00:00:00", "2020-01-02T00:00:00"], dtype="datetime64[ns]"
+        ),
+        dims=["time"],
+    )
+    mismatched = _compare_variable("valid_time", da_diff, da, atol=0.0, rtol=0.0)
+    assert not mismatched.passed
+    assert mismatched.n_mismatched == 1

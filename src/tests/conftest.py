@@ -292,6 +292,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     except ValidationError as exc:
         raise pytest.UsageError(str(exc)) from exc
     configure_logging(settings.log_level)
+    config.stash[_SETTINGS] = settings
     submit_only = bool(config.getoption("--submit-only"))
     resume = bool(config.getoption("--resume"))
     for flag, given in (("--submit-only", submit_only), ("--resume", resume)):
@@ -366,6 +367,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     if deferred:
         # The probes above ran; the actions belong to the evaluating session.
         logger.info("--submit-only: %s deferred to --resume", ", ".join(deferred))
+
+    if config.args and all(
+        "ufs_chem_assay" in Path(arg.split("::")[0]).parts for arg in config.args
+    ):
+        return
 
     # Selection, application, suite loading: the same sequence the CLI's
     # fetch runs (selection.resolve_suites); every failure is a usage error.
@@ -1161,6 +1167,7 @@ def generated_combos(
                     driver_yaml,
                     combo_dir / f"{combo.combo_id}.out",
                     timeout_s=min(context.suite.timeout_s, settings.run_timeout_s),
+                    app=app,
                 )
             generated[combo.combo_id] = GeneratedCombo(
                 host_dir=combo_dir, driver_yaml=driver_yaml, config=config
@@ -1212,7 +1219,13 @@ def submitted_jobs(
             timeout_s = min(context.suite.timeout_s, settings.run_timeout_s)
             try:
                 script, job_id = submit_driver_job(
-                    settings, app_settings, generated.driver_yaml, out_path, timeout_s
+                    settings,
+                    app_settings,
+                    generated.driver_yaml,
+                    out_path,
+                    timeout_s,
+                    app=app,
+                    host_yaml=generated.host_dir / generated.driver_yaml.name,
                 )
             except subprocess.CalledProcessError as exc:
                 write_ledger(ledger, combo_roots.host)
@@ -1290,6 +1303,7 @@ def driver_run(
             out_path=out_path,
             timeout_s=run_timeout_s,
             output_mount=combo_roots.output_mount,
+            host_yaml=generated.host_dir / generated.driver_yaml.name,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         error = exc

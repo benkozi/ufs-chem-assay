@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import shlex
 from enum import StrEnum
+from pathlib import Path
 
 from pydantic import ConfigDict, Field
 
@@ -88,6 +89,54 @@ def q(value: object) -> str:
 LMOD_INIT = 'if [ -n "${MODULESHOME:-}" ]; then source "$MODULESHOME/init/bash"; fi'
 
 
+def module_block(checkout: Path, section: ApplicationRunSection) -> list[str]:
+    """Load the application's modulefile in this shell — only where compiled
+    code runs in-process (the build stage). Returns `[]` when no modulefile
+    is configured."""
+    if section.modulefile is None:
+        return []
+    return [
+        LMOD_INIT,
+        "module purge",
+        f"module use {q(checkout)}/modulefiles",
+        f"module load {q(section.modulefile)}",
+        "module list",
+    ]
+
+
+def source_lines(
+    checkout: Path,
+    section: ApplicationRunSection,
+    *,
+    recurse_submodules: bool = False,
+    extra_checks: list[str] | None = None,
+) -> list[str]:
+    """Clone or update an application checkout from `section`."""
+    clone = q(checkout)
+    ref = q(section.ref)
+    submodules = "--recurse-submodules " if recurse_submodules else ""
+    lines = [
+        f"if [ ! -d {clone}/.git ]; then",
+        f"  git clone {submodules}--branch {ref} {q(section.git_url)} {clone}",
+    ]
+    if section.update_source:
+        lines += [
+            "else",
+            f"  git -C {clone} fetch origin",
+            f"  git -C {clone} checkout {ref}",
+            f"  git -C {clone} pull --ff-only origin {ref}",
+        ]
+        if recurse_submodules:
+            lines.append(f"  git -C {clone} submodule update --init --recursive")
+    else:
+        lines += ["else", f'  echo "using existing clone at {clone} as-is"']
+    lines.append("fi")
+    if extra_checks:
+        lines += extra_checks
+    lines.append(f"git -C {clone} log -1 --oneline")
+    return lines
+
+
 def clean_python_env(section: ApplicationRunSection) -> list[str]:
     """The harness venv must never see the module environment (spack-stack
     sets PYTHONPATH to python3.11 site-packages that shadow the venv's
@@ -131,6 +180,7 @@ def _exports(
     harness = session.harness
     slurm = session.slurm
     baselines = session.baselines
+    runtime = session.harness.effective_runtime(config.runtime)
     prefix = app.env_prefix
     exports: list[tuple[str, str]] = [
         (f"{prefix}ROOT_DIR", q(config.checkout_dir(app)))
@@ -143,7 +193,7 @@ def _exports(
             exports.append((f"{prefix}{field.upper()}", value))
     exports += [
         (CONVENTIONS.env_var("PLATFORM"), config.platform.value),
-        (CONVENTIONS.env_var("RUNTIME"), config.runtime.value),
+        (CONVENTIONS.env_var("RUNTIME"), runtime.value),
     ]
     for field in settings_mirror_fields():
         if field == "runtime":
@@ -151,7 +201,7 @@ def _exports(
         value = _env_value(getattr(harness, field))
         if value is not None:
             exports.append((CONVENTIONS.env_var(field), value))
-    if config.runtime is Runtime.SLURM:
+    if runtime is Runtime.SLURM:
         assert slurm is not None, "slurm runtime needs a slurm: section"
         exports.append((CONVENTIONS.env_var("SBATCH_ARGS"), q(slurm.sbatch_args)))
         exports.append((CONVENTIONS.env_var("SRUN_ARGS"), q(slurm.srun_args_value)))
@@ -193,7 +243,7 @@ def _exports(
         )
     exports.append(("PATH", '"$HOME/.local/bin:$PATH"'))
     exports.append(("UV_CACHE_DIR", q(config.uv_cache_dir)))
-    if config.runtime is not Runtime.SLURM:
+    if runtime is not Runtime.SLURM:
         # docker/native run the driver as a local process: env applies here.
         exports += [(key, q(value)) for key, value in harness.env.items()]
     return exports
