@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
@@ -46,14 +45,6 @@ def _kwarg_flags(key: str, value: KwargValue) -> list[str]:
     return ["-k", f"{key}={_format_scalar(value)}"]
 
 
-def _resolve_yaml_path(driver_yaml: PurePosixPath) -> Path:
-    path = Path(driver_yaml)
-    if path.is_file():
-        return path
-    root = os.environ.get(f"{MonetioSettings.env_prefix}ROOT_DIR")
-    return Path(root) / path if root is not None else path
-
-
 _ASSERTION_SPEC = assertions.MonetioAssertionSpec()
 
 
@@ -94,10 +85,12 @@ class MonetioApplication(Application):
         return assertions.expected_output_filenames(_config(config))
 
     def output_variable_names(self, config: DriverConfig) -> list[str]:
-        return assertions.output_variable_names(_config(config))
+        return _ASSERTION_SPEC.output_variable_names(_config(config))
 
-    def driver_arguments(self, driver_yaml: PurePosixPath) -> list[str]:
-        config = MonetioConfig.from_yaml(_resolve_yaml_path(driver_yaml))
+    def driver_arguments(
+        self, driver_yaml: PurePosixPath, *, host_yaml: Path | None = None
+    ) -> list[str]:
+        config = MonetioConfig.from_yaml(host_yaml or Path(driver_yaml))
         args = ["load", config.source]
         for file_path in config.files:
             args += ["-f", file_path]

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import shlex
 from enum import StrEnum
+from pathlib import Path
 
 from pydantic import ConfigDict, Field
 
@@ -86,6 +87,54 @@ def q(value: object) -> str:
 
 
 LMOD_INIT = 'if [ -n "${MODULESHOME:-}" ]; then source "$MODULESHOME/init/bash"; fi'
+
+
+def module_block(checkout: Path, section: ApplicationRunSection) -> list[str]:
+    """Load the application's modulefile in this shell — only where compiled
+    code runs in-process (the build stage). Returns `[]` when no modulefile
+    is configured."""
+    if section.modulefile is None:
+        return []
+    return [
+        LMOD_INIT,
+        "module purge",
+        f"module use {q(checkout)}/modulefiles",
+        f"module load {q(section.modulefile)}",
+        "module list",
+    ]
+
+
+def source_lines(
+    checkout: Path,
+    section: ApplicationRunSection,
+    *,
+    recurse_submodules: bool = False,
+    extra_checks: list[str] | None = None,
+) -> list[str]:
+    """Clone or update an application checkout from `section`."""
+    clone = q(checkout)
+    ref = q(section.ref)
+    submodules = "--recurse-submodules " if recurse_submodules else ""
+    lines = [
+        f"if [ ! -d {clone}/.git ]; then",
+        f"  git clone {submodules}--branch {ref} {q(section.git_url)} {clone}",
+    ]
+    if section.update_source:
+        lines += [
+            "else",
+            f"  git -C {clone} fetch origin",
+            f"  git -C {clone} checkout {ref}",
+            f"  git -C {clone} pull --ff-only origin {ref}",
+        ]
+        if recurse_submodules:
+            lines.append(f"  git -C {clone} submodule update --init --recursive")
+    else:
+        lines += ["else", f'  echo "using existing clone at {clone} as-is"']
+    lines.append("fi")
+    if extra_checks:
+        lines += extra_checks
+    lines.append(f"git -C {clone} log -1 --oneline")
+    return lines
 
 
 def clean_python_env(section: ApplicationRunSection) -> list[str]:

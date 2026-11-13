@@ -260,7 +260,12 @@ def _compare_variable(
     ):
         real_arr = np.asarray(realization.values)
         base_arr = np.asarray(baseline.values)
-        mismatches = int(np.sum(real_arr != base_arr))
+        diff = real_arr != base_arr
+        if np.issubdtype(real_arr.dtype, np.datetime64) and np.issubdtype(
+            base_arr.dtype, np.datetime64
+        ):
+            diff = diff & ~(np.isnat(real_arr) & np.isnat(base_arr))
+        mismatches = int(np.sum(diff))
         equal = mismatches == 0
         if not equal:
             detail_parts.append(f"data differs ({mismatches} element(s))")

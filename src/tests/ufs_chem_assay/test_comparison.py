@@ -621,3 +621,23 @@ def test_string_variables_compare_by_exact_equality(
     assert "data differs" in diff_by_name["siteid"].detail
     assert not diff_by_name["data_quality_level"].passed
     assert diff_by_name["data_quality_level"].n_mismatched == 2
+
+
+def test_datetime_variables_treat_matching_nat_as_equal() -> None:
+    from comparison import _compare_variable
+
+    times = np.array(["2020-01-01T00:00:00", "NaT"], dtype="datetime64[ns]")
+    da = xr.DataArray(times, dims=["time"])
+    matched = _compare_variable("valid_time", da, da, atol=0.0, rtol=0.0)
+    assert matched.passed
+    assert matched.n_mismatched == 0
+
+    da_diff = xr.DataArray(
+        np.array(
+            ["2020-01-01T00:00:00", "2020-01-02T00:00:00"], dtype="datetime64[ns]"
+        ),
+        dims=["time"],
+    )
+    mismatched = _compare_variable("valid_time", da_diff, da, atol=0.0, rtol=0.0)
+    assert not mismatched.passed
+    assert mismatched.n_mismatched == 1

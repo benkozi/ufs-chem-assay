@@ -53,20 +53,14 @@ def selected_applications(
         raise ValueError(
             "--application requires at least one application name or 'all'"
         )
-    if "all" in tokens:
-        unknown = sorted(set(tokens) - {"all"} - set(config.applications))
-        if unknown:
-            raise ValueError(
-                f"--application {unknown} not in the run config's applications "
-                f"({config.application_names})"
-            )
-        return [get_application(name) for name in config.application_names]
-    unknown = sorted(set(tokens) - set(config.applications))
+    unknown = sorted(set(tokens) - {"all"} - set(config.applications))
     if unknown:
         raise ValueError(
             f"--application {unknown} not in the run config's applications "
             f"({config.application_names})"
         )
+    if "all" in tokens:
+        return [get_application(name) for name in config.application_names]
     return [
         get_application(name) for name in config.application_names if name in tokens
     ]

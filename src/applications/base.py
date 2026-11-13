@@ -237,11 +237,17 @@ class Application(ABC):
         the same convention read back from a published baseline directory."""
         return combo_dir / f"{combo_id}.yaml"
 
-    def driver_arguments(self, driver_yaml: PurePosixPath) -> list[str]:
+    def driver_arguments(
+        self, driver_yaml: PurePosixPath, *, host_yaml: Path | None = None
+    ) -> list[str]:
         """The CLI arguments following `driver_path` for one combination.
-        The default passes the generated configuration path as a single
-        positional argument; an application whose CLI takes subcommands
-        or flags overrides it."""
+        `driver_yaml` is the config path as the runtime sees it; `host_yaml`,
+        when provided, is its host-side path so applications that inspect the
+        YAML from the host (e.g. under Docker) can read it without resolving
+        container paths. The default passes `driver_yaml` as a single
+        positional argument; an application whose CLI takes subcommands or
+        flags overrides it."""
+        _ = host_yaml
         return [str(driver_yaml)]
 
     def config_fingerprint(self, path: Path) -> str:

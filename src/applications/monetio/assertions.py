@@ -48,8 +48,3 @@ def expected_output_count(_config: MonetioConfig) -> int:
 def expected_output_filenames(config: MonetioConfig) -> set[str]:
     """The basename of `config.output` inside the combo output directory."""
     return {PurePosixPath(config.output).name}
-
-
-def output_variable_names(config: MonetioConfig) -> list[str]:
-    """Expected observation output variables configured to check against `standard_dimensions`."""
-    return MonetioAssertionSpec().output_variable_names(config)

@@ -547,3 +547,62 @@ Refinement of review comments from [PR #45 review 5881253902](https://github.com
    - Uncomment `monetio:` in `config/local.yaml`.
    - Require `--application` on `ufs-chem-assay run`, support `all` and space-separated/repeatable selectors (`"monetio cece"`), and remove `DEFAULT_APPLICATION` from `registry.py` / `selection.py`.
    - Update CLI, stage, selection, and doc tests, plus `README.md` and `design/design.md`.
+
+---
+
+# appendix: PR #45 machine review (`5893036435`) response & implementation plan
+
+Plan for addressing the 9 comments from [PR #45 review 5893036435](https://github.com/benkozi/ufs-chem-assay/pull/45#pullrequestreview-5893036435).
+
+## Comment-by-comment analysis
+
+1. **P0 Blocker (`4564703300`) — `src/applications/monetio/application.py:55`: `driver_arguments` fails under `Runtime.DOCKER`**
+   - **Diagnosis**: Under `Runtime.DOCKER`, `runner.build_command` passes a container-scoped `driver_yaml` (`/work/...` or `/assay-output/...`). `_resolve_yaml_path` fails on the host because `Path(root) / Path(driver_yaml)` discards `Path(root)` when `driver_yaml` is absolute, and `os.environ.get("MONETIO_ROOT_DIR")` misses `.env`.
+   - **Plan**: Add `*, host_yaml: Path | None = None` to `Application.driver_arguments`, `runner.driver_command`, `runner.write_job_script`, and `runner.build_command` (and pass `host_yaml=combo.yaml_path` from `test_driver_combos.py`). Remove `_resolve_yaml_path` and `os` import from `applications/monetio/application.py`; read `host_yaml or Path(driver_yaml)`. Add Docker `build_command` tests in `test_monetio.py` with container-scoped `/work/...` and `/assay-output/...` paths while the YAML lives under `tmp_path`.
+
+2. **P1 Major (`4564703316`) — `src/tests/config/monetio/aeronet/benchmarks.csv:3`: `baseline_state=local` from a `-dirty` commit**
+   - **Diagnosis**: `benchmarks.csv` was recorded from a `-dirty` working tree with `baseline_state=local`.
+   - **Plan**: Remove `src/tests/config/monetio/aeronet/benchmarks.csv` from this PR (defer recording committed benchmark rows until after the PR merges to a clean commit and runs against published S3 baselines, or re-record from a clean commit against S3). Note in `design/design.md` / `20261112-0853-initial-monetio.md` if needed.
+
+3. **P2 Moderate (`4564703326`) — `src/comparison.py:13`: Non-numeric comparison treats `NaT != NaT` as mismatched**
+   - **Diagnosis**: `datetime64` coordinate arrays enter the non-numeric branch, where NumPy evaluates `NaT != NaT` as `True`.
+   - **Plan**: Apply the suggested `both_na = np.isnat(real_arr) & np.isnat(base_arr)` guard when both dtypes are `np.datetime64`, and add a unit test in `test_comparison.py` verifying identical `NaT` timestamps pass (`data_match is True`, `n_mismatched == 0`).
+
+4. **P2 Moderate (`4564703370`) — `src/applications/monetio/cli.py:59`: Duplicate `_module_block` and `_source` across `monetio/cli.py` and `cece/cli.py`**
+   - **Diagnosis**: `_module_block` and `_source` duplicate `cece/cli.py` except for `--recurse-submodules` and the `extern/helm/libs` guard.
+   - **Plan**: Extract shared `module_block(checkout, section)` and `source_lines(checkout, section, *, recurse_submodules=False, extra_clone_check: str | None = None)` into `src/cli/stages.py` and call them from both `cece/cli.py` and `monetio/cli.py`. Verify with `test_monetio.py`, `test_stages.py`, and `test_cli.py`.
+
+5. **P2 Moderate (`4564703378`) — `src/applications/monetio/cli.py:66`: Hardcoded `"monetio/monetio-dev"` duplicates `MonetioSettings.docker_image`**
+   - **Diagnosis**: `_build` falls back to `"monetio/monetio-dev"` instead of `MonetioSettings().docker_image`.
+   - **Plan**: Use `section.docker_image or MonetioSettings().docker_image` (and verify `cece/cli.py` for parity if needed) and add a test in `test_monetio.py` with `MONETIO_DOCKER_IMAGE` set and unset.
+
+6. **P2 Moderate (`4564703390`) — `src/applications/monetio/assertions.py:55`: Redundant `output_variable_names()` wrapper**
+   - **Diagnosis**: `MonetioApplication` already instantiates `_ASSERTION_SPEC = assertions.MonetioAssertionSpec()`, so `assertions.output_variable_names()` re-instantiates it needlessly.
+   - **Plan**: Call `_ASSERTION_SPEC.output_variable_names(_config(config))` directly in `MonetioApplication.output_variable_names`, remove the redundant wrapper from `assertions.py`, and update `test_monetio.py`.
+
+7. **P2 Moderate (`4564703404`) — `src/cli/selectors.py:29`: Duplicated `unknown` application validation in `selected_applications`**
+   - **Diagnosis**: `unknown` check is duplicated in both the `"all" in tokens` and normal branches.
+   - **Plan**: Consolidate `unknown = sorted((set(tokens) - {"all"}) - set(config.applications))` once before the `if "all" in tokens:` branch.
+
+8. **P3 Minor (`4564703465`) — `README.md:9`: Stale prose claims `cece` is the default in every suite and run config**
+   - **Diagnosis**: `DEFAULT_APPLICATION` was retired and `--application` is required on `run`.
+   - **Plan**: Update `README.md:9` to state `cece` is the default `SuiteConfig` application while `ufs-chem-assay run` requires `--application`.
+
+9. **P3 Minor (`4564703496`) — `src/tests/config/monetio/aeronet/aeronet.yaml:3`: Header comment mentions `-v` flags not emitted by `driver_arguments`**
+   - **Diagnosis**: `driver_arguments` emits `monetio load <source> -f ... -o ... -k ...` without `-v`.
+   - **Plan**: Remove `-v ...` from line 3 of `src/tests/config/monetio/aeronet/aeronet.yaml`.
+
+## Execution order
+
+1. **Chunk D (Blocker + correctness — Comments 1 & 3)**:
+   - Pass `host_yaml` through `runner.py` -> `Application.driver_arguments` and add Docker path tests in `test_monetio.py` & `test_runner.py`.
+   - Add `NaT` guard in `comparison.py` and test in `test_comparison.py`.
+2. **Chunk E (Ponytail simplifications — Comments 4, 5, 6, 7)**:
+   - Extract `module_block` / `source_lines` to `cli/stages.py` for `cece/cli.py` and `monetio/cli.py`.
+   - Use `MonetioSettings().docker_image` in `monetio/cli.py`.
+   - Remove redundant `assertions.output_variable_names()` wrapper.
+   - Deduplicate `unknown` check in `cli/selectors.py`.
+3. **Chunk F (Docs & benchmark provenance — Comments 2, 8, 9)**:
+   - Remove dirty/local `src/tests/config/monetio/aeronet/benchmarks.csv` (re-record cleanly post-merge against S3 baselines).
+   - Fix `README.md:9` and `aeronet.yaml:3`.
+   - Run `uv run pre-commit run --all-files` and `uv run pytest src/tests/ufs_chem_assay --cov --cov-report=term-missing` (100% coverage).

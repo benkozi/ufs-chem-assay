@@ -11,7 +11,7 @@ from pathlib import Path
 from pydantic import Field
 
 from applications.base import ApplicationRunSection, RunConfigView, Stage
-from cli.stages import LMOD_INIT, q
+from cli.stages import module_block, q, source_lines
 from platforms import Runtime
 
 
@@ -35,50 +35,6 @@ def _as_cece(section: ApplicationRunSection) -> CeceRunSection:
     return section
 
 
-def _module_block(checkout: Path, section: CeceRunSection) -> list[str]:
-    """Load CECE's modulefile in this shell — only where compiled code runs
-    in-process (the build stage). Non-interactive bash has no `module`
-    function until the Lmod init is sourced; the guard keeps the script
-    runnable where Lmod is absent."""
-    assert section.modulefile is not None
-    return [
-        LMOD_INIT,
-        "module purge",
-        f"module use {q(checkout)}/modulefiles",
-        f"module load {q(section.modulefile)}",
-        "module list",
-    ]
-
-
-def _source(checkout: Path, section: CeceRunSection) -> list[str]:
-    clone = q(checkout)
-    ref = q(section.ref)
-    lines = [
-        f"if [ ! -d {clone}/.git ]; then",
-        f"  git clone --recurse-submodules --branch {ref} {q(section.git_url)} {clone}",
-    ]
-    if section.update_source:
-        lines += [
-            "else",
-            f"  git -C {clone} fetch origin",
-            f"  git -C {clone} checkout {ref}",
-            f"  git -C {clone} pull --ff-only origin {ref}",
-            f"  git -C {clone} submodule update --init --recursive",
-        ]
-    else:
-        lines += ["else", f'  echo "using existing clone at {clone} as-is"']
-    lines += [
-        "fi",
-        # An uninitialized submodule shows up much later as a confusing
-        # configure error — fail fast instead.
-        f"if [ ! -e {clone}/extern/helm/libs ]; then",
-        f'  echo "extern/helm submodule not initialized in {clone}" >&2; exit 1',
-        "fi",
-        f"git -C {clone} log -1 --oneline",
-    ]
-    return lines
-
-
 def _build(config: RunConfigView, checkout: Path, section: CeceRunSection) -> list[str]:
     clone = checkout
     targets = " ".join(f"--target {q(target)}" for target in section.targets)
@@ -93,7 +49,7 @@ def _build(config: RunConfigView, checkout: Path, section: CeceRunSection) -> li
         ]
     build = clone / "build"
     log = build / "configure.log"
-    modules = _module_block(clone, section) if section.modulefile is not None else []
+    modules = module_block(clone, section)
     configure = " ".join(
         [
             f"cmake -S {q(clone)} -B {q(build)}",
@@ -119,7 +75,19 @@ def stage_lines(
     module never names the adapter, so the registry is not needed here."""
     cece = _as_cece(section)
     if stage is Stage.SOURCE:
-        return _source(checkout, cece)
+        clone = q(checkout)
+        return source_lines(
+            checkout,
+            cece,
+            recurse_submodules=True,
+            extra_checks=[
+                # An uninitialized submodule shows up much later as a confusing
+                # configure error — fail fast instead.
+                f"if [ ! -e {clone}/extern/helm/libs ]; then",
+                f'  echo "extern/helm submodule not initialized in {clone}" >&2; exit 1',
+                "fi",
+            ],
+        )
     if stage is Stage.BUILD:
         return _build(config, checkout, cece)
     if stage is Stage.DATA:

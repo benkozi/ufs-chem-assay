@@ -21,7 +21,6 @@ from applications.monetio.assertions import (
     MonetioAssertionSpec,
     expected_output_count,
     expected_output_filenames,
-    output_variable_names,
 )
 from applications.monetio.cli import MonetioRunSection, stage_lines
 from applications.monetio.combos import (
@@ -172,7 +171,7 @@ def test_monetio_assertions_and_fingerprint(
     )
     assert (
         app.output_variable_names(config)
-        == output_variable_names(config)
+        == MonetioAssertionSpec().output_variable_names(config)
         == ["aod_500nm"]
     )
 
@@ -347,9 +346,7 @@ def test_monetio_suite_and_selector_matching(
 # ── driver_arguments ─────────────────────────────────────────────────────────
 
 
-def test_monetio_driver_arguments(
-    tmp_path: Path, aeronet_base_yaml: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_monetio_driver_arguments(tmp_path: Path, aeronet_base_yaml: Path) -> None:
     app = get_application("monetio")
     config = MonetioConfig.from_yaml(aeronet_base_yaml)
     config.files = ["data/aeronet/f1.txt", "data/aeronet/f2.txt"]
@@ -386,15 +383,51 @@ def test_monetio_driver_arguments(
         "siteid=Bondville",
     ]
 
-    # When driver_yaml is a relative path under MONETIO_ROOT_DIR
-    checkout = tmp_path / "monetio_checkout"
-    rel_dir = checkout / "artifacts" / "01JB"
+    # When driver_yaml is a non-host path and host_yaml provides the host file
+    rel_dir = tmp_path / "artifacts" / "01JB"
     rel_dir.mkdir(parents=True)
     rel_yaml = rel_dir / "01JB.yaml"
     config.to_yaml(rel_yaml)
-    monkeypatch.setenv("MONETIO_ROOT_DIR", str(checkout))
-    rel_args = app.driver_arguments(PurePosixPath("artifacts/01JB/01JB.yaml"))
+    rel_args = app.driver_arguments(
+        PurePosixPath("artifacts/01JB/01JB.yaml"), host_yaml=rel_yaml
+    )
     assert rel_args[:2] == ["load", "aeronet"]
+
+
+def test_monetio_build_command_docker_uses_host_yaml(
+    tmp_path: Path, aeronet_base_yaml: Path
+) -> None:
+    from applications.monetio.settings import MonetioSettings
+    from platforms import Platform
+    from runner import build_command
+    from settings import Settings
+
+    app = get_application("monetio")
+    config = MonetioConfig.from_yaml(aeronet_base_yaml)
+    config.files = ["data/aeronet/f1.txt"]
+    config.output = "/assay-output/01JA/aeronet.nc"
+    host_yaml = tmp_path / "01JA.yaml"
+    config.to_yaml(host_yaml)
+
+    app_settings = MonetioSettings(root_dir=tmp_path)
+    cmd = build_command(
+        Settings(platform=Platform.LOCAL, runtime=Runtime.DOCKER),
+        app,
+        app_settings,
+        PurePosixPath("/assay-output/01JA/01JA.yaml"),
+        output_mount=(tmp_path, PurePosixPath("/assay-output")),
+        host_yaml=host_yaml,
+    )
+    driver_pos = cmd.index(app_settings.driver_path)
+    assert cmd[driver_pos : driver_pos + 7] == [
+        app_settings.driver_path,
+        "load",
+        "aeronet",
+        "-f",
+        "data/aeronet/f1.txt",
+        "-o",
+        "/assay-output/01JA/aeronet.nc",
+    ]
 
 
 # ── CLI stage_lines ──────────────────────────────────────────────────────────
@@ -413,7 +446,9 @@ class _FakeRunConfigView:
         return self._checkout
 
 
-def test_monetio_stage_lines_source_build_and_data(tmp_path: Path) -> None:
+def test_monetio_stage_lines_source_build_and_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     app = get_application("monetio")
     checkout = tmp_path / "monetio"
     view = _FakeRunConfigView(Runtime.NATIVE, checkout)
@@ -448,10 +483,16 @@ def test_monetio_stage_lines_source_build_and_data(tmp_path: Path) -> None:
     assert not any("module load" in line for line in build_plain)
     assert any(f"-e {checkout}" in line for line in build_plain)
 
-    # Build under Docker runtime
+    # Build under Docker runtime (default image and MONETIO_DOCKER_IMAGE override)
     docker_view = _FakeRunConfigView(Runtime.DOCKER, checkout)
+    monkeypatch.delenv("MONETIO_DOCKER_IMAGE", raising=False)
     build_docker = stage_lines(Stage.BUILD, docker_view, section, checkout)
-    assert any("docker" in line for line in build_docker)
+    assert build_docker == ["docker image inspect monetio/monetio-dev >/dev/null"]
+    monkeypatch.setenv("MONETIO_DOCKER_IMAGE", "ghcr.io/noaa/monetio:custom")
+    build_docker_env = stage_lines(Stage.BUILD, docker_view, section, checkout)
+    assert build_docker_env == [
+        "docker image inspect ghcr.io/noaa/monetio:custom >/dev/null"
+    ]
 
     # Data stage returns empty list (shared fetch handles inputs)
     assert stage_lines(Stage.DATA, view, section, checkout) == []

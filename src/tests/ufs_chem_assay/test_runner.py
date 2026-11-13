@@ -165,19 +165,28 @@ def test_build_command_uses_application_driver_arguments_in_docker_and_native(
     mocker.patch.object(
         stub,
         "driver_arguments",
-        side_effect=lambda yaml_path: ["load", "aeronet", "--config", str(yaml_path)],
+        side_effect=lambda yaml_path, host_yaml=None: [
+            "load",
+            "aeronet",
+            "--config",
+            str(host_yaml or yaml_path),
+        ],
     )
     app_settings = _app_settings()
 
     docker_cmd = build_command(
-        _settings(), stub, app_settings, PurePosixPath("/work/x/x.yaml")
+        _settings(),
+        stub,
+        app_settings,
+        PurePosixPath("/work/x/x.yaml"),
+        host_yaml=tmp_path / "x.yaml",
     )
     assert docker_cmd[-5:] == [
         "./build/cece_standalone_driver",
         "load",
         "aeronet",
         "--config",
-        "/work/x/x.yaml",
+        str(tmp_path / "x.yaml"),
     ]
 
     native_cmd = build_command(

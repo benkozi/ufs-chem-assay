@@ -1225,6 +1225,7 @@ def submitted_jobs(
                     out_path,
                     timeout_s,
                     app=app,
+                    host_yaml=generated.host_dir / generated.driver_yaml.name,
                 )
             except subprocess.CalledProcessError as exc:
                 write_ledger(ledger, combo_roots.host)
@@ -1302,6 +1303,7 @@ def driver_run(
             out_path=out_path,
             timeout_s=run_timeout_s,
             output_mount=combo_roots.output_mount,
+            host_yaml=generated.host_dir / generated.driver_yaml.name,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         error = exc

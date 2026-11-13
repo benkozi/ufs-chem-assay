@@ -9,7 +9,8 @@ from pathlib import Path
 from pydantic import Field
 
 from applications.base import ApplicationRunSection, RunConfigView, Stage
-from cli.stages import LMOD_INIT, q
+from applications.monetio.settings import MonetioSettings
+from cli.stages import module_block, q, source_lines
 from platforms import Runtime
 
 
@@ -25,45 +26,11 @@ def _as_monetio(section: ApplicationRunSection) -> MonetioRunSection:
     return section
 
 
-def _module_block(checkout: Path, section: MonetioRunSection) -> list[str]:
-    assert section.modulefile is not None
-    return [
-        LMOD_INIT,
-        "module purge",
-        f"module use {q(checkout)}/modulefiles",
-        f"module load {q(section.modulefile)}",
-        "module list",
-    ]
-
-
-def _source(checkout: Path, section: MonetioRunSection) -> list[str]:
-    clone = q(checkout)
-    ref = q(section.ref)
-    lines = [
-        f"if [ ! -d {clone}/.git ]; then",
-        f"  git clone --branch {ref} {q(section.git_url)} {clone}",
-    ]
-    if section.update_source:
-        lines += [
-            "else",
-            f"  git -C {clone} fetch origin",
-            f"  git -C {clone} checkout {ref}",
-            f"  git -C {clone} pull --ff-only origin {ref}",
-        ]
-    else:
-        lines += ["else", f'  echo "using existing clone at {clone} as-is"']
-    lines += [
-        "fi",
-        f"git -C {clone} log -1 --oneline",
-    ]
-    return lines
-
-
 def _build(
     config: RunConfigView, checkout: Path, section: MonetioRunSection
 ) -> list[str]:
     if config.runtime is Runtime.DOCKER:
-        image = section.docker_image or "monetio/monetio-dev"
+        image = section.docker_image or MonetioSettings().docker_image
         return [f"docker image inspect {q(image)} >/dev/null"]
     venv = checkout / ".venv"
     python_bin = venv / "bin" / "python"
@@ -71,7 +38,7 @@ def _build(
     target = (
         f"{checkout}[{','.join(section.extras)}]" if section.extras else str(checkout)
     )
-    modules = _module_block(checkout, section) if section.modulefile is not None else []
+    modules = module_block(checkout, section)
     return [
         *modules,
         f"uv venv --allow-existing {q(venv)}",
@@ -88,7 +55,7 @@ def stage_lines(
 ) -> list[str]:
     monetio = _as_monetio(section)
     if stage is Stage.SOURCE:
-        return _source(checkout, monetio)
+        return source_lines(checkout, monetio)
     if stage is Stage.BUILD:
         return _build(config, checkout, monetio)
     if stage is Stage.DATA:

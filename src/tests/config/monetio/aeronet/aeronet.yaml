@@ -1,6 +1,6 @@
 # Base driver configuration for the monetio AERONET suite (see design/design.md).
 # Loaded by MonetioConfig and expanded by MonetioApplication.driver_arguments
-# into `monetio load aeronet -f ... -o ... -v ... -k ...`.
+# into `monetio load aeronet -f ... -o ... -k ...`.
 source: aeronet
 files:
   - data/aeronet/aeronet-aod15-cart-site-200006.txt

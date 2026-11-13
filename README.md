@@ -12,7 +12,7 @@ per-combo assertions on the output (exit code, file counts/names,
 attributes) and a statistics/plotting analysis step. Everything that knows
 the application under test — its driver config, sweep schema, image,
 checkout, data directory — lives in an application adapter; CECE (`application: cece`,
-the default in every suite and run config) and MONETIO (`application: monetio`)
+the default `SuiteConfig` application) and MONETIO (`application: monetio`)
 are the shipped adapters, and a session runs one application. Configurations the
 harness carries live under `src/tests/config/<application>/<configuration>/`, each
 beside the suites that sweep it: `cece/maccity/` (a 4x5 CO configuration
