@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.1.0-rc.11 (2026-11-13)
+
+### Chores
+
+- **deps**: Bump the python group with 4 updates
+  ([#44](https://github.com/benkozi/ufs-chem-assay/pull/44),
+  [`55d71df`](https://github.com/benkozi/ufs-chem-assay/commit/55d71df976cbe8e751c50443a31dcfbb61a218b9))
+
+### Features
+
+- Add monetio application adapter and aeronet suite
+  ([#45](https://github.com/benkozi/ufs-chem-assay/pull/45),
+  [`ac79bd7`](https://github.com/benkozi/ufs-chem-assay/commit/ac79bd71476dc66f53813fec1564e914e2200e5f))
+
+
 ## v0.1.0-rc.10 (2026-11-05)
 
 ### Chores
