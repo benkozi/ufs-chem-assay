@@ -55,9 +55,9 @@ _JUNIT = """<?xml version="1.0" encoding="UTF-8"?>
   <testcase name="CeceIo.Write" classname="CeceIo.Write" time="2" status="run"/>
 </testsuite>
 """
-_PASSING = _JUNIT.replace(
-    '<failure message=""/>', ""
-).replace('status="fail"', 'status="run"')
+_PASSING = _JUNIT.replace('<failure message=""/>', "").replace(
+    'status="fail"', 'status="run"'
+)
 
 
 def _accounting(
@@ -65,9 +65,9 @@ def _accounting(
 ) -> SlurmAccounting:
     return SlurmAccounting(
         job_id=job_id,
-        submit=datetime(2026, 11, 16, 12, 0),
-        start=datetime(2026, 11, 16, 12, 0, 40),
-        end=datetime(2026, 11, 16, 12, 6),
+        submit=datetime(2026, 11, 16, 12, 0, tzinfo=UTC),
+        start=datetime(2026, 11, 16, 12, 0, 40, tzinfo=UTC),
+        end=datetime(2026, 11, 16, 12, 6, tzinfo=UTC),
         elapsed_s=320.0,
         queue_s=40.0,
         max_rss_kb=2_000_000,
@@ -151,7 +151,7 @@ def test_parse_junit_reads_errors_and_disabled_tests(tmp_path: Path) -> None:
 def test_test_ledger_round_trips_and_names_its_file(tmp_path: Path) -> None:
     assert CONVENTIONS.test_ledger == "tests.yaml"
     assert path_of_test_ledger(tmp_path) == tmp_path / "tests.yaml"
-    with pytest.raises(ValueError, match="no tests.yaml: no test run recorded"):
+    with pytest.raises(ValueError, match=r"no tests\.yaml: no test run recorded"):
         read_test_ledger(tmp_path)
     ledger = TestLedger(
         run_id="01JTESTRUNTESTRUNTESTRUNTE",
@@ -265,7 +265,9 @@ def test_submit_replaces_an_evaluated_run(tmp_path: Path) -> None:
     assert len(read_test_benchmarks_csv(tmp_path / CONVENTIONS.benchmarks)) == 1
 
 
-def test_a_refused_sbatch_leaves_no_ledger(tmp_path: Path, slurm: MockerFixture) -> None:
+def test_a_refused_sbatch_leaves_no_ledger(
+    tmp_path: Path, slurm: MockerFixture
+) -> None:
     slurm.patch(
         "apptests.submit_job",
         side_effect=SlurmSubmissionError(1, ["sbatch"], output="", stderr="bad QOS"),
@@ -287,7 +289,9 @@ def test_evaluate_records_the_verdict_and_one_benchmark_row(tmp_path: Path) -> N
     assert ledger == read_test_ledger(tmp_path)
     assert ledger.evaluated_at == later
     assert ledger.exit_status == 0
-    assert ledger.tests == TestCounts(total=4, passed=3, failed=0, skipped=1, ctest_s=3.75)
+    assert ledger.tests == TestCounts(
+        total=4, passed=3, failed=0, skipped=1, ctest_s=3.75
+    )
     (row,) = read_test_benchmarks_csv(tmp_path / CONVENTIONS.benchmarks)
     assert row.model_dump() == {
         "recorded_at": later,
@@ -343,7 +347,8 @@ def test_evaluate_judges_by_the_accounting_and_the_report(
     _submit(tmp_path)
     _finish(tmp_path, junit)
     slurm.patch(
-        "apptests.slurm_accounting", return_value=_accounting(state=state, exit_code=code)
+        "apptests.slurm_accounting",
+        return_value=_accounting(state=state, exit_code=code),
     )
     ledger = evaluate(tmp_path)
     assert ledger.exit_status == expected
@@ -413,11 +418,18 @@ def test_a_run_in_place_is_recorded_with_its_exit_status(tmp_path: Path) -> None
     )
     (root / "tests.xml").write_text(_JUNIT)
     local = _PROVENANCE.model_copy(
-        update={"platform": Platform.LOCAL, "runtime": Runtime.DOCKER, "modulefile": None}
+        update={
+            "platform": Platform.LOCAL,
+            "runtime": Runtime.DOCKER,
+            "modulefile": None,
+        }
     )
     started = record_local(root, application="cece", toolchain=None, provenance=local)
     assert started.job is None
-    assert (started.out_path, started.junit_path) == (root / "tests.out", root / "tests.xml")
+    assert (started.out_path, started.junit_path) == (
+        root / "tests.out",
+        root / "tests.xml",
+    )
     with pytest.raises(ValueError, match="needs the test command's exit status"):
         evaluate(root)
     ledger = evaluate(root, exit_status=8, now=lambda: _T0)
@@ -440,7 +452,9 @@ def test_a_run_in_place_is_recorded_with_its_exit_status(tmp_path: Path) -> None
 # ── cancelling ───────────────────────────────────────────────────────────────
 
 
-def test_cancel_scancels_a_queued_test_job(tmp_path: Path, slurm: MockerFixture) -> None:
+def test_cancel_scancels_a_queued_test_job(
+    tmp_path: Path, slurm: MockerFixture
+) -> None:
     assert apptests.cancel(tmp_path) == []  # no ledger: nothing to cancel
     _submit(tmp_path)
     assert apptests.cancel(tmp_path) == []  # nothing queued
@@ -479,3 +493,54 @@ def test_nothing_here_shells_out_for_real() -> None:
     # let a test reach Slurm.
     for name in ("submit_job", "queue_states", "slurm_accounting", "scancel"):
         assert callable(getattr(apptests, name))
+
+
+# ── a test command that writes no junit report ───────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("output", "passed", "expected"),
+    [("SMOKE TEST PASSED\n", 1, 0), ("SMOKE TEST FAILED\n", 0, 1)],
+)
+@pytest.mark.usefixtures("slurm")
+def test_a_pass_marker_stands_in_for_the_report(
+    tmp_path: Path, output: str, passed: int, expected: int
+) -> None:
+    # One executable, one verdict: the marker in its output is the test.
+    ledger = _submit(tmp_path, passed_marker="SMOKE TEST PASSED")
+    assert ledger.passed_marker == "SMOKE TEST PASSED"
+    (tmp_path / "tests-4242.out").write_text(
+        "tic: 2026-11-16T12:00:00Z\nKokkos version: 4.5.01\n"
+        + output
+        + "toc: 2026-11-16T12:00:02Z\n"
+    )
+    evaluated = evaluate(tmp_path)
+    assert evaluated.tests == TestCounts(
+        total=1, passed=passed, failed=1 - passed, skipped=0, ctest_s=None
+    )
+    assert evaluated.exit_status == expected  # sacct said COMPLETED 0 either way
+    (row,) = read_test_benchmarks_csv(tmp_path / CONVENTIONS.benchmarks)
+    assert (row.tests_total, row.tests_passed, row.ctest_s) == (1, passed, None)
+    assert row.wall_s == 2.0
+
+
+def test_a_run_in_place_without_its_marker_is_not_a_pass(tmp_path: Path) -> None:
+    local = _PROVENANCE.model_copy(update={"runtime": Runtime.NATIVE})
+    record_local(
+        tmp_path,
+        application="kokkos-smoke",
+        toolchain=None,
+        provenance=local,
+        passed_marker="SMOKE TEST PASSED",
+    )
+    (tmp_path / "tests.out").write_text("Kokkos version: 4.5.01\n")
+    assert evaluate(tmp_path, exit_status=0).exit_status == 1
+    record_local(
+        tmp_path,
+        application="kokkos-smoke",
+        toolchain=None,
+        provenance=local,
+        passed_marker="SMOKE TEST PASSED",
+    )
+    (tmp_path / "tests.out").write_text("SMOKE TEST PASSED\n")
+    assert evaluate(tmp_path, exit_status=0).exit_status == 0

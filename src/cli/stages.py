@@ -31,6 +31,8 @@ from applications.base import (
     ApplicationSettings,
     RunConfigView,
     Stage,
+    TestPlan,
+    TestsSection,
 )
 from cli.run_config import (
     HARNESS_ROOT,
@@ -148,6 +150,113 @@ def gate_lines(log: Path, gates: list[str]) -> list[str]:
             f"grep -E {q(gate)} {q(log)}",
         ]
     return lines
+
+
+class OfflineBuild(StrictModel):
+    """What a CMake build changes for the compute-node probe, where nothing
+    can be fetched, and how the login node then finishes it for the tests."""
+
+    args: list[str] = Field(description="The compute-node configure's arguments")
+    note: str = Field(description="One line for the log: what is off and why")
+    finish_args: list[str] = Field(
+        description=(
+            "The login-node finish's configure arguments (rendered with "
+            "tests.enabled): what the probe turned off, back on"
+        )
+    )
+    finish_note: str = Field(description="One line for the log: what the finish adds")
+
+
+def cmake_stage(
+    config: RunConfigView,
+    section: ApplicationRunSection,
+    *,
+    module_dir: Path,
+    source: Path,
+    build: Path,
+    cmake_args: list[str],
+    targets: list[str],
+    build_jobs: int,
+    gates: list[str],
+    default_probe: str,
+    offline: OfflineBuild | None = None,
+) -> list[str]:
+    """The build stage of a CMake application, in the three shapes of
+    build_node. Always first: the node, the module block (`module_dir` is
+    the checkout whose own modulefiles are the default path), the toolchain
+    probe, the build directory. Then, on the login node: one configure with
+    `cmake_args`, teed to <build>/configure.log, the `gates` (shell lines
+    over that log), the build. On a compute node: the configure and the
+    build as two srun steps (two allocations, never one spanning both) in
+    the module environment this shell loaded, with `offline.args` when the
+    application must turn something off to configure without a network —
+    and, with tests enabled, the login-node finish: `offline.finish_args`
+    into the same build directory, the gates again, a build reusing the
+    compute-built objects. Without `offline` the compute build is the whole
+    build: nothing differs between the nodes."""
+    log = build / "configure.log"
+    launcher = config.build_launcher(section, cpus=build_jobs)
+    prefix = "".join(f"{q(part)} " for part in launcher)
+
+    def configure(args: list[str]) -> list[str]:
+        command = " ".join(
+            [f"cmake -S {q(source)} -B {q(build)}", *(q(arg) for arg in args)]
+        )
+        return [f"{command} 2>&1 | tee {q(log)}", *gates]
+
+    compile_targets = " ".join(
+        [
+            f"cmake --build {q(build)}",
+            *(f"--target {q(target)}" for target in targets),
+            f"--parallel {build_jobs}",
+        ]
+    )
+    setup = [
+        *module_block(config, module_dir, section),
+        toolchain_probe(section, default_probe),
+        f"mkdir -p {q(build)}",
+    ]
+    if not launcher:
+        return [
+            f"echo {q('build node: login')}",
+            *setup,
+            *configure(cmake_args),
+            compile_targets,
+        ]
+    finish = offline is not None and section.tests.enabled
+    where = f"build node: compute ({' '.join(launcher)})"
+    probe_configure, *probe_gates = configure(
+        cmake_args if offline is None else offline.args
+    )
+    lines = [
+        f"echo {q(where + (', then login (tests)' if finish else ''))}",
+        *setup,
+        *([] if offline is None else [f"echo {q(offline.note)}"]),
+        f"{prefix}{probe_configure}",
+        *probe_gates,
+        f"{prefix}{compile_targets}",
+    ]
+    if offline is not None and finish:
+        lines += [
+            f"echo {q(offline.finish_note)}",
+            *configure(offline.finish_args),
+            compile_targets,
+        ]
+    return lines
+
+
+def ctest_plan(tests: TestsSection, junit: str) -> TestPlan:
+    """A CMake application's own tests: ctest over the build directory,
+    from the checkout root, with the section's filter and parallelism.
+    Every MPI test launches its own ranks (the launcher is baked in at
+    configure time), so ctest itself is never behind one."""
+    words = ["ctest", "--test-dir", "build", "--output-on-failure"]
+    words += ["--output-junit", junit]
+    if tests.filter is not None:
+        words += ["-R", q(tests.filter)]
+    if tests.parallel is not None:
+        words += ["-j", str(tests.parallel)]
+    return TestPlan(requires="build/CTestTestfile.cmake", command=" ".join(words))
 
 
 def source_lines(
@@ -584,6 +693,11 @@ def render_stage(
     `sessions`: the sessions the data stage fetches for (default: all).
     `shared_data`: render the harness-wide data lines (the cartopy cache) —
     once per run, under the first application."""
+    if stage not in app.stages:
+        mine = ", ".join(s.value for s in Stage if s in app.stages)
+        raise ValueError(
+            f"{app.name} takes no part in the {stage.value} stage (its stages: {mine})"
+        )
     section = config.applications[app.name]
     who = app.name
     attachments: dict[str, str] = {}

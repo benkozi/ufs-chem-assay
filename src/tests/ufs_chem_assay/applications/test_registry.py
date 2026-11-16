@@ -7,18 +7,19 @@ import pytest
 from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
-from applications.base import Application
+from applications.base import Application, NoDriverSuite, Stage
 from applications.cece.suite import CeceSuiteConfig
 from applications.registry import (
     REGISTRY,
+    driver_application,
     get_application,
     load_suite,
     peek_application,
 )
 
 
-def test_registry_holds_cece_and_monetio() -> None:
-    assert list(REGISTRY) == ["cece", "monetio"]
+def test_registry_holds_the_four_applications() -> None:
+    assert list(REGISTRY) == ["cece", "monetio", "catchem", "kokkos-smoke"]
     assert isinstance(get_application("cece"), Application)
     assert get_application("cece").name == "cece"
     assert isinstance(get_application("monetio"), Application)
@@ -27,7 +28,8 @@ def test_registry_holds_cece_and_monetio() -> None:
 
 def test_unknown_application_lists_the_registry() -> None:
     with pytest.raises(
-        ValueError, match=r"unknown application 'nope'.*\['cece', 'monetio'\]"
+        ValueError,
+        match=r"unknown application 'nope'.*\['catchem', 'cece', 'kokkos-smoke', 'monetio'\]",
     ):
         get_application("nope")
     with pytest.raises(ValueError, match="unknown application 5"):
@@ -93,11 +95,11 @@ def test_load_suite_unknown_application_fails(
 ) -> None:
     suite_file = tmp_path / "other-suite.yaml"
     suite_file.write_text(
-        f"name: other\napplication: catchem\nconfig_path: {cece_config_path}\ntimeout_s: 5\n"
+        f"name: other\napplication: geoschem\nconfig_path: {cece_config_path}\ntimeout_s: 5\n"
     )
-    with pytest.raises(ValueError, match="unknown application 'catchem'"):
+    with pytest.raises(ValueError, match="unknown application 'geoschem'"):
         load_suite(suite_file)
-    with pytest.raises(ValueError, match="unknown application 'catchem'"):
+    with pytest.raises(ValueError, match="unknown application 'geoschem'"):
         peek_application(suite_file)
 
 
@@ -155,3 +157,35 @@ def test_cece_stage_lines_refuse_the_shared_stages() -> None:
         get_application("cece").stage_lines(
             Stage.HARNESS, config, config.applications["cece"]
         )
+
+
+def test_stages_say_what_each_application_takes_part_in() -> None:
+    # Driver applications: every stage. The other two are cloned (or not),
+    # built and tested, never swept.
+    everything = frozenset(Stage)
+    assert get_application("cece").stages == everything
+    assert get_application("monetio").stages == everything
+    assert get_application("catchem").stages == {Stage.SOURCE, Stage.BUILD, Stage.TEST}
+    assert get_application("kokkos-smoke").stages == {Stage.BUILD, Stage.TEST}
+
+
+def test_driver_application_refuses_one_without_a_driver_suite() -> None:
+    assert driver_application("cece") is get_application("cece")
+    with pytest.raises(NoDriverSuite, match="catchem has no driver suite"):
+        driver_application("catchem")
+    with pytest.raises(ValueError, match="unknown application"):
+        driver_application("nope")
+
+
+@pytest.mark.parametrize("name", ["catchem", "kokkos-smoke"])
+def test_a_suite_naming_an_application_without_a_driver_is_refused(
+    tmp_path: Path, name: str
+) -> None:
+    path = tmp_path / "x-suite.yaml"
+    path.write_text(
+        f"name: x\napplication: {name}\nconfig_path: x.yaml\ntimeout_s: 5\n"
+    )
+    with pytest.raises(NoDriverSuite, match=f"{name} has no driver suite"):
+        peek_application(path)
+    with pytest.raises(NoDriverSuite, match=f"{name} has no driver suite"):
+        load_suite(path)

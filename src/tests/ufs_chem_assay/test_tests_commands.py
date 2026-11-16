@@ -70,13 +70,19 @@ def _git_checkout(path: Path) -> str:
     path.mkdir(parents=True)
     subprocess.run(["git", "init", "-q"], cwd=path, check=True)
     subprocess.run(
-        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q"]
-        + ["--allow-empty", "-m", "initial"],
+        [
+            *["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q"],
+            *["--allow-empty", "-m", "initial"],
+        ],
         cwd=path,
         check=True,
     )
     head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=path, check=True, capture_output=True, text=True
+        ["git", "rev-parse", "HEAD"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     return head.stdout.strip()
 
@@ -144,7 +150,9 @@ def test_submit_tests_reports_a_refused_sbatch(
 ) -> None:
     mocker.patch(
         "apptests.submit_job",
-        side_effect=SlurmSubmissionError(1, ["sbatch"], output="", stderr="Invalid qos"),
+        side_effect=SlurmSubmissionError(
+            1, ["sbatch"], output="", stderr="Invalid qos"
+        ),
     )
     with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
         assert _submit(rendered) == 1
@@ -223,7 +231,9 @@ def test_evaluate_tests_judges_a_finished_job(
     ledger = read_test_ledger(tests_root)
     assert ledger.exit_status == 0
     assert ledger.evaluated_at is not None
-    assert "tests cece: evaluated (exit 0), 2 passed / 0 failed / 1 skipped" in caplog.text
+    assert (
+        "tests cece: evaluated (exit 0), 2 passed / 0 failed / 1 skipped" in caplog.text
+    )
     (row,) = read_test_benchmarks_csv(tests_root / CONVENTIONS.benchmarks)
     assert row.wall_s == 60.0
 
@@ -261,7 +271,10 @@ def test_evaluate_tests_records_a_run_in_place(
         "tic: 2026-11-16T12:00:00Z\ntoc: 2026-11-16T12:00:20Z\n"
     )
     (tests_root / "tests.xml").write_text(
-        _PASSING.replace('<testcase name="b" time="0.5"/>', '<testcase name="b"><failure/></testcase>')
+        _PASSING.replace(
+            '<testcase name="b" time="0.5"/>',
+            '<testcase name="b"><failure/></testcase>',
+        )
     )
     with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
         assert _evaluate(root) == 1  # the status is the script's to pass
@@ -283,4 +296,50 @@ def test_evaluate_tests_refuses_an_application_whose_tests_are_off(
     plain = _render(tmp_path, mocker, overrides=None)
     with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
         assert _evaluate(plain) == 1
-    assert "applications.cece.tests.enabled is false: no tests to evaluate" in caplog.text
+    assert (
+        "applications.cece.tests.enabled is false: no tests to evaluate" in caplog.text
+    )
+
+
+def test_submit_tests_records_the_pass_marker_of_a_reportless_suite(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    mocker.patch("apptests.submit_job", return_value="4242")
+    mocker.patch("apptests.queue_states", return_value={})
+    mocker.patch("cli.commands.run.run_bash")
+    config = run_config_file(
+        tmp_path,
+        overrides={
+            "applications.kokkos-smoke": {
+                "modulefile": "ufs_ursa.oneapi",
+                "tests": {"enabled": True},
+            }
+        },
+        root_dir=tmp_path / "root",
+    )
+    assert (
+        main(
+            [
+                "run",
+                f"--config-file={config}",
+                "--application=kokkos-smoke",
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    root = tmp_path / "root"
+    with caplog.at_level(logging.WARNING, logger=_CLI_LOGGER):
+        assert (
+            main(["submit-tests", f"--root-dir={root}", "--application=kokkos-smoke"])
+            == 0
+        )
+    ledger = read_test_ledger(root / "tests" / "kokkos-smoke")
+    assert ledger.passed_marker == "SMOKE TEST PASSED"
+    assert ledger.job is not None
+    assert ledger.job.script == root / "scripts" / "04-test-kokkos-smoke.sbatch"
+    # The project is the harness's own: no checkout commit, and no warning
+    # about one.
+    assert ledger.provenance.application_commit is None
+    assert "application_commit" not in caplog.text
+    assert ledger.provenance.cmake_args == "-DCMAKE_BUILD_TYPE=Release"

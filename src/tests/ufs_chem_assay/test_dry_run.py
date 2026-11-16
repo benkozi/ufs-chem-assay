@@ -354,7 +354,7 @@ def test_unknown_application_is_a_usage_error(tmp_path: Path) -> None:
             "pytest",
             str(_RUNNER_ROOT / "src" / "tests" / "test_driver_combos.py"),
             "--dry-run",
-            "--application=catchem",
+            "--application=geoschem",
             "-q",
             "-p",
             "no:cacheprovider",
@@ -367,8 +367,8 @@ def test_unknown_application_is_a_usage_error(tmp_path: Path) -> None:
         timeout=300,
     )
     assert result.returncode == 4, result.stdout + result.stderr  # USAGE_ERROR
-    assert "unknown application 'catchem'" in result.stderr
-    assert "['cece', 'monetio']" in result.stderr
+    assert "unknown application 'geoschem'" in result.stderr
+    assert "['catchem', 'cece', 'kokkos-smoke', 'monetio']" in result.stderr
 
 
 def test_run_yaml_records_a_present_inputs_size(tmp_path: Path) -> None:

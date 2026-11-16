@@ -106,8 +106,12 @@ class TestCounts(StrictModel):
     passed: int = Field(ge=0, description="Tests that ran and passed")
     failed: int = Field(ge=0, description="Tests that failed or errored")
     skipped: int = Field(ge=0, description="Tests skipped, disabled, or not run")
-    ctest_s: float = Field(
-        ge=0, description="The tests' own durations, summed, in seconds"
+    ctest_s: float | None = Field(
+        ge=0,
+        description=(
+            "The tests' own durations, summed, in seconds; null when the report "
+            "is a pass marker, which times nothing"
+        ),
     )
 
 
@@ -191,6 +195,13 @@ class TestLedger(StrictModel):
         description="The run's output (tic/toc lines around the tests)"
     )
     junit_path: Path = Field(description="The junit report the test command writes")
+    passed_marker: str | None = Field(
+        default=None,
+        description=(
+            "For a test command that writes no junit report: the text in its "
+            "output that means it passed (the run counts as one test)"
+        ),
+    )
     evaluated_at: datetime | None = Field(
         default=None, description="When the run was evaluated (UTC); null until then"
     )

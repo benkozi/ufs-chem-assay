@@ -126,6 +126,8 @@ def configured_sessions(
     evaluated in place too; `watch` checks submit_only on top)."""
     watched: list[WatchedSession] = []
     for app in applications:
+        if Stage.HARNESS not in app.stages:
+            continue  # built and tested, never swept: no session, no root
         for session in sessions:
             name = f"{Stage.RESUME.value}-{app.name}"
             if session.name is not None:

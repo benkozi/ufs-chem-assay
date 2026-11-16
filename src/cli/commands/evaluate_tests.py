@@ -78,11 +78,13 @@ def handler(args: argparse.Namespace) -> int:
                     f"{config.runtime.value} runtime: the test command's exit "
                     "status (the rendered test stage passes it)"
                 )
+            plan = app.test_plan(config.applications[app.name], "junit")
             apptests.record_local(
                 tests_root,
                 application=app.name,
                 toolchain=None,
                 provenance=test_provenance(config, app),
+                passed_marker=plan.passed_marker if plan else None,
             )
             ledger = apptests.evaluate(tests_root, exit_status=args.exit_status)
     except ValueError as exc:

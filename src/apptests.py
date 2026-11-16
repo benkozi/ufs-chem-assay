@@ -17,6 +17,7 @@ rows are every evaluated one. `ufs-chem-assay submit-tests`, `evaluate-tests`,
 
 from __future__ import annotations
 
+import contextlib
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -95,10 +96,9 @@ def parse_junit(path: Path) -> tuple[TestCounts, list[str]]:
             skipped += 1
         else:
             passed += 1
-        try:
+        # A report without a usable duration for a test still counts it.
+        with contextlib.suppress(ValueError):
             seconds += float(case.get("time", "0"))
-        except ValueError:
-            pass  # a report without a usable duration for this test
     counts = TestCounts(
         total=passed + skipped + len(failed),
         passed=passed,
@@ -109,13 +109,20 @@ def parse_junit(path: Path) -> tuple[TestCounts, list[str]]:
     return counts, failed
 
 
-def _counts(junit: Path) -> TestCounts | None:
-    """The report's counts; None without a report (a killed job, a test
-    command that writes none) or with an unreadable one (logged)."""
-    if not junit.is_file():
+def _counts(ledger: TestLedger, out_text: str) -> TestCounts | None:
+    """The run's counts: the junit report's; for a test command that writes
+    none, its pass marker — one test, passed when the output holds the
+    marker. None without either (a killed job) or with an unreadable report
+    (logged)."""
+    if ledger.passed_marker is not None:
+        passed = int(ledger.passed_marker in out_text)
+        return TestCounts(
+            total=1, passed=passed, failed=1 - passed, skipped=0, ctest_s=None
+        )
+    if not ledger.junit_path.is_file():
         return None
     try:
-        return parse_junit(junit)[0]
+        return parse_junit(ledger.junit_path)[0]
     except ValueError as exc:
         logger.warning("%s; the run is judged without its counts", exc)
         return None
@@ -161,6 +168,7 @@ def submit(
     provenance: TestProvenance,
     timeout_s: int,
     queue_wait_s: int,
+    passed_marker: str | None = None,
     resubmit: bool = False,
     now: Clock | None = None,
 ) -> TestLedger:
@@ -188,6 +196,7 @@ def submit(
         ),
         out_path=tests_root / f"{stem}-{job_id}.out",
         junit_path=tests_root / f"{stem}-{job_id}.xml",
+        passed_marker=passed_marker,
     )
     write_test_ledger(ledger, tests_root)
     logger.info(
@@ -206,6 +215,7 @@ def record_local(
     application: str,
     toolchain: str | None,
     provenance: TestProvenance,
+    passed_marker: str | None = None,
 ) -> TestLedger:
     """Record a test run made in place (native, docker): the stage script
     ran the tests into <tests root>/tests.out and tests.xml; this starts
@@ -222,6 +232,7 @@ def record_local(
         job=None,
         out_path=tests_root / f"{stem}.out",
         junit_path=tests_root / f"{stem}.xml",
+        passed_marker=passed_marker,
     )
     write_test_ledger(ledger, tests_root)
     return ledger
@@ -258,12 +269,16 @@ def evaluate(
     (_job_verdict) and must have left the queue (TestsStillQueued
     otherwise; `left_queue` says the caller's own poll just showed it gone,
     sparing a second squeue); a run in place by `exit_status`, the test
-    command's own. An already evaluated run is returned as it is: one run,
-    one row."""
+    command's own — or 1 when that is 0 and the counts show a failure (a
+    pass marker that never appeared). An already evaluated run is returned
+    as it is: one run, one row."""
     ledger = read_test_ledger(tests_root)
     if ledger.evaluated_at is not None:
         return ledger
-    counts = _counts(ledger.junit_path)
+    out_text = (
+        ledger.out_path.read_text(errors="replace") if ledger.out_path.is_file() else ""
+    )
+    counts = _counts(ledger, out_text)
     accounting: SlurmAccounting | None = None
     if ledger.job is not None:
         job_id = ledger.job.job_id
@@ -285,11 +300,8 @@ def evaluate(
             "status (--exit-status)"
         )
     else:
-        status = exit_status
+        status = exit_status or int(counts is not None and counts.failed > 0)
     recorded_at = _clock(now)()
-    out_text = (
-        ledger.out_path.read_text(errors="replace") if ledger.out_path.is_file() else ""
-    )
     provenance = ledger.provenance
     row = TestBenchmarkRow(
         recorded_at=recorded_at,

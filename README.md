@@ -174,7 +174,8 @@ skipped with a `driver run failed: ...` reason.
 Options:
 
 - `--application=NAME` — run only suites of this application (registry
-  name: `cece`, `monetio`), overriding `ASSAY_APPLICATION`. Without it the
+  name: `cece`, `monetio` — the applications with a driver the harness
+  sweeps), overriding `ASSAY_APPLICATION`. Without it the
   application is inferred from the selected suites, which must all agree
   (a mixed selection is a usage error naming the flag); with it, suites
   of other applications are dropped from the selection with a log line.
@@ -610,6 +611,56 @@ adds one line per test run and, for a run that failed, one issue:
 of the output, or `tests-job-failed` when the job died without a failed
 test to name (a time limit, no junit report). `cancel --tests-root
 <root_dir>/tests/<application>` scancels a queued test job.
+
+**Applications that are built and tested, never swept.** Two registered
+applications have no driver, so no suite and no pytest session: a run
+gives them the stages they take part in and skips the rest, saying so
+(`catchem takes no part in the data, harness, resume stage(s)`), and
+anything driver-shaped that names one — a suite file, `pytest
+--application`, `fetch` — is refused (`catchem has no driver suite: it
+takes part in the source, build and test stages only`). Neither builds
+under the docker runtime.
+
+- `catchem` (source, build, test): CATChem cloned with its submodules
+  (a guard requires MUSICA's), configured with `cmake_args` — by default
+  `-DCMAKE_BUILD_TYPE=Debug -DCATCHEM_ENABLE_KOKKOS=ON
+  -DCATCHEM_BUILD_MUSICA=ON -DCATCHEM_BUILD_NUOPC=ON` — and built
+  (`targets`, default `all`). With Kokkos on, the configure log must show
+  `Using system Kokkos`: the module environment's, never a fetched one.
+  Under `build_node: compute` the probe configures with
+  `-DCATCHEM_BUILD_MUSICA=OFF` (MUSICA fetches its dependencies at
+  configure time), and with `tests.enabled` the login-node finish
+  restores the arguments as written. Its tests are `ctest`, one
+  single-rank job; `tests.enabled` requires the Debug build and `all`
+  among the targets.
+- `kokkos-smoke` (build, test): a small CMake project shipped with the
+  harness that requires the module environment's Kokkos and
+  kokkos-kernels with no fallback, builds one executable (a
+  `parallel_for` and a BLAS `axpby`), and runs it — the direct check that
+  an environment provides the two packages. Its section needs no
+  `git_url` or `ref`; `modulepath` defaults to the harness's own
+  `modulefiles/`; the build is under `<root_dir>/kokkos-smoke/build`. The
+  configure log must show both packages found. The test is the
+  executable itself: it writes no junit report, so the run counts as one
+  test, passed when its output holds `SMOKE TEST PASSED`.
+
+```yaml
+applications:
+  cece: {...}
+  catchem:
+    git_url: git@github.com:ufs-community/CATChem.git
+    ref: develop
+    modulefile: ufs_ursa.oneapi
+    modulepath: [modulefiles, /path/to/spack-stack/envs/<env>/modules/Core]
+    tests: {enabled: true}
+  kokkos-smoke:
+    modulefile: ufs_ursa.oneapi
+    modulepath: [modulefiles, /path/to/spack-stack/envs/<env>/modules/Core]
+    tests: {enabled: true}
+```
+
+`--application all` on such a config clones, builds and tests all three
+and runs the data and harness stages for `cece` alone.
 
 **Sessions.** `sessions:` is a map of session name → an overlay on the
 file's `harness:`, `slurm:` and `baselines:` sections, one level deep: an
@@ -1052,7 +1103,11 @@ variables override `.env`. AWS credentials are not harness settings at
 all — the AWS CLI reads its own configuration (see
 [S3 data sync](#s3-data-sync)). Two namespaces: **harness-wide** settings under
 `ASSAY_*`, and each **application's** settings under its
-own prefix — `CECE_*` for the CECE adapter and `MONETIO_*` for the MONETIO adapter.
+own prefix — `CECE_*` for the CECE adapter and `MONETIO_*` for the MONETIO adapter
+(`CATCHEM_*` and `KOKKOS_SMOKE_*` exist for the two build-and-test
+applications — `CATCHEM_ROOT_DIR`, `CATCHEM_MODULEFILE`, ... — but
+nothing reads them outside `ufs-chem-assay run`, which takes those
+values from the run config).
 
 Harness-wide:
 

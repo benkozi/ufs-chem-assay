@@ -146,3 +146,17 @@ def test_missing_config_path_is_a_value_error(tmp_path: Path) -> None:
         resolve_suites(
             _settings(suite_config_search_path=[tmp_path]), "gone-suite.yaml"
         )
+
+
+def test_a_session_cannot_run_an_application_without_a_driver_suite() -> None:
+    # pytest --application catchem, fetch --application catchem: refused
+    # before any suite is looked for.
+    with pytest.raises(ValueError, match="catchem has no driver suite"):
+        resolve_suites(_settings(application="catchem"), None)
+    with pytest.raises(ValueError, match="kokkos-smoke has no driver suite"):
+        resolve_suites(_settings(application="kokkos-smoke"), r".*-suite\.yaml")
+    # And the hint for a bare session names only what a session can run.
+    with pytest.raises(
+        ValueError, match=r"applications with a driver suite: \['cece', 'monetio'\]"
+    ):
+        resolve_suites(_settings(), None)

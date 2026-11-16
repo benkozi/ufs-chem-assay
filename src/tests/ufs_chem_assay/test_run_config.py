@@ -98,9 +98,9 @@ def test_unknown_key_rejected(tmp_path: Path) -> None:
 
 def test_unknown_application_section_rejected(tmp_path: Path) -> None:
     path = run_config_file(
-        tmp_path, overrides={"applications.catchem": {"git_url": "u", "ref": "r"}}
+        tmp_path, overrides={"applications.geoschem": {"git_url": "u", "ref": "r"}}
     )
-    with pytest.raises(ValidationError, match="unknown application 'catchem'"):
+    with pytest.raises(ValidationError, match="unknown application 'geoschem'"):
         load_run_config(path)
 
 

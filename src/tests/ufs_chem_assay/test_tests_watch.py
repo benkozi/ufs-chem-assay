@@ -166,7 +166,8 @@ def test_watch_waits_for_the_test_job_then_evaluates_it_in_process(
     _finish(rendered)
     _accounting(mocker)
     states = mocker.patch(
-        "cli.sessions.queue_states", side_effect=[{"4242": "PENDING"}, {"4242": "RUNNING"}, {}]
+        "cli.sessions.queue_states",
+        side_effect=[{"4242": "PENDING"}, {"4242": "RUNNING"}, {}],
     )
     again = mocker.patch("apptests.queue_states")
     run_bash = mocker.patch("cli.sessions.run_bash")
@@ -318,7 +319,9 @@ def test_watch_clean_errors_for_tests(
 # ── report ───────────────────────────────────────────────────────────────────
 
 
-def test_summarize_tests_reads_the_roots_files(rendered: Path, mocker: MockerFixture) -> None:
+def test_summarize_tests_reads_the_roots_files(
+    rendered: Path, mocker: MockerFixture
+) -> None:
     root = _tests_root(rendered)
     none = summarize_tests(root, application="cece")
     assert none.state is SessionState.NOT_SUBMITTED
@@ -349,7 +352,10 @@ def test_summarize_tests_reads_the_roots_files(rendered: Path, mocker: MockerFix
 
 
 def test_report_names_the_failed_tests_and_tails_the_output(
-    rendered: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture, tmp_path: Path
+    rendered: Path,
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
 ) -> None:
     _submitted(rendered)
     _finish(rendered, _FAILING)
@@ -359,10 +365,15 @@ def test_report_names_the_failed_tests_and_tails_the_output(
     written = tmp_path / "report.yaml"
     caplog.clear()
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
-        assert _report(rendered, "--only", "tests", "--tail", "3", f"--write={written}") == 1
+        assert (
+            _report(rendered, "--only", "tests", "--tail", "3", f"--write={written}")
+            == 1
+        )
     messages = _messages(caplog)
     root = _tests_root(rendered)
-    assert messages[0].startswith(f"report: 0 session(s), 1 test run(s) under {rendered}")
+    assert messages[0].startswith(
+        f"report: 0 session(s), 1 test run(s) under {rendered}"
+    )
     assert (
         "tests cece  run 01JTESTRUNTESTRUNTESTRUNTE  evaluated (exit 8)  "
         "1 passed / 1 failed / 1 skipped  60 s"
@@ -438,7 +449,9 @@ def test_report_covers_sessions_and_tests_by_default(
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert _report(rendered) == 1  # nothing ran
     messages = _messages(caplog)
-    assert messages[0].startswith(f"report: 2 session(s), 1 test run(s) under {rendered}")
+    assert messages[0].startswith(
+        f"report: 2 session(s), 1 test run(s) under {rendered}"
+    )
     assert any(m.startswith("tests cece") and "not submitted" in m for m in messages)
     assert messages[-1] == (
         "report: 3 issue(s) in 3 of 2 session(s) and 1 test run(s); exit 1"
@@ -488,7 +501,7 @@ def test_cancel_of_a_root_without_a_readable_ledger_is_a_no_op(
     assert "nothing to cancel" in _messages(caplog)[-1]
 
 
-def test_cancel_takes_one_kind_of_root(rendered: Path) -> None:
+def test_cancel_takes_one_kind_of_root() -> None:
     for argv in (["cancel"], ["cancel", "--output-root=a", "--tests-root=b"]):
         with pytest.raises(SystemExit) as usage:
             main(argv)
@@ -520,8 +533,9 @@ def test_record_benchmarks_appends_a_tests_roots_rows_per_application(
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert main(["record-benchmarks", f"--tests-root={root}", "--dry-run"]) == 0
     assert not target.exists()
-    assert f"dry run: would append test run 01JTESTRUNTESTRUNTESTRUNTE to {target}" in (
-        _messages(caplog)[-1]
+    assert (
+        f"dry run: would append test run 01JTESTRUNTESTRUNTESTRUNTE to {target}"
+        in (_messages(caplog)[-1])
     )
     assert main(["record-benchmarks", f"--tests-root={root}"]) == 0
     assert read_test_benchmarks_csv(target) == read_test_benchmarks_csv(
@@ -540,7 +554,9 @@ def test_record_benchmarks_reports_unreadable_and_unappendable_rows(
     caplog: pytest.LogCaptureFixture,
     tmp_path: Path,
 ) -> None:
-    mocker.patch("cli.commands.record_benchmarks.BUILTIN_CONFIG_DIR", tmp_path / "config")
+    mocker.patch(
+        "cli.commands.record_benchmarks.BUILTIN_CONFIG_DIR", tmp_path / "config"
+    )
     root = _tests_root(rendered)
     root.mkdir(parents=True)
     (root / CONVENTIONS.benchmarks).write_text("not,the,columns\n")

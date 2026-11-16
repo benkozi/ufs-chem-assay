@@ -120,7 +120,9 @@ the harness test package `src/tests/ufs_chem_assay/`. See
 Every piece of code that knows the application under test sits behind
 one adapter — `applications/base.py:Application`, an abstract base class —
 selected by name from a registry (`applications/registry.py`, a plain
-dict; `cece` is the only entry and the default). The shared code
+dict: `cece`, the default, and `monetio` — drivers the harness sweeps —
+then `catchem` and `kokkos-smoke`, which it only builds and tests; see
+"Applications without a driver" below). The shared code
 (enumeration, the pytest session, the runtimes, stats, plots, comparison,
 reporting, the CLI's harness stage) imports only the base module and
 calls through the adapter; the adapters (`applications/<name>/`) import
@@ -128,6 +130,43 @@ the shared modules freely. Full rationale in
 `design/feat/20260914-1643-application-agnostic/20260914-1643-application-agnostic.md`
 (Phase B of the CATChem plan in
 `design/spike/20260901-1229-rename-and-plan-for-catchem/20260901-1229-rename-and-plan-for-catchem.md`).
+
+**Applications without a driver** (2026-11-16, chunk 4 of
+`design/feat/20261113-1348-build-test-kokkos/20261113-1349-build-test-kokkos.md`).
+An application the CLI clones, builds and tests but never sweeps is
+still an `Application` — one ABC, one registry, one `--application`
+vocabulary — that declares what it takes part in:
+`Application.stages: ClassVar[frozenset[Stage]]` (every stage by
+default; `catchem`: source, build, test; `kokkos-smoke`: build, test).
+The shared code asks `stages` before anything stage- or driver-shaped:
+`run` renders an application only its stages and logs the ones it
+skipped (the harness-wide data lines go to the first application with a
+data stage); `render_stage` refuses a stage outside them;
+`configured_sessions` lists sessions for applications with the harness
+stage only; and `registry.driver_application` — used by
+`peek_application`, `load_suite` and `selection.resolve_suites`, so by
+suite files, pytest's `--application` and `fetch` — raises
+`NoDriverSuite` (a `ValueError`: "`catchem` has no driver suite: it
+takes part in the source, build and test stages only") for the rest.
+The sweep surface stays abstract; `applications/nodriver.py` implements
+it once as that refusal (`NoDriverApplication`, with `NoDriverConfig`
+and `NoDriverSuiteConfig` as the placeholder models), so an adapter of
+this kind is its name, settings, run section, stages, stage bodies and
+`test_plan`. In normal operation nothing reaches the refusals. Both
+adapters' sections refuse the docker runtime (`runtime_problems`).
+`catchem` builds through the shared `cli/stages.cmake_stage` (as CECE
+now does): the three shapes of `build_node`, an `OfflineBuild` for what
+a compute-node configure must turn off (MUSICA, restored by the
+login-node finish) and the adapter's gate (`Using system Kokkos` with
+Kokkos on); its tests are `cli/stages.ctest_plan`. `kokkos-smoke` ships
+its project in `applications/kokkos_smoke/cmake/` (in the wheel), has no
+source stage and an empty `git_url` / `ref`, builds under
+`<root_dir>/kokkos-smoke/build`, gates on both packages being found, and
+tests by running its executable: `TestPlan.passed_marker` (recorded in
+the test ledger) stands in for the junit report it does not write — the
+run is one test, passed when the output holds `SMOKE TEST PASSED`, and
+a run in place whose marker is missing is not a pass whatever its exit
+status.
 
 The adapter surface: constants (`name`, `env_prefix` — its settings
 namespace and the `${<PREFIX>ROOT_DIR}` suite token, `container_workdir`,
@@ -1266,7 +1305,10 @@ All code under `src/`; the project is `uv`-managed with its own
                           #   DriverConfig, SweepBase, SweepSelectorBase, ApplicationRunSection
                           #   (with BuildNode and TestsSection), Stage (the run's stages),
                           #   RunConfigView (what an adapter reads)
-      registry.py         # REGISTRY (name -> adapter), get_application, load_suite
+      registry.py         # REGISTRY (name -> adapter), get_application, driver_application
+                          #   (the ones a session can run), load_suite
+      nodriver.py         # NoDriverApplication: the sweep surface as one refusal, for
+                          #   applications that are built and tested, never swept
       cece/
         application.py    # CeceApplication: the wiring, registered by name
         config.py         # the pydantic model of CECE's driver config (CeceConfig)
@@ -1283,6 +1325,17 @@ All code under `src/`; the project is `uv`-managed with its own
         combos.py         # case/freq dimensions, build_config, effective-parameter rows
         assertions.py     # expected count/filenames, UGRID (time, node) standard dims
         cli.py            # MonetioRunSection, uv venv + editable install stage bodies
+      catchem/
+        application.py    # CatchemApplication (stages: source, build, test)
+        settings.py       # CatchemSettings (CATCHEM_*)
+        cli.py            # CatchemRunSection, source (MUSICA submodule guard) and build
+                          #   (cmake_stage, the MUSICA offline swap, the Kokkos gate), ctest
+      kokkos_smoke/
+        application.py    # KokkosSmokeApplication (stages: build, test)
+        settings.py       # KokkosSmokeSettings (KOKKOS_SMOKE_*; no checkout commit)
+        cli.py            # KokkosSmokeRunSection, the build of the shipped project, the
+                          #   executable as its test (passed_marker)
+        cmake/            # CMakeLists.txt + smoke.cpp: Kokkos + kokkos-kernels, no fallback
     models/
       base.py             # StrictModel: extra="forbid" base for all config models
       suite_config.py     # generic SuiteConfig, InputFile, Assertions, Analysis, Plotting,

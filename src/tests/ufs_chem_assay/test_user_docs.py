@@ -216,6 +216,13 @@ def test_readme_documents_the_new_surfaces() -> None:
         "build_type",
         "tests-failed",
         "tests-job-failed",
+        "catchem",
+        "kokkos-smoke",
+        "CATCHEM_ROOT_DIR",
+        "has no driver suite",
+        "Using system Kokkos",
+        "-DCATCHEM_BUILD_MUSICA=OFF",
+        "SMOKE TEST PASSED",
     ):
         assert needle in text, needle
     assert "buid-test-tweaks" not in text

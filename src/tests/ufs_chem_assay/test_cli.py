@@ -1634,3 +1634,102 @@ def test_every_command_has_a_handler(mocker: MockerFixture) -> None:
         assert main([command.value]) == 7, command
         parse.assert_called_once()
         handlers[command].assert_called_once()
+
+
+# ── Applications that are built and tested, never swept ──────────────────────
+
+_BUILT_ONLY: dict[str, object] = {
+    "applications.catchem": {
+        "git_url": "git@github.com:ufs-community/CATChem.git",
+        "ref": "develop",
+        "tests": {"enabled": True},
+    },
+    "applications.kokkos-smoke": {"tests": {"enabled": True}},
+}
+
+
+def test_a_comprehensive_run_renders_each_application_its_own_stages(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    run_bash = mocker.patch("cli.commands.run.run_bash", return_value=0)
+    path = _config(tmp_path, overrides=_BUILT_ONLY)
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert main(["run", f"--config-file={path}", "--application", "all"]) == 0
+    ran = [call.args[0].name for call in run_bash.call_args_list]
+    assert ran == [
+        "01-source-cece.sh",
+        "01-source-catchem.sh",  # kokkos-smoke ships with the harness: no source
+        "02-build-cece.sh",
+        "02-build-catchem.sh",
+        "02-build-kokkos-smoke.sh",
+        "04-test-catchem.sh",  # cece's own tests are off in the template
+        "04-test-kokkos-smoke.sh",
+        "03-data-cece.sh",  # the driver stages are cece's alone
+        "05-harness-cece-simple-maccity.sh",
+        "05-harness-cece-gcafs-anthro.sh",
+    ]
+    scripts = tmp_path / "root" / "scripts"
+    assert (scripts / "04-test-kokkos-smoke.sbatch").is_file()
+    # The harness-wide data lines still render once, under the first
+    # application that has a data stage.
+    assert "natural_earth" in (scripts / "03-data-cece.sh").read_text()
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "catchem takes no part in the data, harness, resume stage(s)" in m
+        for m in messages
+    )
+    assert any(
+        "kokkos-smoke takes no part in the source, data, harness, resume stage(s)" in m
+        for m in messages
+    )
+
+
+def test_the_shared_data_lines_follow_the_first_application_with_a_data_stage(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    mocker.patch("cli.commands.run.run_bash", return_value=0)
+    path = _config(tmp_path, overrides=_BUILT_ONLY)
+    assert (
+        main(
+            [
+                "run",
+                f"--config-file={path}",
+                "--application",
+                "kokkos-smoke catchem cece",
+                "--stage=data",
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    assert _scripts(tmp_path) == ["03-data-cece.sh"]
+    data = (tmp_path / "root" / "scripts" / "03-data-cece.sh").read_text()
+    assert "natural_earth" in data
+
+
+def test_watch_and_report_see_sessions_only_for_driver_applications(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    from cli.selectors import selected_applications, selected_sessions
+    from cli.sessions import configured_sessions, load_effective
+
+    mocker.patch("cli.commands.run.run_bash")
+    path = _config(tmp_path, overrides=_BUILT_ONLY)
+    assert main(["run", f"--config-file={path}", "--application=all", "--dry-run"]) == 0
+    config = load_effective(tmp_path / "root")
+    watched = configured_sessions(
+        config,
+        selected_applications(config, None),
+        selected_sessions(config, None),
+        tmp_path / "root" / "scripts",
+    )
+    assert {w.application for w in watched} == {"cece"}
+    assert len(watched) == 2
+
+
+def test_fetch_refuses_an_application_without_a_driver_suite(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        assert main(["fetch", "--application=catchem"]) == 1
+    assert "catchem has no driver suite" in caplog.text

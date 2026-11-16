@@ -78,14 +78,17 @@ def handler(args: argparse.Namespace) -> int:
                 f"{script} does not exist: `ufs-chem-assay run --config-file=... "
                 "--dry-run` (same config, same --root-dir) renders it"
             )
+        section = config.applications[app.name]
+        plan = app.test_plan(section, "junit")
         apptests.submit(
             config.tests_root(app),
             script=script,
             application=app.name,
             toolchain=None,
             provenance=test_provenance(config, app),
-            timeout_s=config.applications[app.name].tests.minutes * 60,
+            timeout_s=section.tests.minutes * 60,
             queue_wait_s=config.slurm.queue_wait_s,
+            passed_marker=plan.passed_marker if plan else None,
             resubmit=args.resubmit,
         )
     except SlurmSubmissionError as exc:

@@ -47,6 +47,16 @@ class Stage(StrEnum):
     RESUME = "resume"  # (harness.submit_only) the session's second half: wait, evaluate
 
 
+class NoDriverSuite(ValueError):
+    """An application that is cloned, built and tested but never swept was
+    asked for something only a driver sweep has: a suite, a configuration,
+    a combination's expectations."""
+
+
+def _listed(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
 @unique
 class BuildNode(StrEnum):
     """Where an application's configure and build run (slurm runtime)."""
@@ -325,6 +335,14 @@ class TestPlan(StrictModel):
             "writes its junit report where the stage asked"
         )
     )
+    passed_marker: str | None = Field(
+        default=None,
+        description=(
+            "For a test command that writes no junit report (one executable, one "
+            "verdict): the text in its output that means it passed — the run then "
+            "counts as one test, passed when the output holds it"
+        ),
+    )
 
 
 class ApplicationRunSection(StrictModel):
@@ -466,6 +484,21 @@ class Application(ABC):
     config_model: ClassVar[type[DriverConfig]]
     suite_model: ClassVar[type[SuiteConfig]]
     run_section_model: ClassVar[type[ApplicationRunSection]]
+    # The stages of `ufs-chem-assay run` the application takes part in:
+    # every one for an application with a driver the harness sweeps; fewer
+    # for one that is only built and tested (applications/nodriver.py).
+    # Everything driver-shaped — a suite, a pytest session, `fetch` — asks
+    # for Stage.HARNESS here first.
+    stages: ClassVar[frozenset[Stage]] = frozenset(Stage)
+
+    def no_driver_suite(self) -> NoDriverSuite:
+        """The refusal an application without a driver suite gives, naming
+        what it does take part in."""
+        mine = [stage.value for stage in Stage if stage in self.stages]
+        return NoDriverSuite(
+            f"{self.name} has no driver suite: it takes part in the "
+            f"{_listed(mine)} stages only"
+        )
 
     @property
     def root_dir_token(self) -> str:

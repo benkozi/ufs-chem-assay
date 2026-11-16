@@ -18,8 +18,8 @@ from pydantic import BaseModel, ConfigDict, InstanceOf
 
 from applications.base import Application, ApplicationSettings
 from applications.registry import (
-    REGISTRY,
-    get_application,
+    driver_application,
+    driver_application_names,
     load_suite,
     peek_application,
 )
@@ -60,7 +60,7 @@ def _resolve_application(
     except (OSError, yaml.YAMLError) as exc:
         raise ValueError(str(exc)) from exc
     if settings.application is not None:
-        app = get_application(settings.application)
+        app = driver_application(settings.application)
         kept = [path for path, name in by_path.items() if name == app.name]
         for path, name in by_path.items():
             if name != app.name:
@@ -80,7 +80,7 @@ def _resolve_application(
             + ", ".join(f"{path.name} [{name}]" for path, name in by_path.items())
             + "); a session runs one application — pass --application to choose"
         )
-    return get_application(names[0]), suite_paths
+    return driver_application(names[0]), suite_paths
 
 
 def resolve_suites(settings: Settings, suite_option: str | None) -> ResolvedSuites:
@@ -88,14 +88,21 @@ def resolve_suites(settings: Settings, suite_option: str | None) -> ResolvedSuit
     loaded suites of one application. ValueError on every failure: no match,
     unknown or disagreeing applications, an unloadable suite, a missing
     config_path, or two selected suites sharing a name."""
+    # An explicit application must be one a session can run: refused here,
+    # before any suite is looked for (NoDriverSuite is a ValueError).
+    explicit = (
+        None
+        if settings.application is None
+        else driver_application(settings.application)
+    )
     if suite_option is not None:
         option = suite_option
-    elif settings.application is not None:
-        option = get_application(settings.application).default_suite
+    elif explicit is not None:
+        option = explicit.default_suite
     else:
         raise ValueError(
             "pass --application or --suite-config "
-            f"(registered applications: {sorted(REGISTRY)})"
+            f"(applications with a driver suite: {driver_application_names()})"
         )
     suite_paths = select_suites(
         option, [*settings.suite_config_search_path, BUILTIN_CONFIG_DIR]

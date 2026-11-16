@@ -172,9 +172,25 @@ def handler(args: argparse.Namespace) -> int:
     render = list(stages)
     if Stage.HARNESS in render and Stage.RESUME not in render:
         render.append(Stage.RESUME)
+    # An application is rendered only the stages it takes part in (one that
+    # is built and tested has no data or harness stage; one shipped with
+    # the harness no source stage either), and the run says what it skipped.
+    for app in applications:
+        skipped = [stage.value for stage in render if stage not in app.stages]
+        if skipped:
+            logger.info(
+                "%s takes no part in the %s stage(s)", app.name, ", ".join(skipped)
+            )
+    # The harness-wide data lines render once, under the first application
+    # that has a data stage.
+    shared_data_app = next(
+        (app.name for app in applications if Stage.DATA in app.stages), None
+    )
     to_run: list[Path] = []
     for stage in render:
-        for position, app in enumerate(applications):
+        for app in applications:
+            if stage not in app.stages:
+                continue
             if stage is Stage.TEST and not testing[app.name]:
                 logger.info(
                     "tests disabled for %s (applications.%s.tests.enabled): "
@@ -201,7 +217,7 @@ def handler(args: argparse.Namespace) -> int:
                         stage,
                         config,
                         app,
-                        shared_data=position == 0,
+                        shared_data=app.name == shared_data_app,
                         sessions=sessions,
                     ),
                     scripts_dir,
