@@ -13,7 +13,7 @@ from pytest_mock import MockerFixture
 from applications.cece.settings import CeceSettings
 from applications.registry import get_application
 from benchmarks import SlurmAccounting
-from jobs import SlurmJobError, SlurmJobTimeout, SubmittedJob
+from jobs import JobRef, SlurmJobError, SlurmJobTimeout, SubmittedJob
 from lmod import LMOD_INIT, module_lines
 from platforms import ModuleInit, Platform, Runtime, default_runtime
 from resolution import resolve_output_roots
@@ -315,11 +315,12 @@ def _accounting(state: str, exit_code: int | None) -> SlurmAccounting:
 def test_submit_driver_job_writes_the_script_and_submits_it(
     mocker: MockerFixture, tmp_path: Path
 ) -> None:
-    submit = mocker.patch("runner.submit_job", return_value="12345")
-    script, job_id = submit_driver_job(
+    submit = mocker.patch("runner.submit_job", return_value=JobRef("12345", "c7"))
+    script, ref = submit_driver_job(
         _slurm(), _CECE, PurePosixPath(str(tmp_path / "x.yaml")), tmp_path / "x.out", 10
     )
-    assert job_id == "12345"  # from sbatch --parsable, for the ledger
+    # From sbatch --parsable, for the ledger: the id and where it went.
+    assert (ref.job_id, ref.cluster) == ("12345", "c7")
     assert script == tmp_path / "x.sbatch"
     assert script.is_file()
     assert "srun --ntasks=1" in script.read_text()

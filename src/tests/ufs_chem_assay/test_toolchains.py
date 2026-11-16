@@ -20,7 +20,7 @@ from cli.run_report import newest_log, summarize_session
 from cli.selectors import toolchain_configs
 from cli.sessions import configured_sessions, configured_tests, job_script_for_tests
 from cli.stages import render_stage
-from jobs import read_test_ledger
+from jobs import JobRef, read_test_ledger
 from logs import LOGGER_NAME
 from tests.ufs_chem_assay.run_configs import (
     TEMPLATES_DIR,
@@ -571,7 +571,7 @@ def rendered(tmp_path: Path, mocker: MockerFixture) -> Path:
     """A `run --toolchain all --dry-run` with CECE's tests on: both
     toolchains' scripts and the effective config on disk."""
     mocker.patch("cli.commands.run.run_bash")
-    mocker.patch("apptests.submit_job", return_value="4242")
+    mocker.patch("apptests.submit_job", return_value=JobRef("4242", None))
     mocker.patch("apptests.queue_states", return_value={})
     assert _run(_config_file(tmp_path, **_TESTED), "--toolchain=all", "--dry-run") == 0
     return tmp_path / "root"

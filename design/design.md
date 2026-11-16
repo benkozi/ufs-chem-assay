@@ -548,7 +548,18 @@ interrupted submit stays truthful) and waited for by polling `squeue`
 every `slurm_poll_s` (`wait_for_job`; past submission + timeout + queue
 allowance the job is cancelled and `SlurmJobTimeout` raised), its verdict
 from `sacct` (`finish_driver_job`: TIMEOUT/CANCELLED → timeout, a nonzero
-exit → `SlurmJobError`; `sbatch --wait` is gone, 2026-11-04). The session
+exit → `SlurmJobError`; `sbatch --wait` is gone, 2026-11-04). On a
+multi-cluster Slurm (Gaea: `slurm.extra_args: --clusters=c7`)
+`sbatch --parsable` answers `<id>;<cluster>`: `jobs.submit_job` returns
+both (`JobRef`), the ledgers record the cluster (`SubmittedJob.cluster`,
+`TestJob.cluster`; None on a single-cluster machine and in older
+ledgers), and every later command about the job names it —
+`queue_states`, `scancel` and `benchmarks.slurm_accounting` take
+`clusters` and pass `-M` — so the cluster is configured once, where the
+job is submitted, and travels with the job (2026-11-16; no `slurm:` key,
+no `SLURM_CLUSTERS`). Callers holding several jobs group them first
+(`jobs.by_cluster`; `jobs.queued_jobs` for a ledger: `cancel_jobs`, the
+`clean_root` guard, `cli/sessions.poll`): one `squeue` per cluster. The session
 has two optional halves: `--submit-only` ends it once the ledger is
 complete (every combo test skips naming its job; no report, no
 benchmarks) and `--resume --combo-output-root=<root>` reopens the root —
@@ -686,7 +697,7 @@ report shows failures; without accounting, the junit report alone), the
 command's exit status for a run in place; the junit counts
 (`apptests.parse_junit`); one `TestBenchmarkRow` appended to the tests
 root's `benchmarks.csv`; the ledger rewritten. `watch` polls the test
-jobs with the sessions' in one `squeue` (`cli/sessions.poll`), evaluates
+jobs with the sessions' in one `squeue` per cluster (`cli/sessions.poll`), evaluates
 a finished one in-process (`evaluate_tests`: there is no resume script),
 cancels one still queued past its deadline, and folds the verdicts into
 its exit status; `--only sessions|tests` narrows `watch` and `report`.
@@ -1447,7 +1458,8 @@ All code under `src/`; the project is `uv`-managed with its own
     jobs.py               # the job ledger (SubmittedJob, JobLedger, jobs.yaml), the test
                           #   ledger (TestLedger, TestJob, TestProvenance, TestCounts,
                           #   tests.yaml), sbatch / squeue / sacct / scancel: submit, poll,
-                          #   judge, cancel
+                          #   judge, cancel — JobRef (id + cluster from sbatch), -M on the
+                          #   rest, by_cluster / queued_jobs
     fslock.py             # locked(path): flock around the committed files' rewrites
     s3_sync.py            # stand-alone `aws s3 sync` wrapper; credentials are
                           #   the CLI's own; one harness import (the logger)

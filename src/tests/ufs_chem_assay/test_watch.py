@@ -298,7 +298,7 @@ def test_tick_counts_every_pending_state_as_queued(tmp_path: Path) -> None:
     )
     states = dict(zip(ids, [*pending, "RUNNING", "COMPLETING"], strict=False))
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr("cli.sessions.queue_states", lambda _ids: states)
+        patch.setattr("cli.sessions.queue_states", lambda _ids, **_on: states)
         report = tick([watched], {root: ledger})[root]
     assert report.state is SessionState.WAITING
     assert (report.queued, report.running, report.done) == (6, 2, 1)

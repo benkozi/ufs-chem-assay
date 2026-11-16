@@ -212,9 +212,26 @@ def test_slurm_accounting_queries_sacct_and_retries_once(mocker: MockerFixture) 
     assert run.call_count == 2
     argv = run.call_args.args[0]
     assert argv[:3] == ["sacct", "-j", "123"]
+    assert "-M" not in argv
     assert "-P" in argv
     assert "-n" in argv
     sleep.assert_called_once()
+
+
+def test_slurm_accounting_asks_the_jobs_own_cluster(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A job on a named cluster is asked about there, and the hint for a
+    job sacct does not know yet names the cluster too."""
+    found = subprocess.CompletedProcess(["sacct"], 0, stdout=_SACCT, stderr="")
+    empty = subprocess.CompletedProcess(["sacct"], 0, stdout="", stderr="")
+    run = mocker.patch("benchmarks.subprocess.run", side_effect=[found, empty, empty])
+    mocker.patch("benchmarks.time.sleep")
+    assert slurm_accounting("123", clusters="c7") is not None
+    assert run.call_args.args[0][:5] == ["sacct", "-M", "c7", "-j", "123"]
+    with caplog.at_level("WARNING"):
+        assert slurm_accounting("123", clusters="c7") is None
+    assert "(sacct -M c7 -j 123 by hand)" in caplog.text
 
 
 def test_slurm_accounting_is_none_when_sacct_is_missing_or_fails(

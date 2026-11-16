@@ -159,12 +159,18 @@ def parse_sacct(output: str, job_id: str) -> SlurmAccounting | None:
     )
 
 
-def slurm_accounting(job_id: str) -> SlurmAccounting | None:
+def slurm_accounting(
+    job_id: str, clusters: str | None = None
+) -> SlurmAccounting | None:
     """Ask `sacct` for a finished job, retrying once after a short pause
-    (accounting can trail completion by seconds). None, logged once, when
-    sacct is missing, fails, or has no row for the job — never an error."""
+    (accounting can trail completion by seconds) — on the job's own
+    cluster (`-M`) when it was submitted to a named one. None, logged once,
+    when sacct is missing, fails, or has no row for the job — never an
+    error."""
+    on = [] if clusters is None else ["-M", clusters]
     argv = [
         "sacct",
+        *on,
         "-j",
         job_id,
         "-P",
@@ -194,10 +200,9 @@ def slurm_accounting(job_id: str) -> SlurmAccounting | None:
         if attempt == 1:
             time.sleep(BENCHMARK_CONVENTIONS.sacct_retry_delay_s)
     logger.warning(
-        "sacct has no record of job %s yet; accounting columns left empty "
-        "(sacct -j %s by hand)",
+        "sacct has no record of job %s yet; accounting columns left empty (%s by hand)",
         job_id,
-        job_id,
+        " ".join(["sacct", *on, "-j", job_id]),
     )
     return None
 

@@ -242,6 +242,30 @@ def test_watch_leaves_an_evaluated_test_run_alone(
     )
 
 
+def test_watch_polls_each_cluster_once(rendered: Path, mocker: MockerFixture) -> None:
+    # Sessions' jobs recorded without a cluster and a test job on c7: one
+    # squeue per cluster per tick, each naming its own.
+    _ledger(rendered, "simple-maccity", ["10"])
+    _ledger(rendered, "gcafs-anthro", ["20"])
+    ledger = _submitted(rendered)
+    assert ledger.job is not None
+    write_test_ledger(
+        ledger.model_copy(
+            update={"job": ledger.job.model_copy(update={"cluster": "c7"})}
+        ),
+        _tests_root(rendered),
+    )
+    states = mocker.patch(
+        "cli.sessions.queue_states",
+        side_effect=[{"10": "RUNNING", "20": "PENDING"}, {"4242": "PENDING"}],
+    )
+    assert _watch(rendered, "--once") == 0
+    assert [(sorted(c.args[0]), c.kwargs) for c in states.call_args_list] == [
+        (["10", "20"], {"clusters": None}),
+        (["4242"], {"clusters": "c7"}),
+    ]
+
+
 def test_watch_only_narrows_to_one_kind(
     rendered: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -292,7 +316,7 @@ def test_watch_gives_up_on_a_test_job_queued_past_its_deadline(
     scancel = mocker.patch("apptests.scancel")
     _accounting(mocker, state="CANCELLED by 1234")
     assert _watch(rendered, "--only", "tests") == 1
-    scancel.assert_called_once_with(["4242"])
+    scancel.assert_called_once_with(["4242"], clusters=None)
     assert read_test_ledger(_tests_root(rendered)).exit_status == 1
 
 
@@ -478,7 +502,7 @@ def test_cancel_scancels_a_queued_test_job(
     assert "dry run: would cancel 1 job(s): 4242" in _messages(caplog)[-1]
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert main(["cancel", f"--tests-root={root}"]) == 0
-    scancel.assert_called_once_with(["4242"])
+    scancel.assert_called_once_with(["4242"], clusters=None)
     assert "cancelled 1 job(s): 4242" in _messages(caplog)[-1]
     mocker.patch("apptests.queue_states", return_value={})
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):

@@ -15,6 +15,7 @@ import apptests
 from apptests import TestsStillQueued, evaluate, parse_junit, record_local, submit
 from benchmarks import SlurmAccounting, read_test_benchmarks_csv
 from jobs import (
+    JobRef,
     SlurmSubmissionError,
     TestCounts,
     TestJob,
@@ -80,7 +81,7 @@ def _accounting(
 def slurm(mocker: MockerFixture) -> MockerFixture:
     """Slurm as apptests sees it: sbatch returns 4242, nothing is queued,
     sacct says COMPLETED 0, scancel is recorded."""
-    mocker.patch("apptests.submit_job", return_value="4242")
+    mocker.patch("apptests.submit_job", return_value=JobRef("4242", None))
     mocker.patch("apptests.queue_states", return_value={})
     mocker.patch("apptests.slurm_accounting", return_value=_accounting())
     mocker.patch("apptests.scancel")
@@ -228,9 +229,9 @@ def test_resubmit_cancels_the_queued_job_first(
 ) -> None:
     first = _submit(tmp_path)
     slurm.patch("apptests.queue_states", return_value={"4242": "RUNNING"})
-    slurm.patch("apptests.submit_job", return_value="4300")
+    slurm.patch("apptests.submit_job", return_value=JobRef("4300", None))
     second = _submit(tmp_path, resubmit=True)
-    apptests.scancel.assert_called_once_with(["4242"])  # type: ignore[attr-defined]
+    apptests.scancel.assert_called_once_with(["4242"], clusters=None)  # type: ignore[attr-defined]
     assert second.job is not None
     assert second.job.job_id == "4300"
     assert second.run_id != first.run_id
@@ -245,7 +246,7 @@ def test_submit_evaluates_a_finished_unevaluated_run_first(
     # The job left the queue and nobody ran `watch`: its row is not lost.
     first = _submit(tmp_path)
     _finish(tmp_path)
-    slurm.patch("apptests.submit_job", return_value="4300")
+    slurm.patch("apptests.submit_job", return_value=JobRef("4300", None))
     second = _submit(tmp_path)
     (row,) = read_test_benchmarks_csv(tmp_path / CONVENTIONS.benchmarks)
     assert row.run_id == first.run_id
@@ -462,7 +463,7 @@ def test_cancel_scancels_a_queued_test_job(
     assert apptests.cancel(tmp_path, dry_run=True) == ["4242"]
     apptests.scancel.assert_not_called()  # type: ignore[attr-defined]
     assert apptests.cancel(tmp_path) == ["4242"]
-    apptests.scancel.assert_called_once_with(["4242"])  # type: ignore[attr-defined]
+    apptests.scancel.assert_called_once_with(["4242"], clusters=None)  # type: ignore[attr-defined]
     # An evaluated run has nothing left to cancel, whatever squeue says.
     slurm.patch("apptests.queue_states", return_value={})
     _finish(tmp_path)
@@ -479,7 +480,7 @@ def test_cancel_overdue_gives_up_on_a_job_past_its_deadline(
     assert apptests.cancel_overdue(ledger, _T0 + timedelta(seconds=359)) is False
     apptests.scancel.assert_not_called()  # type: ignore[attr-defined]
     assert apptests.cancel_overdue(ledger, _T0 + timedelta(seconds=360)) is True
-    apptests.scancel.assert_called_once_with(["4242"])  # type: ignore[attr-defined]
+    apptests.scancel.assert_called_once_with(["4242"], clusters=None)  # type: ignore[attr-defined]
     local = ledger.model_copy(update={"job": None})
     assert apptests.cancel_overdue(local, _T0 + timedelta(days=1)) is False
     # Past the deadline but already gone: nothing to cancel, evaluate instead.
@@ -544,3 +545,30 @@ def test_a_run_in_place_without_its_marker_is_not_a_pass(tmp_path: Path) -> None
     )
     (tmp_path / "tests.out").write_text("SMOKE TEST PASSED\n")
     assert evaluate(tmp_path, exit_status=0).exit_status == 0
+
+
+# ── a test job on a named cluster ────────────────────────────────────────────
+
+
+def test_a_test_job_is_followed_on_its_own_cluster(
+    tmp_path: Path, slurm: MockerFixture
+) -> None:
+    # sbatch said where the job went; every later question goes there.
+    slurm.patch("apptests.submit_job", return_value=JobRef("4242", "c7"))
+    ledger = _submit(tmp_path)
+    assert ledger.job is not None
+    assert ledger.job.cluster == "c7"
+    assert read_test_ledger(tmp_path).job == ledger.job
+    states = slurm.patch("apptests.queue_states", return_value={"4242": "PENDING"})
+    assert apptests.cancel(tmp_path) == ["4242"]
+    states.assert_called_once_with(["4242"], clusters="c7")
+    apptests.scancel.assert_called_once_with(["4242"], clusters="c7")  # type: ignore[attr-defined]
+    with pytest.raises(TestsStillQueued):
+        _submit(tmp_path)  # the guard asks the same cluster
+    assert states.call_args.kwargs == {"clusters": "c7"}
+    states.return_value = {}
+    _finish(tmp_path)
+    accounting = slurm.patch("apptests.slurm_accounting", return_value=_accounting())
+    assert evaluate(tmp_path).exit_status == 0
+    accounting.assert_called_once_with("4242", clusters="c7")
+    assert TestJob.model_fields["cluster"].description

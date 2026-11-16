@@ -22,6 +22,7 @@ import time
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import NamedTuple
 
 import yaml
 from pydantic import Field
@@ -46,6 +47,22 @@ QUEUED_UNKNOWN = "UNKNOWN"
 _IDS_GONE = re.compile(r"Invalid job id")
 
 
+class JobRef(NamedTuple):
+    """What `sbatch --parsable` says of an accepted job: its id and, when
+    it went to a named cluster of a multi-cluster Slurm (Gaea's c6, c7), the
+    cluster. On such a machine every later command about the job — squeue,
+    sacct, scancel — must name that cluster (`-M`), or it asks the wrong
+    controller and the job looks gone."""
+
+    job_id: str
+    cluster: str | None
+
+
+def _on(clusters: str | None) -> list[str]:
+    """`-M <clusters>` for a Slurm client command; nothing without one."""
+    return [] if clusters is None else ["-M", clusters]
+
+
 class SubmittedJob(StrictModel):
     """One combination's Slurm job as the session submitted it: enough to
     wait for it, judge it, and cancel it from any later process."""
@@ -54,6 +71,14 @@ class SubmittedJob(StrictModel):
     combo: str = Field(description="The combination's canonical name")
     combo_id: str = Field(description="The combination's runtime ULID")
     job_id: str = Field(description="The Slurm job id sbatch returned")
+    cluster: str | None = Field(
+        default=None,
+        description=(
+            "The cluster sbatch said the job went to (multi-cluster Slurm), "
+            "named in every later squeue, sacct and scancel about it; null on "
+            "a single-cluster machine and in older ledgers"
+        ),
+    )
     script: Path = Field(description="The submitted job script (<combo_id>.sbatch)")
     out_path: Path = Field(
         description="Where Slurm writes the job's output (<combo_id>.out)"
@@ -149,6 +174,14 @@ class TestJob(StrictModel):
     __test__ = False
 
     job_id: str = Field(description="The Slurm job id sbatch returned")
+    cluster: str | None = Field(
+        default=None,
+        description=(
+            "The cluster sbatch said the job went to (multi-cluster Slurm), "
+            "named in every later squeue, sacct and scancel about it; null on "
+            "a single-cluster machine"
+        ),
+    )
     script: Path = Field(
         description="The submitted job script (04-test-<application>.sbatch)"
     )
@@ -326,13 +359,15 @@ def submission_command(script: Path) -> list[str]:
     return ["sbatch", "--parsable", str(script)]
 
 
-def submit_job(script: Path) -> str:
-    """Submit a job script; returns the job id (the first `;`-separated
-    field of --parsable's line). A nonzero exit or an empty id raises
+def submit_job(script: Path) -> JobRef:
+    """Submit a job script; returns the job's id and cluster — the two
+    `;`-separated fields of --parsable's line, the second present only when
+    the job went to a named cluster. A nonzero exit or an empty id raises
     SlurmSubmissionError carrying what sbatch said."""
     command = submission_command(script)
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
-    job_id = completed.stdout.strip().split(";")[0].strip() if completed.stdout else ""
+    job_id, _, cluster = (completed.stdout or "").strip().partition(";")
+    job_id, cluster = job_id.strip(), cluster.strip()
     if completed.returncode != 0 or not job_id:
         raise SlurmSubmissionError(
             completed.returncode or 1,
@@ -340,15 +375,17 @@ def submit_job(script: Path) -> str:
             output=completed.stdout,
             stderr=completed.stderr,
         )
-    return job_id
+    return JobRef(job_id=job_id, cluster=cluster or None)
 
 
-def queue_states(job_ids: Iterable[str]) -> dict[str, str]:
+def queue_states(job_ids: Iterable[str], clusters: str | None = None) -> dict[str, str]:
     """The queue state (`%T`: PENDING, RUNNING, COMPLETING, ...) of every
-    given job still in the queue, from one `squeue` call; ids absent from
-    the result have left the queue. squeue exits nonzero when every id is
-    unknown to it (`Invalid job id`) — that is "nothing queued", not an
-    error. When squeue itself cannot run (missing, timed out) or fails for
+    given job still in the queue, from one `squeue` call — on `clusters`
+    (`-M`) when the jobs were submitted to a named cluster; ids absent from
+    the result have left the queue (lines that are not `<id> <state>`, such
+    as the `CLUSTER:` heading -M adds, are skipped). squeue exits nonzero
+    when every id is unknown to it (`Invalid job id`) — that is "nothing
+    queued", not an error. When squeue itself cannot run (missing, timed out) or fails for
     any other reason (the controller unreachable), every id is reported as
     queued with state UNKNOWN so the caller polls again rather than
     judging a job it knows nothing about."""
@@ -356,7 +393,7 @@ def queue_states(job_ids: Iterable[str]) -> dict[str, str]:
     if not ids:
         return {}
     wanted = set(ids)
-    argv = ["squeue", "-h", "-j", ",".join(ids), "-o", "%i %T"]
+    argv = ["squeue", "-h", *_on(clusters), "-j", ",".join(ids), "-o", "%i %T"]
     try:
         completed = subprocess.run(
             argv, capture_output=True, text=True, check=False, timeout=_SQUEUE_TIMEOUT_S
@@ -407,7 +444,7 @@ def wait_for_job(
     now = (lambda: datetime.now(UTC)) if now is None else now
     sleep = time.sleep if sleep is None else sleep
     command = submission_command(job.script)
-    while job.job_id in queue_states([job.job_id]):
+    while job.job_id in queue_states([job.job_id], clusters=job.cluster):
         if now() >= job.deadline:
             logger.error(
                 "job %s (%s) still queued past its deadline %s; cancelling",
@@ -415,25 +452,50 @@ def wait_for_job(
                 job.combo,
                 job.deadline.isoformat(),
             )
-            subprocess.run(["scancel", job.job_id], check=False)
+            scancel([job.job_id], clusters=job.cluster)
             raise SlurmJobTimeout(command, job.timeout_s + job.queue_wait_s, job.job_id)
         sleep(poll_s)
-    accounting = slurm_accounting(job.job_id)
+    accounting = slurm_accounting(job.job_id, clusters=job.cluster)
     if accounting is None:
         raise SlurmAccountingMissing(job.job_id)
     return accounting
 
 
-def scancel(job_ids: list[str]) -> None:
-    """`scancel <ids>` in one call; a job already gone is not an error."""
-    subprocess.run(["scancel", *job_ids], check=False)
+def scancel(job_ids: list[str], clusters: str | None = None) -> None:
+    """`scancel [-M <clusters>] <ids>` in one call; a job already gone is
+    not an error."""
+    subprocess.run(["scancel", *_on(clusters), *job_ids], check=False)
+
+
+def by_cluster(jobs: Iterable[tuple[str, str | None]]) -> dict[str | None, list[str]]:
+    """(job id, cluster) pairs as the job ids of each cluster, clusters in
+    first-seen order: one squeue or scancel per cluster covers them all."""
+    grouped: dict[str | None, list[str]] = {}
+    for job_id, cluster in jobs:
+        grouped.setdefault(cluster, []).append(job_id)
+    return grouped
+
+
+def queued_jobs(ledger: JobLedger) -> dict[str | None, list[str]]:
+    """The ledger's jobs still in the queue, by the cluster they are on
+    (one squeue per cluster); clusters with none queued are left out."""
+    grouped = by_cluster((job.job_id, job.cluster) for job in ledger.jobs)
+    live: dict[str | None, list[str]] = {}
+    for cluster, ids in grouped.items():
+        queued = queue_states(ids, clusters=cluster)
+        mine = [job_id for job_id in ids if job_id in queued]
+        if mine:
+            live[cluster] = mine
+    return live
 
 
 def cancel_jobs(ledger: JobLedger, *, dry_run: bool = False) -> list[str]:
-    """scancel every ledger job still in the queue (one call); returns the
-    ids that were (or, dry run, would be) cancelled."""
-    queued = queue_states(job.job_id for job in ledger.jobs)
-    live = [job.job_id for job in ledger.jobs if job.job_id in queued]
-    if live and not dry_run:
-        subprocess.run(["scancel", *live], check=False)
-    return live
+    """scancel every ledger job still in the queue (one squeue and one
+    scancel per cluster the jobs are on); returns the ids that were (or,
+    dry run, would be) cancelled, in ledger order."""
+    live = queued_jobs(ledger)
+    if not dry_run:
+        for cluster, ids in live.items():
+            scancel(ids, clusters=cluster)
+    cancelled = {job_id for ids in live.values() for job_id in ids}
+    return [job.job_id for job in ledger.jobs if job.job_id in cancelled]

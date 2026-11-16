@@ -11,7 +11,12 @@ from pytest_mock import MockerFixture
 
 from benchmarks import SlurmAccounting, read_test_benchmarks_csv
 from cli.main import COMMANDS, Command, main
-from jobs import SlurmSubmissionError, path_of_test_ledger, read_test_ledger
+from jobs import (
+    JobRef,
+    SlurmSubmissionError,
+    path_of_test_ledger,
+    read_test_ledger,
+)
 from logs import LOGGER_NAME
 from models.conventions import CONVENTIONS
 from platforms import Platform, Runtime
@@ -52,7 +57,7 @@ def _render(
 
 @pytest.fixture
 def rendered(tmp_path: Path, mocker: MockerFixture) -> Path:
-    mocker.patch("apptests.submit_job", return_value="4242")
+    mocker.patch("apptests.submit_job", return_value=JobRef("4242", None))
     mocker.patch("apptests.queue_states", return_value={})
     mocker.patch("apptests.scancel")
     return _render(tmp_path, mocker)
@@ -138,7 +143,7 @@ def test_submit_tests_refuses_a_queued_job_unless_resubmit(
         assert _submit(rendered) == 1
     assert "test job 4242 is still in the queue" in caplog.text
     assert "cancel --tests-root" in caplog.text
-    mocker.patch("apptests.submit_job", return_value="4300")
+    mocker.patch("apptests.submit_job", return_value=JobRef("4300", None))
     assert _submit(rendered, "--resubmit") == 0
     ledger = read_test_ledger(rendered / "tests" / "cece")
     assert ledger.job is not None
@@ -304,7 +309,7 @@ def test_evaluate_tests_refuses_an_application_whose_tests_are_off(
 def test_submit_tests_records_the_pass_marker_of_a_reportless_suite(
     tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    mocker.patch("apptests.submit_job", return_value="4242")
+    mocker.patch("apptests.submit_job", return_value=JobRef("4242", None))
     mocker.patch("apptests.queue_states", return_value={})
     mocker.patch("cli.commands.run.run_bash")
     config = run_config_file(

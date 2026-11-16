@@ -58,6 +58,7 @@ done
 # state and exit code can be overridden through `state` and `exit`.
 _SACCT = """#!/bin/bash
 here=$(dirname "$0")
+echo "$@" >> "$here/sacct.log"
 while [ $# -gt 0 ]; do
   if [ "$1" = "-j" ]; then id=$2; fi
   shift
@@ -248,6 +249,13 @@ def test_resume_adopts_the_ids_waits_and_evaluates(
         assert "COMPLETED" in job.out_path.read_text()
     squeue_calls = (tmp_path / "bin" / "squeue.log").read_text().splitlines()
     assert len(squeue_calls) >= 2  # polled until 1001 left the queue
+    # The stub sbatch answered `<id>;cluster`: the ledger kept the cluster
+    # and every later question about a job named it.
+    assert {job.cluster for job in ledger.jobs} == {"cluster"}
+    assert all(call.startswith("-h -M cluster -j ") for call in squeue_calls)
+    sacct_calls = (tmp_path / "bin" / "sacct.log").read_text().splitlines()
+    assert sacct_calls
+    assert all(call.startswith("-M cluster -j ") for call in sacct_calls)
     assert not (tmp_path / "bin" / "scancel.log").exists()
     # Nothing was resubmitted.
     assert len((tmp_path / "bin" / "sbatch.log").read_text().splitlines()) == 3
@@ -307,6 +315,10 @@ def test_live_root_guard_refuses_clean_root_while_jobs_are_queued(
     assert "2 job(s) still in the Slurm queue" in result.stderr
     assert "ufs-chem-assay cancel --output-root=" in result.stderr
     assert (_root(tmp_path) / CONVENTIONS.job_ledger).is_file()  # nothing removed
+    # The guard asked the cluster the jobs were submitted to.
+    squeue_calls = (tmp_path / "bin" / "squeue.log").read_text().splitlines()
+    assert squeue_calls
+    assert all(call.startswith("-h -M cluster -j ") for call in squeue_calls)
     # Once they are gone the root is cleaned as before.
     (tmp_path / "bin" / "queued").unlink()
     result = _pytest(

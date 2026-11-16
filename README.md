@@ -754,8 +754,8 @@ purpose is another run config over the same base.
 **Submit, then watch.** With `harness.submit_only: true` (the Ursa
 template; slurm runtime only) the harness stage's pytest session submits
 every combination's job at once, writes `<output root>/jobs.yaml` (the
-job ledger: each job's id, script, `.out` and deadline, who submitted,
-and later when a session evaluated them with what status) and returns
+job ledger: each job's id, cluster, script, `.out` and deadline, who
+submitted, and later when a session evaluated them with what status) and returns
 within minutes; `run` renders a sixth script per session,
 `06-resume-<application>-<session>.sh` — `pytest --resume` over the same
 root — and executes it only under `--stage resume`. `ufs-chem-assay
@@ -774,6 +774,17 @@ again by the next `watch`. `tmux` is a convenience for watching, not a
 requirement. `ufs-chem-assay cancel --output-root=<session root>`
 scancels a session's jobs still in the queue, and `clean_root` refuses to
 remove a root whose ledger lists queued jobs, naming that command.
+
+**Multi-cluster Slurm.** On a machine whose jobs go to a named cluster
+(Gaea: `slurm.extra_args: --clusters=c7`), `sbatch --parsable` answers
+`<job id>;<cluster>`. The harness records that cluster beside the job id
+— in `jobs.yaml` for the driver jobs, in `tests.yaml` for a test job —
+and names it (`-M <cluster>`) on every later `squeue`, `sacct` and
+`scancel` about that job: the wait inside pytest, `watch`, `cancel`,
+`evaluate-tests`, the `clean_root` guard. `extra_args` is the only
+setting; no `SLURM_CLUSTERS` is needed in the shell, and a ledger whose
+jobs are on two clusters is asked once per cluster. A job submitted
+without a cluster name is asked about without one, as before.
 
 **Then report.** `watch` ends with the run report, and
 `ufs-chem-assay report` prints the same thing any time later, from the

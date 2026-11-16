@@ -30,7 +30,7 @@ from identity import harness_commit, harness_version
 from jobs import (
     JobLedger,
     SubmittedJob,
-    queue_states,
+    queued_jobs,
     read_ledger,
     submitted_by,
     write_ledger,
@@ -505,7 +505,7 @@ def _refuse_a_live_root(host_root: Path) -> None:
         ledger = read_ledger(host_root)
     except ValueError:
         return
-    live = sorted(queue_states(job.job_id for job in ledger.jobs))
+    live = sorted(job_id for ids in queued_jobs(ledger).values() for job_id in ids)
     if live:
         raise pytest.UsageError(
             f"output root {host_root} has {len(live)} job(s) still in the Slurm "
@@ -1219,7 +1219,7 @@ def submitted_jobs(
             out_path = generated.host_dir / f"{combo.combo_id}.out"
             timeout_s = min(context.suite.timeout_s, settings.run_timeout_s)
             try:
-                script, job_id = submit_driver_job(
+                script, submitted = submit_driver_job(
                     settings,
                     app_settings,
                     generated.driver_yaml,
@@ -1244,7 +1244,8 @@ def submitted_jobs(
                 suite=context.suite.name,
                 combo=combo.name,
                 combo_id=combo.combo_id,
-                job_id=job_id,
+                job_id=submitted.job_id,
+                cluster=submitted.cluster,
                 script=script,
                 out_path=out_path,
                 timeout_s=timeout_s,
@@ -1254,7 +1255,7 @@ def submitted_jobs(
             ledger.jobs.append(job)
             write_ledger(ledger, combo_roots.host)
             jobs[combo.combo_id] = job
-            logger.info("submitted combo %s as Slurm job %s", combo.name, job_id)
+            logger.info("submitted combo %s as Slurm job %s", combo.name, job.job_id)
     return jobs
 
 
@@ -1360,7 +1361,7 @@ def _slurm_driver_run(
     if accounting is None and ACCOUNTING.get(settings.platform) is Accounting.SACCT:
         # A failed or cancelled job: the runner raised before returning its
         # accounting, and that is when the accounting matters most.
-        accounting = slurm_accounting(job.job_id)
+        accounting = slurm_accounting(job.job_id, clusters=job.cluster)
     if accounting is not None:
         request.config.stash[_ACCOUNTING][combo.combo_id] = accounting
     if (

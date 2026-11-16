@@ -28,6 +28,7 @@ from benchmarks import SlurmAccounting
 from combos import Combo
 from identity import HARNESS_NAME
 from jobs import (
+    JobRef,
     SlurmJobError,
     SlurmJobTimeout,
     SubmittedJob,
@@ -382,11 +383,12 @@ def submit_driver_job(
     *,
     app: Application | None = None,
     host_yaml: Path | None = None,
-) -> tuple[Path, str]:
+) -> tuple[Path, JobRef]:
     """The first half of a slurm driver call: write the combo's job script
     (`<combo_id>.sbatch`, kept beside the yaml and out so the job is
-    reproducible by hand) and submit it; returns the script and the job
-    id. Nothing waits: the job is the ledger's from here (jobs.py)."""
+    reproducible by hand) and submit it; returns the script and the job's
+    id and cluster. Nothing waits: the job is the ledger's from here
+    (jobs.py)."""
     script = write_job_script(
         settings,
         app_settings,

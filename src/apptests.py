@@ -140,8 +140,8 @@ def _settle_previous(tests_root: Path, *, resubmit: bool) -> None:
     previous = read_test_ledger(tests_root)
     if previous.job is None or previous.evaluated_at is not None:
         return
-    job_id = previous.job.job_id
-    if job_id not in queue_states([job_id]):
+    job_id, cluster = previous.job.job_id, previous.job.cluster
+    if job_id not in queue_states([job_id], clusters=cluster):
         logger.info(
             "test job %s finished without being evaluated; evaluating it before "
             "the new submission",
@@ -156,7 +156,7 @@ def _settle_previous(tests_root: Path, *, resubmit: bool) -> None:
             "--resubmit cancels it and submits again"
         )
     logger.info("cancelling queued test job %s (--resubmit)", job_id)
-    scancel([job_id])
+    scancel([job_id], clusters=cluster)
 
 
 def submit(
@@ -179,7 +179,7 @@ def submit(
     the root as it was."""
     tests_root.mkdir(parents=True, exist_ok=True)
     _settle_previous(tests_root, resubmit=resubmit)
-    job_id = submit_job(script)
+    job_id, cluster = submit_job(script)
     stem = CONVENTIONS.tests_stem
     ledger = TestLedger(
         run_id=str(ULID()),
@@ -189,6 +189,7 @@ def submit(
         provenance=provenance,
         job=TestJob(
             job_id=job_id,
+            cluster=cluster,
             script=script,
             timeout_s=timeout_s,
             queue_wait_s=queue_wait_s,
@@ -282,12 +283,13 @@ def evaluate(
     accounting: SlurmAccounting | None = None
     if ledger.job is not None:
         job_id = ledger.job.job_id
-        if not left_queue and job_id in queue_states([job_id]):
+        cluster = ledger.job.cluster
+        if not left_queue and job_id in queue_states([job_id], clusters=cluster):
             raise TestsStillQueued(
                 f"{tests_root}: test job {job_id} is still in the queue; nothing "
                 "to evaluate yet"
             )
-        accounting = slurm_accounting(job_id)
+        accounting = slurm_accounting(job_id, clusters=cluster)
         if accounting is None:
             logger.warning(
                 "no accounting for job %s: judging the test run by its junit report",
@@ -346,7 +348,8 @@ def _queued_job(ledger: TestLedger) -> str | None:
     if ledger.job is None or ledger.evaluated_at is not None:
         return None
     job_id = ledger.job.job_id
-    return job_id if job_id in queue_states([job_id]) else None
+    queued = queue_states([job_id], clusters=ledger.job.cluster)
+    return job_id if job_id in queued else None
 
 
 def cancel(tests_root: Path, *, dry_run: bool = False) -> list[str]:
@@ -355,11 +358,12 @@ def cancel(tests_root: Path, *, dry_run: bool = False) -> list[str]:
     without a ledger, a run in place, or a job already gone."""
     if not path_of_test_ledger(tests_root).is_file():
         return []
-    job_id = _queued_job(read_test_ledger(tests_root))
-    if job_id is None:
+    ledger = read_test_ledger(tests_root)
+    job_id = _queued_job(ledger)
+    if job_id is None or ledger.job is None:
         return []
     if not dry_run:
-        scancel([job_id])
+        scancel([job_id], clusters=ledger.job.cluster)
     return [job_id]
 
 
@@ -377,5 +381,5 @@ def cancel_overdue(ledger: TestLedger, now: datetime) -> bool:
         job_id,
         ledger.job.deadline.isoformat(),
     )
-    scancel([job_id])
+    scancel([job_id], clusters=ledger.job.cluster)
     return True

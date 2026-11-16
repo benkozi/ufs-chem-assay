@@ -27,6 +27,7 @@ from jobs import (
     JobLedger,
     TestLedger,
     TestProvenance,
+    by_cluster,
     path_of_test_ledger,
     queue_states,
     read_ledger,
@@ -158,20 +159,24 @@ def poll(
     ledgers: Iterable[JobLedger | None], test_ledgers: Iterable[TestLedger | None] = ()
 ) -> dict[str, str]:
     """One look at the queue: one squeue for the job ids of every
-    unevaluated session and test run together (none asked when there is
+    unevaluated session and test run together — one per cluster the jobs
+    were submitted to, each naming its own (none asked when there is
     nothing to ask about)."""
-    ids = [
-        job.job_id
+    jobs = [
+        (job.job_id, job.cluster)
         for ledger in ledgers
         if ledger is not None and ledger.evaluated_at is None
         for job in ledger.jobs
     ]
-    ids += [
-        ledger.job.job_id
+    jobs += [
+        (ledger.job.job_id, ledger.job.cluster)
         for ledger in test_ledgers
         if ledger is not None and ledger.evaluated_at is None and ledger.job is not None
     ]
-    return queue_states(ids) if ids else {}
+    states: dict[str, str] = {}
+    for cluster, ids in by_cluster(jobs).items():
+        states.update(queue_states(ids, clusters=cluster))
+    return states
 
 
 def tick(
