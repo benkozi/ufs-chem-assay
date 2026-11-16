@@ -91,5 +91,6 @@ harness:
   config_search_path:  # ASSAY_CONFIG_SEARCH_PATH
   suite_config_search_path: []  # ASSAY_SUITE_CONFIG_SEARCH_PATH
 slurm:  # direct execution
+toolchains: {}  # named compiler suites (`run --toolchain`); none locally: the image is the toolchain
 uv:
   cache_dir:

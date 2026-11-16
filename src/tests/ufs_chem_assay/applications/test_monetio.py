@@ -449,6 +449,9 @@ class _FakeRunConfigView:
     def checkout_dir(self, _app: object) -> Path:
         return self._checkout
 
+    def mpi_configure_args(self) -> list[str]:
+        return []
+
     def build_launcher(self, _section: object, *, cpus: int) -> list[str]:
         raise AssertionError(f"monetio never builds behind a launcher ({cpus})")
 

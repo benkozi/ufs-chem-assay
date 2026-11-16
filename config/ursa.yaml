@@ -83,6 +83,10 @@ slurm:  # the per-driver job (ASSAY_SBATCH_ARGS); time limit = the suite timeout
   cpus: 8  # sbatch -c: cores per task; the driver uses them all as threads unless env says otherwise
   srun_args: ''  # extra srun options for the driver launch, e.g. --cpu-bind=cores
   extra_args: ''  # extra sbatch directives, verbatim, e.g. --mem=0
+# toolchains: named compiler suites (module environment, configure flags, MPI launcher, tests environment), each
+# overlaid on every application section and built under <root_dir>/<name>; `run --toolchain NAME ...` or `all`
+# selects them. None here: one unnamed build, the module keys on the application section above.
+toolchains: {}
 # sessions: one pytest session per entry, each under <output_root>/<session>; an entry overlays the harness:,
 # slurm: and baselines: sections above, one level deep (an overlaid key replaces the base value whole).
 # --session NAME selects an entry; --override sessions:<name>:<section>:<key>=<value> reaches one.

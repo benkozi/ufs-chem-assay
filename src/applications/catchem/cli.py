@@ -9,7 +9,13 @@ from pathlib import Path
 
 from pydantic import Field
 
-from applications.base import ApplicationRunSection, RunConfigView, Stage, TestPlan
+from applications.base import (
+    ApplicationRunSection,
+    RunConfigView,
+    Stage,
+    TestPlan,
+    ToolchainSection,
+)
 from cli.stages import (
     OfflineBuild,
     cmake_stage,
@@ -53,6 +59,13 @@ class CatchemRunSection(ApplicationRunSection):
 
     def build_flags(self) -> list[str]:
         return list(self.cmake_args)
+
+    def toolchain_updates(self, toolchain: ToolchainSection) -> dict[str, object]:
+        # The application's configure arguments first, then the toolchain's.
+        return {
+            **super().toolchain_updates(toolchain),
+            "cmake_args": [*self.cmake_args, *toolchain.cmake_args],
+        }
 
     def runtime_problems(self, runtime: Runtime) -> list[str]:
         """CATChem's rules: no container build, and its own tests need a

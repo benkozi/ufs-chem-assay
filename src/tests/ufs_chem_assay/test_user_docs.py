@@ -223,6 +223,13 @@ def test_readme_documents_the_new_surfaces() -> None:
         "Using system Kokkos",
         "-DCATCHEM_BUILD_MUSICA=OFF",
         "SMOKE TEST PASSED",
+        "toolchains:",
+        "--toolchain all",
+        "mpi_launcher",
+        "tests_env",
+        "<root_dir>/<toolchain>",
+        "selected_toolchains",
+        "-DMPIEXEC_EXECUTABLE",
     ):
         assert needle in text, needle
     assert "buid-test-tweaks" not in text

@@ -10,8 +10,8 @@ from pathlib import Path
 import apptests
 from cli.commands import Subparsers
 from cli.run_config import HARNESS_ROOT
-from cli.selectors import selected_applications
-from cli.sessions import load_effective, test_provenance, tests_job_script
+from cli.selectors import one_toolchain_config, selected_applications
+from cli.sessions import job_script_for_tests, load_effective, provenance_for_tests
 from cli.stages import tests_enabled
 from jobs import SlurmSubmissionError
 from logs import get_logger
@@ -43,6 +43,15 @@ def register(subparsers: Subparsers, name: str) -> None:
         help="the configured application whose tests to submit",
     )
     submit.add_argument(
+        "--toolchain",
+        default=None,
+        metavar="NAME",
+        help=(
+            "the toolchain whose build to test (the rendered stage passes it); "
+            "needed when the run selected several"
+        ),
+    )
+    submit.add_argument(
         "--resubmit",
         action="store_true",
         help=(
@@ -60,7 +69,7 @@ def handler(args: argparse.Namespace) -> int:
     exit 1; nothing is submitted then."""
     root_dir = args.root_dir or HARNESS_ROOT.parent
     try:
-        config = load_effective(root_dir)
+        config = one_toolchain_config(load_effective(root_dir), args.toolchain)
         (app,) = selected_applications(config, [args.application])
         if not tests_enabled(config, app):
             raise ValueError(
@@ -72,7 +81,7 @@ def handler(args: argparse.Namespace) -> int:
                 f"{config.runtime.value}, where the test stage runs the tests in "
                 "place and calls evaluate-tests"
             )
-        script = tests_job_script(root_dir / "scripts", app)
+        script = job_script_for_tests(root_dir / "scripts", app, config.toolchain)
         if not script.is_file():
             raise ValueError(
                 f"{script} does not exist: `ufs-chem-assay run --config-file=... "
@@ -84,8 +93,8 @@ def handler(args: argparse.Namespace) -> int:
             config.tests_root(app),
             script=script,
             application=app.name,
-            toolchain=None,
-            provenance=test_provenance(config, app),
+            toolchain=config.toolchain,
+            provenance=provenance_for_tests(config, app),
             timeout_s=section.tests.minutes * 60,
             queue_wait_s=config.slurm.queue_wait_s,
             passed_marker=plan.passed_marker if plan else None,

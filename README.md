@@ -662,6 +662,70 @@ applications:
 `--application all` on such a config clones, builds and tests all three
 and runs the data and harness stages for `cece` alone.
 
+**Toolchains.** `toolchains:` is a map of toolchain name → a compiler
+suite: everything that must change together when the compiler does, so
+no application can pair one suite's modulefile with another's flags.
+
+```yaml
+toolchains:
+  oneapi:
+    modulefile: ufs_ursa.oneapi
+    modulepath: [modulefiles, /path/to/envs/<oneapi env>/modules/Core]
+    module_env: {}                    # exported before the load: version pins
+    toolchain_tools: [mpiicx, mpiicpx, mpiifx, cmake, ctest]
+    cmake_args: [-DCMAKE_CXX_FLAGS=-fp-model=precise]
+    mpi_launcher: mpiexec             # mpiexec (FindMPI's default) | srun
+    tests_env: {I_MPI_HYDRA_BOOTSTRAP: fork}
+    configure_gates: ['AXIS: ArborX .* found via find_package']
+  gnu:
+    modulefile: ufs_ursa.gnu
+    modulepath: [modulefiles, /path/to/envs/<gcc env>/modules/Core]
+    toolchain_tools: [mpicc, mpic++, mpifort, cmake, ctest]
+    mpi_launcher: srun
+    tests_env: {OMPI_MCA_plm: isolated}
+```
+
+A toolchain is overlaid on every application section: its module
+environment (`modulefile`, `modulepath`, `module_env`,
+`toolchain_tools`) replaces the section's whole — and under a
+`toolchains:` map a section may not set those keys itself, nor
+`clone_dir`; its `cmake_args` are appended to the application's own; its
+`configure_gates` are added to them; its `tests_env` is merged over
+`tests.env`. `mpi_launcher: srun` adds `-DMPIEXEC_EXECUTABLE` (the path
+of `srun`), `-DMPIEXEC_NUMPROC_FLAG=-n` and, when `mpiexec_preflags` is
+set, `-DMPIEXEC_PREFLAGS` to every CMake configure, so each MPI test is
+its own Slurm step; `mpiexec` leaves CMake's default. A section's rules
+are checked as each toolchain builds it (a flag CECE's tests require
+may be the toolchain's).
+
+`--toolchain NAME` (several, or `all`) selects what a `run` builds; it
+is required when the config names more than one. Each toolchain is its
+own build: its checkouts, build directories and tests roots are under
+`<root_dir>/<toolchain>/`, its scripts are
+`<NN>-<stage>-<application>-<toolchain>[-<session>].sh`, and its session
+output roots gain a `/<toolchain>` segment, so two toolchains never
+share anything but the harness checkout, `scripts/`, `logs/` and the uv
+cache. With several selected, the run is toolchain-major — every script
+of every toolchain is rendered first, then the whole stage list runs for
+one toolchain, then for the next; a failed stage ends its own
+toolchain's sequence only, the others still run whole, and the run exits
+with the first failure's status after one line per toolchain (`oneapi:
+failed at 02-build-cece-oneapi.sh (exit 2)`, `gnu: ok`):
+
+```sh
+uv run ufs-chem-assay run --config-file=<config> --application all --toolchain all \
+    --stage source --stage build --stage test
+uv run ufs-chem-assay watch --only tests      # every toolchain the run selected
+uv run ufs-chem-assay report --only tests --toolchain gnu
+```
+
+The effective config stays one file — the config as loaded, plus
+`selected_toolchains` — and `watch` and `report` cover the toolchains
+the last `run` selected (`--toolchain` narrows them), labelling each
+session and test run with its toolchain (`gnu/simple-maccity`, `tests
+cece/gnu`). Without a `toolchains:` map nothing changes: one unnamed
+build, the module keys on the application section, today's paths.
+
 **Sessions.** `sessions:` is a map of session name → an overlay on the
 file's `harness:`, `slurm:` and `baselines:` sections, one level deep: an
 overlaid key replaces the base value whole (a session that restates `env`

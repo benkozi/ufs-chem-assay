@@ -166,6 +166,10 @@ class SessionSummary(StrictModel):
 
     application: str = Field(description="The application's registry name")
     session: str | None = Field(description="The sessions: key; None when nameless")
+    toolchain: str | None = Field(
+        default=None,
+        description="The toolchain the session's build used; None without one",
+    )
     root: Path = Field(description="The session's output root (host path)")
     run_id: str | None = Field(description="run.yaml's run_id; None without run.yaml")
     state: SessionState = Field(description="Where the root stands, from its files")
@@ -208,7 +212,8 @@ class SessionSummary(StrictModel):
 
     @property
     def label(self) -> str:
-        return self.session or self.application
+        label = self.session or self.application
+        return label if self.toolchain is None else f"{self.toolchain}/{label}"
 
     @property
     def ok(self) -> bool:
@@ -340,15 +345,20 @@ def _upload_destination(root: Path) -> str | None:
 
 
 def newest_log(
-    logs_dir: Path | None, application: str, session: str | None
+    logs_dir: Path | None,
+    application: str,
+    session: str | None,
+    toolchain: str | None = None,
 ) -> Path | None:
-    """The newest `06-resume-<app>[-<session>]-<stamp>.log` under logs_dir,
-    else the newest `05-harness-…` one (a session evaluated in place);
-    None without a logs directory or a matching file. Newest by name: the
-    stamp is lexicographic."""
+    """The newest `06-resume-<app>[-<toolchain>][-<session>]-<stamp>.log`
+    under logs_dir, else the newest `05-harness-…` one (a session evaluated
+    in place); None without a logs directory or a matching file. Newest by
+    name: the stamp is lexicographic."""
     if logs_dir is None or not logs_dir.is_dir():
         return None
-    suffix = re.escape(application) + (f"-{re.escape(session)}" if session else "")
+    suffix = "-".join(
+        re.escape(part) for part in (application, toolchain, session) if part
+    )
     for stage in ("06-resume", "05-harness"):
         pattern = re.compile(rf"^{stage}-{suffix}-\d{{8}}-\d{{6}}\.log$")
         matches = sorted(p for p in logs_dir.iterdir() if pattern.match(p.name))
@@ -580,14 +590,33 @@ def summarize_session(
     *,
     application: str,
     session: str | None,
+    toolchain: str | None = None,
     logs_dir: Path | None = None,
     tail: int = DEFAULT_TAIL,
 ) -> SessionSummary:
     """Classify one session root from its files (and, with `logs_dir`, the
-    session's newest log), in the order of the design: no run.yaml; the
-    ledger (slurm) against the enumerated set; the verdicts; the pipeline
-    errors; the upload record."""
-    log_path = newest_log(logs_dir, application, session)
+    session's newest log — the toolchain is part of its name), in the order
+    of the design: no run.yaml; the ledger (slurm) against the enumerated
+    set; the verdicts; the pipeline errors; the upload record."""
+    summary = _classify_session(
+        root,
+        application=application,
+        session=session,
+        log_path=newest_log(logs_dir, application, session, toolchain),
+        tail=tail,
+    )
+    summary.toolchain = toolchain
+    return summary
+
+
+def _classify_session(
+    root: Path,
+    *,
+    application: str,
+    session: str | None,
+    log_path: Path | None,
+    tail: int,
+) -> SessionSummary:
     log = _parse_log(log_path)
     issues: list[Issue] = []
     if not (root / CONVENTIONS.run_manifest).is_file():

@@ -6,11 +6,16 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from applications.base import Stage
+from applications.base import Application, Stage
 from applications.registry import get_application
 from cli.commands import Subparsers
-from cli.run_config import RunConfig
-from cli.selectors import selected_applications, selected_sessions, selected_stages
+from cli.run_config import ResolvedSession, RunConfig
+from cli.selectors import (
+    selected_applications,
+    selected_sessions,
+    selected_stages,
+    toolchain_configs,
+)
 from cli.shell import run_bash, write_script
 from cli.stages import PER_SESSION, SCRIPT_INDEX, render_stage, tests_enabled
 from logs import get_logger
@@ -60,6 +65,20 @@ def register(subparsers: Subparsers, name: str) -> None:
         ),
     )
     run.add_argument(
+        "--toolchain",
+        action="extend",
+        nargs="+",
+        default=None,
+        metavar="NAME",
+        help=(
+            "toolchain(s) of the config's toolchains: map to build and run with, "
+            "or 'all' (repeatable or space-separated); each is its own set of "
+            "scripts, checkouts and results under <root_dir>/<NAME>, run one "
+            "toolchain after another. Required when the config names several; "
+            "an error when it names none"
+        ),
+    )
+    run.add_argument(
         "--session",
         action="append",
         default=None,
@@ -105,82 +124,23 @@ def register(subparsers: Subparsers, name: str) -> None:
     )
 
 
-def handler(args: argparse.Namespace) -> int:
-    try:
-        config = RunConfig.from_yaml(
-            args.config_file,
-            platform=args.platform,
-            root_dir=args.root_dir,
-            overrides=args.override,
-            resolve_application=get_application,
-        )
-        applications = selected_applications(config, args.application)
-        sessions = selected_sessions(config, args.session)
-        stages = selected_stages(args.stage)
-        if Stage.RESUME in stages and not all(
-            session.harness.submit_only for session in sessions
-        ):
-            raise ValueError(_RESUME_NEEDS_SUBMIT_ONLY)
-        # The test stage exists for the applications whose own tests are
-        # enabled (and is an error for one with no test suite to enable).
-        testing = {
-            app.name: Stage.TEST in stages and tests_enabled(config, app)
-            for app in applications
-        }
-    except ValueError as exc:
-        logger.error("%s", exc)
-        return 1
-    scripts_dir = config.root_dir / "scripts"
-    logs_dir = config.root_dir / "logs"
-    logger.info(
-        "platform %s / runtime %s; root %s; applications: %s; sessions: %s; stages: %s",
-        config.platform.value,
-        config.runtime.value,
-        config.root_dir,
-        ", ".join(app.name for app in applications),
-        ", ".join(session.name or "(nameless)" for session in sessions),
-        ", ".join(stage.value for stage in stages),
-    )
-    if args.override:
-        logger.info("overrides: %s", " ".join(args.override))
-
-    # A bad root_dir: say so instead of tracing back from mkdir.
-    try:
-        scripts_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        logger.error(
-            "cannot create root_dir %s: %s (edit root_dir in the run config or pass --root-dir)",
-            config.root_dir,
-            exc.strerror,
-        )
-        return 1
-
-    # The effective configuration — the file plus every override, as
-    # validated — beside the scripts it produced: re-runs the same run with
-    # no override list, and `watch` reads it for the sessions' roots.
-    effective = scripts_dir / CONVENTIONS.effective_config
-    config.to_yaml(effective)
-    logger.info("wrote %s", effective)
-
-    # Render and write everything first so a bad config fails before any
-    # stage runs. Stage-major order: every application's source, then every
-    # build, ... so build failures surface before any pytest session; the
-    # per-session stages render once per application per session. A
-    # submit-only session's resume script is rendered beside its harness
-    # script whenever the harness stage is — `watch` runs it — but executed
-    # only when --stage resume asks.
-    render = list(stages)
-    if Stage.HARNESS in render and Stage.RESUME not in render:
-        render.append(Stage.RESUME)
-    # An application is rendered only the stages it takes part in (one that
-    # is built and tested has no data or harness stage; one shipped with
-    # the harness no source stage either), and the run says what it skipped.
-    for app in applications:
-        skipped = [stage.value for stage in render if stage not in app.stages]
-        if skipped:
-            logger.info(
-                "%s takes no part in the %s stage(s)", app.name, ", ".join(skipped)
-            )
+def _render(
+    config: RunConfig,
+    applications: list[Application],
+    sessions: list[ResolvedSession],
+    stages: list[Stage],
+    render: list[Stage],
+    testing: dict[str, bool],
+    scripts_dir: Path,
+) -> list[Path]:
+    """Render and write one build's scripts — the config as loaded, or as
+    one toolchain builds it — and return the ones to execute, in order.
+    Stage-major: every application's source, then every build, ... so build
+    failures surface before any pytest session; the per-session stages
+    render once per application per session. An application is rendered
+    only the stages it takes part in. A submit-only session's resume script
+    is rendered beside its harness script whenever the harness stage is —
+    `watch` runs it — but executed only when --stage resume asks."""
     # The harness-wide data lines render once, under the first application
     # that has a data stage.
     shared_data_app = next(
@@ -225,12 +185,120 @@ def handler(args: argparse.Namespace) -> int:
                 )
                 logger.info("wrote %s", path)
                 to_run.append(path)
+    return to_run
+
+
+def handler(args: argparse.Namespace) -> int:
+    try:
+        config = RunConfig.from_yaml(
+            args.config_file,
+            platform=args.platform,
+            root_dir=args.root_dir,
+            overrides=args.override,
+            resolve_application=get_application,
+        )
+        applications = selected_applications(config, args.application)
+        sessions = selected_sessions(config, args.session)
+        stages = selected_stages(args.stage)
+        # One build per selected toolchain; the config itself without any.
+        builds = toolchain_configs(config, args.toolchain)
+        if Stage.RESUME in stages and not all(
+            session.harness.submit_only for session in sessions
+        ):
+            raise ValueError(_RESUME_NEEDS_SUBMIT_ONLY)
+        # The test stage exists for the applications whose own tests are
+        # enabled (and is an error for one with no test suite to enable).
+        testing = [
+            {
+                app.name: Stage.TEST in stages and tests_enabled(build, app)
+                for app in applications
+            }
+            for build in builds
+        ]
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 1
+    toolchains = [build.toolchain for build in builds if build.toolchain is not None]
+    scripts_dir = config.root_dir / "scripts"
+    logs_dir = config.root_dir / "logs"
+    logger.info(
+        "platform %s / runtime %s; root %s; applications: %s; sessions: %s; stages: %s%s",
+        config.platform.value,
+        config.runtime.value,
+        config.root_dir,
+        ", ".join(app.name for app in applications),
+        ", ".join(session.name or "(nameless)" for session in sessions),
+        ", ".join(stage.value for stage in stages),
+        f"; toolchains: {', '.join(toolchains)}" if toolchains else "",
+    )
+    if args.override:
+        logger.info("overrides: %s", " ".join(args.override))
+
+    # A bad root_dir: say so instead of tracing back from mkdir.
+    try:
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.error(
+            "cannot create root_dir %s: %s (edit root_dir in the run config or pass --root-dir)",
+            config.root_dir,
+            exc.strerror,
+        )
+        return 1
+
+    # The effective configuration — the file plus every override, as
+    # validated, and the toolchains this run selected — beside the scripts
+    # it produced: re-runs the same run with no override list, and `watch`
+    # and `report` read it for the sessions' and the tests' roots.
+    effective = scripts_dir / CONVENTIONS.effective_config
+    config.model_copy(update={"selected_toolchains": toolchains}).to_yaml(effective)
+    logger.info("wrote %s", effective)
+
+    # Render and write everything first — every toolchain's scripts — so a
+    # bad config fails before any stage runs.
+    render = list(stages)
+    if Stage.HARNESS in render and Stage.RESUME not in render:
+        render.append(Stage.RESUME)
+    # An application is rendered only the stages it takes part in (one that
+    # is built and tested has no data or harness stage; one shipped with
+    # the harness no source stage either), and the run says what it skipped.
+    for app in applications:
+        skipped = [stage.value for stage in render if stage not in app.stages]
+        if skipped:
+            logger.info(
+                "%s takes no part in the %s stage(s)", app.name, ", ".join(skipped)
+            )
+    plans = [
+        (
+            build.toolchain,
+            _render(
+                build, applications, sessions, stages, render, enabled, scripts_dir
+            ),
+        )
+        for build, enabled in zip(builds, testing, strict=True)
+    ]
     if args.dry_run:
         logger.info("dry run: nothing executed")
         return 0
-    for path in to_run:
-        code = run_bash(path, logs_dir)
-        if code != 0:
-            logger.error("stage %s failed with exit %s", path.stem, code)
+    # Toolchain-major: the whole stage list for one toolchain, then for the
+    # next. A failed stage ends its own toolchain's sequence only — the
+    # others still run whole — and the run's status is the first failure's.
+    status = 0
+    outcomes: list[tuple[str, Path | None, int]] = []
+    for toolchain, to_run in plans:
+        failed, code = None, 0
+        for path in to_run:
+            code = run_bash(path, logs_dir)
+            if code != 0:
+                logger.error("stage %s failed with exit %s", path.stem, code)
+                failed = path
+                break
+        if toolchain is None:
             return code
-    return 0
+        outcomes.append((toolchain, failed, code))
+        status = status or code
+    for toolchain, failed, code in outcomes:
+        if failed is None:
+            logger.info("%s: ok", toolchain)
+        else:
+            logger.error("%s: failed at %s (exit %s)", toolchain, failed.name, code)
+    return status

@@ -11,8 +11,8 @@ from pathlib import Path
 import apptests
 from cli.commands import Subparsers
 from cli.run_config import HARNESS_ROOT
-from cli.selectors import selected_applications
-from cli.sessions import load_effective, test_provenance, tests_line
+from cli.selectors import one_toolchain_config, selected_applications
+from cli.sessions import load_effective, provenance_for_tests, tests_line
 from cli.stages import tests_enabled
 from logs import get_logger
 from platforms import Runtime
@@ -44,6 +44,15 @@ def register(subparsers: Subparsers, name: str) -> None:
         help="the configured application whose test run to evaluate",
     )
     evaluate.add_argument(
+        "--toolchain",
+        default=None,
+        metavar="NAME",
+        help=(
+            "the toolchain whose test run to evaluate (the rendered stage passes "
+            "it); needed when the run selected several"
+        ),
+    )
+    evaluate.add_argument(
         "--exit-status",
         type=int,
         default=None,
@@ -62,7 +71,7 @@ def handler(args: argparse.Namespace) -> int:
     ERROR line and exit 1."""
     root_dir = args.root_dir or HARNESS_ROOT.parent
     try:
-        config = load_effective(root_dir)
+        config = one_toolchain_config(load_effective(root_dir), args.toolchain)
         (app,) = selected_applications(config, [args.application])
         if not tests_enabled(config, app):
             raise ValueError(
@@ -82,13 +91,14 @@ def handler(args: argparse.Namespace) -> int:
             apptests.record_local(
                 tests_root,
                 application=app.name,
-                toolchain=None,
-                provenance=test_provenance(config, app),
+                toolchain=config.toolchain,
+                provenance=provenance_for_tests(config, app),
                 passed_marker=plan.passed_marker if plan else None,
             )
             ledger = apptests.evaluate(tests_root, exit_status=args.exit_status)
     except ValueError as exc:
         logger.error("%s", exc)
         return 1
-    logger.info("tests %s: %s", app.name, tests_line(ledger))
+    label = app.name if config.toolchain is None else f"{app.name}/{config.toolchain}"
+    logger.info("tests %s: %s", label, tests_line(ledger))
     return 0

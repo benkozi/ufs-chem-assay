@@ -6,19 +6,27 @@ configuration written back."""
 from __future__ import annotations
 
 import os
+import shlex
 from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath
 
 import yaml
 from pydantic import (
     Field,
+    PrivateAttr,
     SerializeAsAny,
     ValidationInfo,
     field_validator,
     model_validator,
 )
 
-from applications.base import Application, ApplicationRunSection, BuildNode
+from applications.base import (
+    Application,
+    ApplicationRunSection,
+    BuildNode,
+    MpiLauncher,
+    ToolchainSection,
+)
 from cli.override import apply_overrides
 from cli.run_config.sections import (
     BaselinesSection,
@@ -96,6 +104,72 @@ class RunConfig(StrictModel):
         ),
     )
     uv: UvSection = Field(default_factory=UvSection)
+    toolchains: dict[str, ToolchainSection] = Field(
+        default_factory=dict,
+        description=(
+            "Named compiler suites, each overlaid on every application section "
+            "(its module environment whole; its configure arguments, gates and "
+            "tests environment added) and given its own checkouts, builds and "
+            "results under <root_dir>/<name>. Select with `run --toolchain NAME "
+            "...` or `all`; empty means one unnamed build with today's paths"
+        ),
+    )
+    selected_toolchains: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The toolchains the last `run` selected, recorded in the effective "
+            "config so `watch` and `report` cover the same ones by default; not "
+            "a key to write by hand"
+        ),
+    )
+    # The toolchain a derived config (for_toolchain) builds with; None for
+    # the config as loaded. Never read from or written to a file.
+    _toolchain: str | None = PrivateAttr(default=None)
+
+    @field_validator("toolchains", mode="before")
+    @classmethod
+    def _toolchain_names(cls, value: object) -> object:
+        if isinstance(value, dict):
+            for name in value:
+                if (
+                    not isinstance(name, str)
+                    or not SESSION_NAME.match(name)
+                    or name == "all"
+                ):
+                    raise ValueError(
+                        f"toolchains: {name!r} is not a toolchain name (lower-case "
+                        "letters, digits and dashes, and not 'all': it names a "
+                        "directory and a script)"
+                    )
+        return value
+
+    @model_validator(mode="after")
+    def _toolchains_own_the_module_keys(self) -> RunConfig:
+        unknown = [n for n in self.selected_toolchains if n not in self.toolchains]
+        if unknown:
+            raise ValueError(
+                f"selected_toolchains: {unknown} not in toolchains "
+                f"({list(self.toolchains)})"
+            )
+        if not self.toolchains:
+            return self
+        # What a toolchain decides may not be decided per application too:
+        # that is the drift a toolchain exists to prevent. And an explicit
+        # checkout would be shared by every toolchain's build.
+        for name, section in self.applications.items():
+            for key in section.toolchain_owned():
+                if key == "clone_dir":
+                    raise ValueError(
+                        f"applications.{name}: under toolchains:, `clone_dir` "
+                        "cannot be set: each toolchain has its own checkout, "
+                        "<root_dir>/<toolchain>/<checkout>"
+                    )
+                raise ValueError(
+                    f"applications.{name}: under toolchains:, `{key}` belongs to "
+                    "the toolchain (set it under toolchains.<name>:, once for "
+                    "every application)"
+                )
+        return self
 
     @field_validator("sessions", mode="before")
     @classmethod
@@ -150,10 +224,19 @@ class RunConfig(StrictModel):
         # The rules a section cannot check alone (they depend on how the
         # application is built and run here): the adapter's section states
         # them, the first one fails the load.
-        for name, section in self.applications.items():
-            problems = section.runtime_problems(self.runtime)
-            if problems:
-                raise ValueError(f"applications.{name}: {problems[0]}")
+        # Under toolchains a section is judged as each toolchain builds it
+        # (a flag a rule requires may be the toolchain's).
+        builds: list[tuple[str, RunConfig]] = [("", self)]
+        if self.toolchains:
+            builds = [
+                (f"toolchains.{name}: ", self.for_toolchain(name))
+                for name in self.toolchains
+            ]
+        for prefix, config in builds:
+            for name, section in config.applications.items():
+                problems = section.runtime_problems(self.runtime)
+                if problems:
+                    raise ValueError(f"{prefix}applications.{name}: {problems[0]}")
         return self
 
     @field_validator("root_dir", mode="before")
@@ -241,17 +324,75 @@ class RunConfig(StrictModel):
     def application_names(self) -> list[str]:
         return list(self.applications)
 
+    # ── toolchains ───────────────────────────────────────────────────────
+
+    @property
+    def toolchain(self) -> str | None:
+        """The toolchain this config builds with: None for the config as
+        loaded, the name for one derived by for_toolchain."""
+        return self._toolchain
+
+    def for_toolchain(self, name: str) -> RunConfig:
+        """This config as one toolchain builds it: every application section
+        with the toolchain overlaid (ApplicationRunSection.with_toolchain)
+        and every path the build touches under <root_dir>/<name>. The
+        result is for rendering and for locating roots — it is never
+        written; the effective config is the config as loaded."""
+        if name not in self.toolchains:
+            raise ValueError(
+                f"no toolchain {name!r} in the run config "
+                f"(toolchains: {list(self.toolchains)})"
+            )
+        toolchain = self.toolchains[name]
+        derived = self.model_copy(
+            update={
+                "applications": {
+                    app: section.with_toolchain(toolchain)
+                    for app, section in self.applications.items()
+                }
+            }
+        )
+        derived._toolchain = name
+        return derived
+
+    @property
+    def _build_root(self) -> Path:
+        """Where a build's checkouts and tests roots live: the run root, or
+        the toolchain's directory under it."""
+        if self._toolchain is None:
+            return self.root_dir
+        return self.root_dir / self._toolchain
+
+    def mpi_configure_args(self) -> list[str]:
+        """The toolchain's MPI launcher as CMake configure arguments, shell
+        words already quoted: srun as MPIEXEC_EXECUTABLE (its path resolved
+        where the configure runs) with -n as the rank-count flag and the
+        toolchain's preflags; nothing without a toolchain or for mpiexec,
+        which is FindMPI's own default."""
+        if self._toolchain is None:
+            return []
+        toolchain = self.toolchains[self._toolchain]
+        if toolchain.mpi_launcher is not MpiLauncher.SRUN:
+            return []
+        args = [
+            '-DMPIEXEC_EXECUTABLE="$(command -v srun)"',
+            "-DMPIEXEC_NUMPROC_FLAG=-n",
+        ]
+        if toolchain.mpiexec_preflags:
+            args.append(f"-DMPIEXEC_PREFLAGS={shlex.quote(toolchain.mpiexec_preflags)}")
+        return args
+
     def checkout_dir(self, app: Application) -> Path:
         """The application's checkout: its section's clone_dir, else
-        <root_dir>/<the adapter's checkout_dirname>."""
+        <root_dir>[/<toolchain>]/<the adapter's checkout_dirname>."""
         section = self.applications[app.name]
-        return section.clone_dir or self.root_dir / app.checkout_dirname
+        return section.clone_dir or self._build_root / app.checkout_dirname
 
     def tests_root(self, app: Application) -> Path:
         """Where the application's own test runs leave their files: the
         output, the junit report, the test ledger, the benchmark rows —
-        <root_dir>/tests/<application>."""
-        return self.root_dir / CONVENTIONS.tests_dirname / app.name
+        <root_dir>[/<toolchain>]/tests/<application>."""
+        return self._build_root / CONVENTIONS.tests_dirname / app.name
 
     def build_launcher(self, section: ApplicationRunSection, *, cpus: int) -> list[str]:
         """The command prefix of one compile step of `section`: empty on the
@@ -307,10 +448,13 @@ class RunConfig(StrictModel):
 
     def session_output_root(self, app: Application, session: ResolvedSession) -> str:
         """The session's --combo-output-root: harness.output_root as-is for
-        one application and a nameless session; /<application> when several
-        applications share the run; /<session> when the session is named —
-        <output_root>[/<application>][/<session>]."""
+        one application and a nameless session; /<toolchain> under a
+        toolchain; /<application> when several applications share the run;
+        /<session> when the session is named —
+        <output_root>[/<toolchain>][/<application>][/<session>]."""
         root = PurePosixPath(session.harness.output_root)
+        if self._toolchain is not None:
+            root = root / self._toolchain
         if len(self.applications) > 1:
             root = root / app.name
         if session.name is not None:

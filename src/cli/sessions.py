@@ -20,7 +20,7 @@ from applications.base import Application, Stage
 from applications.registry import get_application
 from cli.run_config import ResolvedSession, RunConfig
 from cli.shell import run_bash
-from cli.stages import SCRIPT_INDEX, tests_enabled
+from cli.stages import SCRIPT_INDEX, stage_name, tests_enabled
 from identity import harness_commit, harness_version
 from jobs import (
     QUEUED_UNKNOWN,
@@ -72,12 +72,17 @@ class WatchedSession(StrictModel):
 
     application: str = Field(description="The application's registry name")
     session: str | None = Field(description="The sessions: key; None when nameless")
+    toolchain: str | None = Field(
+        default=None,
+        description="The toolchain the session's build used; None without one",
+    )
     root: Path = Field(description="The session's output root (host path)")
     script: Path = Field(description="The rendered resume script `watch` runs")
 
     @property
     def label(self) -> str:
-        return self.session or self.application
+        label = self.session or self.application
+        return label if self.toolchain is None else f"{self.toolchain}/{label}"
 
 
 class SessionReport(StrictModel):
@@ -129,13 +134,12 @@ def configured_sessions(
         if Stage.HARNESS not in app.stages:
             continue  # built and tested, never swept: no session, no root
         for session in sessions:
-            name = f"{Stage.RESUME.value}-{app.name}"
-            if session.name is not None:
-                name = f"{name}-{session.name}"
+            name = stage_name(Stage.RESUME, app.name, config.toolchain, session.name)
             watched.append(
                 WatchedSession(
                     application=app.name,
                     session=session.name,
+                    toolchain=config.toolchain,
                     root=session_root(config, app, session),
                     script=scripts_dir / f"{_RESUME_INDEX:02d}-{name}.sh",
                 )
@@ -299,7 +303,11 @@ def configured_tests(
     """The test run of every selected application whose own tests are
     enabled, in config order."""
     return [
-        WatchedTests(application=app.name, root=config.tests_root(app))
+        WatchedTests(
+            application=app.name,
+            toolchain=config.toolchain,
+            root=config.tests_root(app),
+        )
         for app in applications
         if tests_enabled(config, app)
     ]
@@ -355,14 +363,16 @@ def evaluate_tests(watched: WatchedTests) -> TestsReport:
         return TestsReport(state=TestsState.FAILED, exit_status=1, detail=str(exc))
 
 
-def tests_job_script(scripts_dir: Path, app: Application) -> Path:
+def job_script_for_tests(
+    scripts_dir: Path, app: Application, toolchain: str | None
+) -> Path:
     """The test job script `run` rendered beside the application's test
-    stage script: <scripts_dir>/04-test-<application>.sbatch."""
-    stage = Stage.TEST
-    return scripts_dir / f"{SCRIPT_INDEX[stage]:02d}-{stage.value}-{app.name}.sbatch"
+    stage script: <scripts_dir>/04-test-<application>[-<toolchain>].sbatch."""
+    name = stage_name(Stage.TEST, app.name, toolchain)
+    return scripts_dir / f"{SCRIPT_INDEX[Stage.TEST]:02d}-{name}.sbatch"
 
 
-def test_provenance(config: RunConfig, app: Application) -> TestProvenance:
+def provenance_for_tests(config: RunConfig, app: Application) -> TestProvenance:
     """What a test run of `app` runs against, read now: the config's
     platform, runtime, modulefile and configure flags; the checkout's commit
     and CMake build type; the harness's own identity. A checkout whose

@@ -85,9 +85,10 @@ class ShellScript(StrictModel):
 
     name: str = Field(
         description=(
-            "Stage name, application-qualified — <stage>-<application> — and "
+            "Stage name, application-qualified — <stage>-<application> — then "
+            "toolchain-qualified for a config built with one, then "
             "session-qualified for the per-session stages of a named session: "
-            "<stage>-<application>-<session>"
+            "<stage>-<application>[-<toolchain>][-<session>] (stage_name)"
         )
     )
     text: str = Field(description="Complete bash source, shebang included")
@@ -199,8 +200,14 @@ def cmake_stage(
     prefix = "".join(f"{q(part)} " for part in launcher)
 
     def configure(args: list[str]) -> list[str]:
+        # The toolchain's MPI launcher last, as the shell words they are
+        # (one resolves a path where this line runs): never quoted here.
         command = " ".join(
-            [f"cmake -S {q(source)} -B {q(build)}", *(q(arg) for arg in args)]
+            [
+                f"cmake -S {q(source)} -B {q(build)}",
+                *(q(arg) for arg in args),
+                *config.mpi_configure_args(),
+            ]
         )
         return [f"{command} 2>&1 | tee {q(log)}", *gates]
 
@@ -324,6 +331,21 @@ SCRIPT_INDEX = {
     Stage.HARNESS: 5,
     Stage.RESUME: 6,
 }
+
+
+def stage_name(
+    stage: Stage,
+    application: str,
+    toolchain: str | None = None,
+    session: str | None = None,
+) -> str:
+    """A rendered script's name (and its log's stem, after the slot number):
+    <stage>-<application>[-<toolchain>][-<session>] — the toolchain for a
+    config built with one, the session for the per-session stages of a
+    named session."""
+    parts = [stage.value, application, toolchain, session]
+    return "-".join(part for part in parts if part is not None)
+
 
 # Where a tests root is mounted in the application's image (docker runtime).
 _TESTS_MOUNT = PurePosixPath("/assay-tests")
@@ -577,6 +599,8 @@ def _test(
     stem = CONVENTIONS.tests_stem
     runtime = config.runtime
     selection = f"--root-dir {q(config.root_dir)} --application {q(app.name)}"
+    if config.toolchain is not None:
+        selection += f" --toolchain {q(config.toolchain)}"
 
     def plan_for(junit: str) -> str:
         plan = app.test_plan(section, junit)
@@ -599,7 +623,11 @@ def _test(
     if runtime is Runtime.SLURM:
         assert config.slurm is not None, "slurm runtime needs a slurm: section"
         job = render_job_script(
-            job_name=f"{HARNESS_NAME}-tests-{app.name}",
+            job_name="-".join(
+                part
+                for part in (HARNESS_NAME, "tests", app.name, config.toolchain)
+                if part is not None
+            ),
             out_path=tests_root / f"{stem}-%j.out",
             root_dir=checkout,
             minutes=tests.minutes,
@@ -708,9 +736,8 @@ def render_stage(
         body = _pytest_stage(
             config, app, section, session, resume=stage is Stage.RESUME
         )
-        name = f"{stage.value}-{app.name}"
+        name = stage_name(stage, app.name, config.toolchain, session.name)
         if session.name is not None:
-            name = f"{name}-{session.name}"
             who = f"{app.name}/{session.name}"
     elif stage is Stage.DATA:
         body = _data(
@@ -720,13 +747,15 @@ def render_stage(
             shared_data,
             config.resolved_sessions() if sessions is None else sessions,
         )
-        name = f"{stage.value}-{app.name}"
+        name = stage_name(stage, app.name, config.toolchain)
     elif stage is Stage.TEST:
         body, attachments = _test(config, app, section)
-        name = f"{stage.value}-{app.name}"
+        name = stage_name(stage, app.name, config.toolchain)
     else:
         body = app.stage_lines(stage, config, section)
-        name = f"{stage.value}-{app.name}"
+        name = stage_name(stage, app.name, config.toolchain)
+    if config.toolchain is not None:
+        who = f"{who}, {config.toolchain}"
     lines = [
         _SHEBANG,
         "set -euo pipefail",

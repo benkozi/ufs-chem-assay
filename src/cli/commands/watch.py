@@ -16,7 +16,7 @@ import apptests
 from cli.commands import Subparsers
 from cli.run_config import HARNESS_ROOT
 from cli.run_report import RunReport, render, summarize_session, summarize_tests
-from cli.selectors import selected_applications, selected_sessions
+from cli.selectors import selected_applications, selected_sessions, toolchain_configs
 from cli.sessions import (
     SessionReport,
     SessionState,
@@ -72,6 +72,17 @@ def register(subparsers: Subparsers, name: str) -> None:
         help="watch only this configured session (repeatable)",
     )
     watch_parser.add_argument(
+        "--toolchain",
+        action="extend",
+        nargs="+",
+        default=None,
+        metavar="NAME",
+        help=(
+            "watch only these toolchains' sessions and test jobs, or 'all' "
+            "(default: the ones the last `run` selected)"
+        ),
+    )
+    watch_parser.add_argument(
         "--only",
         choices=("sessions", "tests"),
         default=None,
@@ -107,8 +118,13 @@ def handler(args: argparse.Namespace) -> int:
     try:
         config = load_effective(root_dir)
         applications = selected_applications(config, args.application)
+        # One build per selected toolchain (the config itself without any):
+        # each has its own session roots, resume scripts and tests roots.
+        builds = toolchain_configs(config, args.toolchain)
         tests = (
-            [] if args.only == "sessions" else configured_tests(config, applications)
+            []
+            if args.only == "sessions"
+            else [t for build in builds for t in configured_tests(build, applications)]
         )
         tests_alone = (
             "; `--only tests` watches the applications' own test jobs alone"
@@ -127,9 +143,13 @@ def handler(args: argparse.Namespace) -> int:
                     "harness.submit_only (their harness stage evaluates in place)"
                     + tests_alone
                 )
-            watched = configured_sessions(
-                config, applications, sessions, root_dir / "scripts"
-            )
+            watched = [
+                w
+                for build in builds
+                for w in configured_sessions(
+                    build, applications, sessions, root_dir / "scripts"
+                )
+            ]
             missing = [w.script for w in watched if not w.script.is_file()]
             if missing:
                 raise ValueError(
@@ -235,7 +255,11 @@ def handler(args: argparse.Namespace) -> int:
         generated_at=datetime.now(UTC),
         sessions=[
             summarize_session(
-                w.root, application=w.application, session=w.session, logs_dir=logs_dir
+                w.root,
+                application=w.application,
+                session=w.session,
+                toolchain=w.toolchain,
+                logs_dir=logs_dir,
             )
             for w in watched
         ],

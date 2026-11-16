@@ -698,7 +698,45 @@ are the per-root commands. The Debug / ESMF rule moved with this chunk
 from a validator of `CeceRunSection` to `ApplicationRunSection.runtime_problems(runtime)`,
 which `RunConfig` checks at load: under docker the container build
 script owns the configure, so only the `all`-among-targets half applies
-there. Toolchains and the two new applications follow. The path model is one
+there.
+
+**Toolchains** (2026-11-16, chunk 5 of the same feature) are the compiler
+axis: `toolchains:` maps a name to a `ToolchainSection`
+(`applications/base.py`: `modulefile`, `modulepath`, `module_env`,
+`toolchain_tools`, `cmake_args`, `mpi_launcher`, `mpiexec_preflags`,
+`tests_env`, `configure_gates`). `RunConfig.for_toolchain(name)` is the
+config *as that toolchain builds it*: every application section
+overlaid (`ApplicationRunSection.with_toolchain` — the module
+environment replaced whole, the gates unioned, `tests_env` merged over
+`tests.env`; the three CMake sections append the toolchain's
+`cmake_args` to their own) and re-validated, with the toolchain as a
+private attribute that the path helpers read: `checkout_dir` and
+`tests_root` are under `<root_dir>/<toolchain>/`, `session_output_root`
+gains `/<toolchain>` first, and `cli/stages.stage_name` puts it in every
+script name (`<stage>-<application>[-<toolchain>][-<session>]`). A
+derived config is for rendering and for locating roots; it is never
+written. Precedence is refusal, not override: under a map an application
+section that sets a module key (differently from its default — an
+effective config lists every key) or `clone_dir` fails the load, and
+each section's `runtime_problems` are judged per toolchain
+(`toolchains.<name>: applications.<app>: …`). `mpi_launcher: srun`
+becomes configure arguments through `RunConfigView.mpi_configure_args`,
+which `cmake_stage` appends unquoted — one of them is
+`-DMPIEXEC_EXECUTABLE="$(command -v srun)"`. `cli/selectors.toolchain_configs`
+is the selection every command shares: the config itself without a map;
+the requested names or `all`; else the selection the last `run` recorded
+(`selected_toolchains` in the effective config), else the map's only
+entry — several unrecorded ones are an error. `run` renders every
+selected toolchain's scripts before executing anything, then runs
+toolchain-major, continuing past a failed toolchain and exiting with the
+first failure's status after one outcome line each; `watch` and `report`
+collect the sessions and test runs of every selected toolchain (labels
+`<toolchain>/<session>`, `tests <application>/<toolchain>`; the session
+log lookup includes the toolchain); `submit-tests` and `evaluate-tests`
+take `--toolchain` and work on exactly one (`one_toolchain_config`). The
+test ledger and `TestBenchmarkRow` carry the toolchain; `run.yaml` and
+the driver `BenchmarkRow` do not — a driver row's `modulefile` and
+`build_type` tell the toolchains apart. The path model is one
 abstraction: `ComboRoots.driver` is the output root *as the driver sees
 it* — a container path under docker, the host path natively — and
 generated configs carry it in `output.directory` and `driver.log_file`.
@@ -1358,7 +1396,8 @@ All code under `src/`; the project is `uv`-managed with its own
       override.py         # KEY:PATH=VALUE overrides applied before validation
       stages.py           # per-application / per-session stage scripts (ShellScript)
       shell.py            # write_script, run_bash (tee to <root>/logs/)
-      selectors.py        # the requested stages / sessions / applications of a config
+      selectors.py        # the requested stages / sessions / applications / toolchains of a
+                          #   config (toolchain_configs: one derived config per toolchain)
       sessions.py         # the watch machinery: the effective config, each session's root
                           #   and resume script, the squeue tick, one session's evaluation
       run_report.py       # the per-root classifier (SessionSummary, Issue, RunReport)

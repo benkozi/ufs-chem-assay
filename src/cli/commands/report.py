@@ -20,7 +20,7 @@ from cli.run_report import (
     summarize_session,
     summarize_tests,
 )
-from cli.selectors import selected_applications, selected_sessions
+from cli.selectors import selected_applications, selected_sessions, toolchain_configs
 from cli.sessions import configured_sessions, configured_tests, load_effective
 from logs import get_logger
 from models.conventions import CONVENTIONS
@@ -72,6 +72,17 @@ def register(subparsers: Subparsers, name: str) -> None:
         help="report only this configured session (repeatable)",
     )
     report_parser.add_argument(
+        "--toolchain",
+        action="extend",
+        nargs="+",
+        default=None,
+        metavar="NAME",
+        help=(
+            "with --root-dir: report only these toolchains' sessions and test "
+            "runs, or 'all' (default: the ones the last `run` selected)"
+        ),
+    )
+    report_parser.add_argument(
         "--only",
         choices=("sessions", "tests"),
         default=None,
@@ -113,10 +124,10 @@ def handler(args: argparse.Namespace) -> int:
     tests: list[TestsSummary] = []
     summaries: list[SessionSummary] = []
     if args.output_root is not None:
-        if args.application or args.session or args.only:
+        if args.application or args.session or args.only or args.toolchain:
             logger.error(
-                "--output-root takes one root; --application/--session/--only "
-                "select from the effective config (use --root-dir)"
+                "--output-root takes one root; --application/--session/--only/"
+                "--toolchain select from the effective config (use --root-dir)"
             )
             return 1
         root = args.output_root.resolve()
@@ -138,10 +149,13 @@ def handler(args: argparse.Namespace) -> int:
             config = load_effective(root_dir)
             applications = selected_applications(config, args.application)
             sessions = selected_sessions(config, args.session)
+            builds = toolchain_configs(config, args.toolchain)
             watched_tests = (
                 []
                 if args.only == "sessions"
-                else configured_tests(config, applications)
+                else [
+                    t for build in builds for t in configured_tests(build, applications)
+                ]
             )
         except ValueError as exc:
             logger.error("%s", exc)
@@ -152,11 +166,13 @@ def handler(args: argparse.Namespace) -> int:
                     w.root,
                     application=w.application,
                     session=w.session,
+                    toolchain=w.toolchain,
                     logs_dir=root_dir / "logs",
                     tail=args.tail,
                 )
+                for build in builds
                 for w in configured_sessions(
-                    config, applications, sessions, root_dir / "scripts"
+                    build, applications, sessions, root_dir / "scripts"
                 )
             ]
         tests = [

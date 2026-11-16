@@ -21,7 +21,7 @@ from enum import StrEnum, unique
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Annotated, ClassVar, Protocol, Self
 
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from models.base import StrictModel
@@ -102,7 +102,13 @@ class RunConfigView(Protocol):
 
     def checkout_dir(self, app: Application) -> Path:
         """The application's checkout: its section's clone_dir, else
-        <root_dir>/<the adapter's checkout_dirname>."""
+        <root_dir>[/<toolchain>]/<the adapter's checkout_dirname>."""
+
+    def mpi_configure_args(self) -> list[str]:
+        """Configure arguments that bake the toolchain's MPI launcher into a
+        CMake build, as shell words already quoted (one of them resolves a
+        path where the configure runs); none without a toolchain or with
+        FindMPI's own default."""
 
     def build_launcher(self, section: ApplicationRunSection, *, cpus: int) -> list[str]:
         """The command prefix of one compile step (a configure, a build) of
@@ -257,6 +263,88 @@ class SweepBase(StrictModel):
 
 class SweepSelectorBase(StrictModel):
     """Base of every application's baseline sweep-selector schema."""
+
+
+@unique
+class MpiLauncher(StrEnum):
+    """What launches the ranks of an application's MPI tests."""
+
+    MPIEXEC = "mpiexec"  # the MPI's own launcher (CMake FindMPI's default)
+    SRUN = "srun"  # Slurm: every MPI test is its own job step
+
+
+class ToolchainSection(StrictModel):
+    """One compiler suite of a run config (`toolchains.<name>:`): everything
+    that must change together when the compiler does — the module
+    environment, the configure flags, the MPI launcher, the tests'
+    environment — so no application can pair one suite's modulefile with
+    another's flags. `--toolchain NAME` selects it; it is overlaid on every
+    application section and names a path segment of its own."""
+
+    modulefile: str = Field(description="The module every application loads")
+    modulepath: list[Path] = Field(
+        default_factory=list,
+        description=(
+            "Directories `module use`d before the load, as for an application "
+            "section: relative entries are under the harness checkout "
+            "(`modulefiles`), absolute ones are used as written (the "
+            "environment's modules/Core)"
+        ),
+    )
+    module_env: dict[str, str] = Field(
+        default_factory=dict,
+        description="Variables exported before `module load` (version pins)",
+    )
+    toolchain_tools: list[str] = Field(
+        default_factory=list,
+        description="Commands the build stage locates with `which` after the load",
+    )
+    cmake_args: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Configure arguments appended to every CMake application's own "
+            "(a compiler-specific flag such as -DCMAKE_CXX_FLAGS=-fp-model=precise)"
+        ),
+    )
+    mpi_launcher: MpiLauncher = Field(
+        default=MpiLauncher.MPIEXEC,
+        description=(
+            "What launches the MPI tests' ranks: mpiexec (FindMPI's default, "
+            "forking inside the allocation) or srun (baked into every CMake "
+            "configure as MPIEXEC_EXECUTABLE, so each MPI test is a Slurm step)"
+        ),
+    )
+    mpiexec_preflags: str | None = Field(
+        default=None,
+        description=(
+            "mpi_launcher: srun only: flags placed before the rank count "
+            "(MPIEXEC_PREFLAGS), e.g. --mpi=pmi2"
+        ),
+    )
+    tests_env: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Variables merged into every application's tests.env (the "
+            "toolchain's value wins): what this MPI needs to launch tests"
+        ),
+    )
+    configure_gates: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Configure-log patterns added to every application's own: what "
+            "this environment claims to supply"
+        ),
+    )
+
+    @field_validator("module_env", "tests_env", mode="before")
+    @classmethod
+    def _maps_are_exports(cls, value: object, info: ValidationInfo) -> object:
+        return _as_exports(value, str(info.field_name))
+
+
+# The keys of an application section that a toolchain owns: under a
+# toolchains: map they may not be set on the section itself.
+_TOOLCHAIN_KEYS = ("modulefile", "modulepath", "module_env", "toolchain_tools")
 
 
 class TestsSection(StrictModel):
@@ -452,6 +540,46 @@ class ApplicationRunSection(StrictModel):
         """The configure flags this section gives the build, for the record
         of what a test run ran against; none by default."""
         return []
+
+    def toolchain_owned(self) -> list[str]:
+        """The keys this section sets that belong to a toolchain when the
+        run config has any: the module environment's, and clone_dir (each
+        toolchain has its own checkout). Set means different from the
+        section's default — an effective config lists every key."""
+        fields = type(self).model_fields
+        return [
+            name
+            for name in (*_TOOLCHAIN_KEYS, "clone_dir")
+            if getattr(self, name)
+            != fields[name].get_default(call_default_factory=True)
+        ]
+
+    def toolchain_updates(self, toolchain: ToolchainSection) -> dict[str, object]:
+        """What a toolchain changes in this section: the module environment
+        replaced whole, its configure gates added to the section's own (a
+        union, the section's first), its tests_env merged over tests.env.
+        A section with configure arguments extends this with them."""
+        gates = [
+            *self.configure_gates,
+            *(g for g in toolchain.configure_gates if g not in self.configure_gates),
+        ]
+        return {
+            "modulefile": toolchain.modulefile,
+            "modulepath": list(toolchain.modulepath),
+            "module_env": dict(toolchain.module_env),
+            "toolchain_tools": list(toolchain.toolchain_tools),
+            "configure_gates": gates,
+            "tests": {
+                **self.tests.model_dump(),
+                "env": {**self.tests.env, **toolchain.tests_env},
+            },
+        }
+
+    def with_toolchain(self, toolchain: ToolchainSection) -> Self:
+        """This section as one toolchain builds it, re-validated."""
+        return type(self).model_validate(
+            {**self.model_dump(), **self.toolchain_updates(toolchain)}
+        )
 
     def runtime_problems(self, runtime: Runtime) -> list[str]:
         """What is wrong with this section under `runtime`, one sentence

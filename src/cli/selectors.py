@@ -40,6 +40,61 @@ def selected_sessions(
     return [session for session in sessions if session.name in requested]
 
 
+def toolchain_configs(
+    config: RunConfig, requested: list[str] | None
+) -> list[RunConfig]:
+    """The config as each selected toolchain builds it, in the config's
+    order. Without a toolchains: map: the config itself (naming a toolchain
+    is then an error). With one: the requested names ('all' selects every
+    toolchain; tokens may be space-separated); with none requested, the
+    selection the last `run` recorded, else the map's only entry — several
+    unrecorded ones must be chosen from."""
+    names = list(config.toolchains)
+    if not names:
+        if requested:
+            raise ValueError(
+                f"--toolchain {requested}: the run config has no toolchains: map"
+            )
+        return [config]
+    if requested is None:
+        if config.selected_toolchains:
+            chosen = list(config.selected_toolchains)
+        elif len(names) == 1:
+            chosen = names
+        else:
+            raise ValueError(
+                f"--toolchain is required: the run config names several "
+                f"({', '.join(names)}); 'all' selects every one"
+            )
+    else:
+        tokens = [token for item in requested for token in item.split()]
+        if not tokens:
+            raise ValueError(
+                "--toolchain requires at least one toolchain name or 'all'"
+            )
+        unknown = sorted(set(tokens) - {"all"} - set(names))
+        if unknown:
+            raise ValueError(
+                f"--toolchain {unknown} not in the run config's toolchains ({names})"
+            )
+        chosen = names if "all" in tokens else tokens
+    return [config.for_toolchain(name) for name in names if name in chosen]
+
+
+def one_toolchain_config(config: RunConfig, requested: str | None) -> RunConfig:
+    """The config as the one toolchain a per-build command works on builds
+    it: the named one; without a name, the only one there is to choose (no
+    toolchains: map, a single entry, a recorded selection of one)."""
+    builds = toolchain_configs(config, None if requested is None else [requested])
+    if len(builds) != 1:
+        names = ", ".join(str(build.toolchain) for build in builds)
+        raise ValueError(
+            f"--toolchain is required: the run selected several ({names}), and "
+            "this command works on one"
+        )
+    return builds[0]
+
+
 def selected_applications(
     config: RunConfig, requested: list[str] | None
 ) -> list[Application]:
