@@ -246,13 +246,15 @@ def test_run_manifest_round_trips_through_yaml(
     manifest.to_yaml(manifest_path)
 
     dumped = yaml.safe_load(manifest_path.read_text())
-    assert list(dumped)[:5] == [
+    assert list(dumped)[:6] == [
         "run_id",
         "application",
         "application_commit",
+        "build_type",
         "harness_version",
         "harness_commit",
     ]
+    assert dumped["build_type"] is None  # no CMake cache for this manifest
     assert dumped["harness_commit"] == "abc123-dirty"
     # SerializeAsAny: the suite dumps with the adapter's schema — the sweep
     # is present (the base SuiteConfig type alone would drop it).

@@ -166,3 +166,24 @@ def test_commit_sha_none_when_no_checkout_configured() -> None:
     # An explicit None root (init kwarg beats env) means "no checkout":
     # recorded as null, never an error.
     assert CeceSettings(root_dir=None).commit_sha() is None
+
+
+# -- build_type: the checkout's CMake build type for run.yaml -------------------
+
+
+def test_build_type_reads_the_cmake_cache(tmp_path: Path) -> None:
+    settings = CeceSettings(root_dir=tmp_path)
+    assert settings.build_type() is None  # no build directory yet
+    cache = tmp_path / "build" / "CMakeCache.txt"
+    cache.parent.mkdir()
+    cache.write_text(
+        "# This is the CMakeCache file.\n"
+        "CMAKE_BUILD_TYPE:STRING=Debug\n"
+        "CMAKE_BUILD_TYPE-ADVANCED:INTERNAL=1\n"
+    )
+    assert settings.build_type() == "Debug"
+    cache.write_text("CMAKE_BUILD_TYPE:STRING=\n")  # a generator default
+    assert settings.build_type() is None
+    cache.write_text("CMAKE_CXX_COMPILER:FILEPATH=/usr/bin/c++\n")
+    assert settings.build_type() is None
+    assert CeceSettings(root_dir=None).build_type() is None

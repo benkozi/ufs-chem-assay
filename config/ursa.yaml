@@ -31,12 +31,18 @@ applications:  # one section per application in the run, keyed by adapter name
     cmake_args:
       - -DCMAKE_BUILD_TYPE=Release
     build_jobs: 8
-    targets:  # `all` also builds CECE's test stack (running it: issue #9)
+    targets:  # `all` also builds CECE's test stack (tests.enabled runs it)
       - cece_standalone_driver
     build_node: login  # login | compute (configure and build each behind an srun: the offline compile probe)
     build_minutes: 10  # build_node: compute only: the time limit of each compile srun
-    tests:  # CECE's own unit tests
+    tests:  # CECE's own unit tests (ctest), one Slurm job; `watch` evaluates it, `report` summarizes it
       enabled: false  # true needs -DCMAKE_BUILD_TYPE=Debug and -DENABLE_ESMF=ON in cmake_args, and targets: [all]
+      filter:  # ctest -R regex; null = every test
+      parallel:  # ctest -j N; null = one at a time
+      ntasks: 4  # the test job's sbatch -n: the largest MPI rank count a test asks for
+      cpus: 8  # the test job's sbatch -c
+      minutes: 5  # the test job's time limit
+      env: {}  # exported inside the test job before ctest, e.g. I_MPI_HYDRA_BOOTSTRAP: fork
 data:  # the data stage runs `ufs-chem-assay fetch` for the selected suites' inputs, then:
   warm_cartopy: true  # fetch Natural Earth coastlines on the login node
   input_search_path: []  # ASSAY_INPUT_SEARCH_PATH: dirs fetch links url-null inputs from, by basename

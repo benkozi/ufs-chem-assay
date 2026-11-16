@@ -32,6 +32,11 @@ class MonetioRunSection(ApplicationRunSection):
                 "build_node: compute is not available: monetio installs from the "
                 "network (uv pip install), which a compute node does not have"
             )
+        if self.tests.enabled:
+            raise ValueError(
+                "tests.enabled is not available: monetio has no test suite of its "
+                "own in the harness"
+            )
         return self
 
 

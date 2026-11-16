@@ -33,10 +33,23 @@ import pandas as pd
 import yaml
 from pydantic import Field
 
+from apptests import parse_junit
 from baselines.models import BASELINE_CONVENTIONS
 from baselines.plan import read_run, read_test_report
-from benchmarks import BenchmarkRow, read_benchmarks_csv
-from jobs import JobLedger, ledger_path, read_ledger
+from benchmarks import (
+    BenchmarkRow,
+    TestBenchmarkRow,
+    read_benchmarks_csv,
+    read_test_benchmarks_csv,
+)
+from jobs import (
+    JobLedger,
+    TestCounts,
+    ledger_path,
+    path_of_test_ledger,
+    read_ledger,
+    read_test_ledger,
+)
 from models.base import StrictModel
 from models.conventions import CONVENTIONS
 from outputs import OutputUploadRecord
@@ -59,6 +72,9 @@ class IssueKind(StrEnum):
     TEST_FAILED = "test-failed"
     COMPARISON_FAILED = "comparison-failed"
     PIPELINE_ERROR = "pipeline-error"
+    # An application's own test run (a tests root, not a session).
+    TESTS_FAILED = "tests-failed"  # the junit report names failed tests
+    TESTS_JOB_FAILED = "tests-job-failed"  # nonzero without a failed test to name
 
 
 @unique
@@ -92,6 +108,7 @@ _DRIVER_KINDS = frozenset(
     {IssueKind.DRIVER_FAILED, IssueKind.DRIVER_TIMEOUT, IssueKind.ACCOUNTING_MISSING}
 )
 _TEST_RESULTS: tuple[TestResult, ...] = ("passed", "failed", "skipped")
+_TESTS_KINDS = frozenset({IssueKind.TESTS_FAILED, IssueKind.TESTS_JOB_FAILED})
 
 
 class Issue(StrictModel):
@@ -204,18 +221,73 @@ class SessionSummary(StrictModel):
         )
 
 
+class TestsSummary(StrictModel):
+    """One application's own test run (a tests root) as the report sees it."""
+
+    __test__ = False  # a model, not a pytest class
+
+    application: str = Field(description="The application's registry name")
+    toolchain: str | None = Field(description="The build's toolchain; None without one")
+    root: Path = Field(description="The tests root")
+    run_id: str | None = Field(description="The test ledger's run id; None without one")
+    state: SessionState = Field(
+        description="Where the root stands: not submitted, not evaluated, evaluated"
+    )
+    exit_status: int | None = Field(
+        description="The run's verdict (0: every test passed); None until evaluated"
+    )
+    evaluated_at: datetime | None = Field(
+        description="When the run was evaluated; None until then"
+    )
+    submitted_by: str | None = Field(description="user@host that launched the run")
+    job_id: str | None = Field(
+        description="The run's Slurm job; None for a run in place"
+    )
+    tests: TestCounts | None = Field(
+        description="The junit report's counts; None without a report"
+    )
+    wall_s: float | None = Field(
+        description="toc - tic around the tests, from the run's benchmark row"
+    )
+    out: Path | None = Field(description="The run's output; None before a run")
+    junit: Path | None = Field(
+        description="The run's junit report path; None before a run"
+    )
+    issues: list[Issue] = Field(description="What is wrong with the run, if anything")
+
+    @property
+    def label(self) -> str:
+        suffix = f"/{self.toolchain}" if self.toolchain else ""
+        return f"tests {self.application}{suffix}"
+
+    @property
+    def ok(self) -> bool:
+        return (
+            self.state is SessionState.EVALUATED
+            and self.exit_status == 0
+            and not self.issues
+        )
+
+
 class RunReport(StrictModel):
-    """Every selected session's summary, in config order."""
+    """Every selected session's summary, in config order, then every
+    selected application's own test run."""
 
     root_dir: Path | None = Field(
         description="The run root the effective config came from; None for one output root"
     )
     generated_at: datetime = Field(description="When the report was built (UTC)")
     sessions: list[SessionSummary] = Field(description="One summary per session")
+    tests: list[TestsSummary] = Field(
+        default_factory=list,
+        description="One summary per application whose own tests are enabled",
+    )
 
     @property
     def ok(self) -> bool:
-        return all(session.ok for session in self.sessions)
+        return all(session.ok for session in self.sessions) and all(
+            tests.ok for tests in self.tests
+        )
 
 
 # ── files ────────────────────────────────────────────────────────────────────
@@ -690,7 +762,168 @@ def summarize_session(
     )
 
 
+# ── an application's own tests ───────────────────────────────────────────────
+
+
+def _test_row(root: Path, run_id: str) -> TestBenchmarkRow | None:
+    """The run's benchmark row in the tests root; None when the file is
+    absent, unreadable, or does not hold the run."""
+    path = root / CONVENTIONS.benchmarks
+    if not path.is_file():
+        return None
+    try:
+        rows = read_test_benchmarks_csv(path)
+    except ValueError:
+        return None
+    return next((row for row in rows if row.run_id == run_id), None)
+
+
+def summarize_tests(
+    root: Path,
+    *,
+    application: str,
+    toolchain: str | None = None,
+    tail: int = DEFAULT_TAIL,
+) -> TestsSummary:
+    """One tests root classified from its files alone: the test ledger (the
+    latest run and its verdict), the run's benchmark row (wall time, Slurm
+    state), the junit report (the failed tests' names) and the last `tail`
+    lines of the output. A run that failed is one issue: TESTS_FAILED when
+    the report names failed tests, TESTS_JOB_FAILED otherwise (a job killed
+    by its limit, a report never written)."""
+    if not path_of_test_ledger(root).is_file():
+        return TestsSummary(
+            application=application,
+            toolchain=toolchain,
+            root=root,
+            run_id=None,
+            state=SessionState.NOT_SUBMITTED,
+            exit_status=None,
+            evaluated_at=None,
+            submitted_by=None,
+            job_id=None,
+            tests=None,
+            wall_s=None,
+            out=None,
+            junit=None,
+            issues=[
+                Issue(
+                    kind=IssueKind.NOT_SUBMITTED,
+                    detail=(
+                        f"no test run recorded ({root} has no "
+                        f"{CONVENTIONS.test_ledger}): the test stage has not run"
+                    ),
+                )
+            ],
+        )
+    ledger = read_test_ledger(root)
+    job_id = ledger.job.job_id if ledger.job else None
+    existing = [path for path in (ledger.out_path, ledger.junit_path) if path.is_file()]
+    row = _test_row(root, ledger.run_id)
+    issues: list[Issue] = []
+    state = SessionState.EVALUATED
+    if ledger.evaluated_at is None:
+        state = SessionState.NOT_EVALUATED
+        issues.append(
+            Issue(
+                kind=IssueKind.NOT_EVALUATED,
+                detail=(
+                    "the test run is not evaluated: `ufs-chem-assay watch` (or "
+                    "evaluate-tests) evaluates it once its job has left the queue"
+                ),
+                job_id=job_id,
+                paths=existing,
+            )
+        )
+    elif ledger.exit_status != 0:
+        counts = ledger.tests
+        failed: list[str] = []
+        if counts is not None and counts.failed and ledger.junit_path.is_file():
+            try:
+                failed = parse_junit(ledger.junit_path)[1]
+            except ValueError:
+                failed = []  # rewritten since the evaluation: the counts stand
+        slurm_state = row.slurm_state if row else None
+        if counts is not None and counts.failed:
+            kind = IssueKind.TESTS_FAILED
+            detail = f"{counts.failed} of {counts.total} tests failed"
+        else:
+            kind = IssueKind.TESTS_JOB_FAILED
+            subject = (
+                f"the test job ended {slurm_state or 'in an unknown state'}"
+                if job_id is not None
+                else "the test command failed"
+            )
+            reason = (
+                "with no junit report"
+                if counts is None
+                else "without a failed test in its report"
+            )
+            detail = f"{subject} (exit {ledger.exit_status}) {reason}"
+        issues.append(
+            Issue(
+                kind=kind,
+                detail=detail,
+                job_id=job_id,
+                slurm_state=slurm_state,
+                exit_code=ledger.exit_status,
+                failed_tests=failed[:tail] if tail > 0 else [],
+                out_tail=tail_lines(ledger.out_path, tail) or [],
+                paths=existing,
+            )
+        )
+    return TestsSummary(
+        application=application,
+        toolchain=toolchain,
+        root=root,
+        run_id=ledger.run_id,
+        state=state,
+        exit_status=ledger.exit_status,
+        evaluated_at=ledger.evaluated_at,
+        submitted_by=ledger.submitted_by,
+        job_id=job_id,
+        tests=ledger.tests,
+        wall_s=row.wall_s if row else None,
+        out=ledger.out_path,
+        junit=ledger.junit_path,
+        issues=issues,
+    )
+
+
 # ── rendering ────────────────────────────────────────────────────────────────
+
+
+def _tests_line(summary: TestsSummary, label: str) -> str:
+    parts = [label]
+    if summary.run_id is not None:
+        parts.append(f"run {summary.run_id}")
+    if summary.state is SessionState.EVALUATED:
+        parts.append(f"evaluated (exit {summary.exit_status})")
+        counts = summary.tests
+        parts.append(
+            "no junit report"
+            if counts is None
+            else f"{counts.passed} passed / {counts.failed} failed / "
+            f"{counts.skipped} skipped"
+        )
+        if summary.wall_s is not None:
+            parts.append(f"{summary.wall_s:.0f} s")
+    else:
+        parts.append(summary.state.value)
+        if summary.job_id is not None:
+            parts.append(f"job {summary.job_id}")
+    return "  ".join(parts)
+
+
+def _job_text(issue: Issue) -> str:
+    job: list[str] = []
+    if issue.job_id is not None:
+        job.append(f"job {issue.job_id}")
+        if issue.slurm_state is not None:
+            job.append(issue.slurm_state)
+    if issue.exit_code is not None:
+        job.append(f"exit {issue.exit_code}")
+    return " ".join(job)
 
 
 def _session_line(summary: SessionSummary, label: str) -> str:
@@ -734,19 +967,28 @@ def _session_line(summary: SessionSummary, label: str) -> str:
 
 
 def _issue_lines(issue: Issue, tail: int | None) -> list[str]:
-    if issue.combo is None:
+    shown: list[str]
+    if issue.kind in _TESTS_KINDS:
+        job = _job_text(issue)
+        lines = [f"  [{issue.kind}] {issue.detail}" + (f"  {job}" if job else "")]
+        if issue.failed_tests:
+            lines.append(
+                f"    failed ({len(issue.failed_tests)}): "
+                + ", ".join(issue.failed_tests)
+            )
+        shown = (
+            issue.out_tail if tail is None else issue.out_tail[-tail:] if tail else []
+        )
+        if shown:
+            lines.append(f"    .out tail ({len(shown)}):")
+            lines.extend(f"      | {line}" for line in shown)
+    elif issue.combo is None:
         lines = [f"  [{issue.kind}] {issue.detail}"]
     else:
         head = f"  [{issue.kind}] {issue.suite}/{issue.combo} ({issue.combo_id})"
-        job: list[str] = []
-        if issue.job_id is not None:
-            job.append(f"job {issue.job_id}")
-            if issue.slurm_state is not None:
-                job.append(issue.slurm_state)
-        if issue.exit_code is not None:
-            job.append(f"exit {issue.exit_code}")
+        job = _job_text(issue)
         if job:
-            head += "  " + " ".join(job)
+            head += "  " + job
         if issue.duration_s is not None:
             head += f"  {issue.duration_s:.0f} s" + (
                 " from submission" if issue.job_id is not None else ""
@@ -766,13 +1008,17 @@ def _issue_lines(issue: Issue, tail: int | None) -> list[str]:
 def render(
     report: RunReport, *, quiet: bool = False, tail: int | None = None
 ) -> list[str]:
-    """The report as lines: a header, one line per session (its issues
-    indented beneath it unless `quiet`), and the verdict line with the exit
-    code the caller returns. `tail` caps the .out lines shown (None: every
-    stored line; 0: none)."""
+    """The report as lines: a header, one line per session and then per
+    test run (its issues indented beneath it unless `quiet`), and the
+    verdict line with the exit code the caller returns. `tail` caps the
+    .out lines shown (None: every stored line; 0: none). Test runs are
+    named in the header and the verdict only when the report has any."""
     where = f" under {report.root_dir}" if report.root_dir is not None else ""
     stamp = report.generated_at.strftime("%Y-%m-%d %H:%M UTC")
-    lines = [f"report: {len(report.sessions)} session(s){where} (generated {stamp})"]
+    runs = f", {len(report.tests)} test run(s)" if report.tests else ""
+    lines = [
+        f"report: {len(report.sessions)} session(s){runs}{where} (generated {stamp})"
+    ]
     several = len({s.application for s in report.sessions}) > 1
     labels = [
         f"{s.application}/{s.label}" if several and s.session else s.label
@@ -784,16 +1030,22 @@ def render(
         if not quiet:
             for issue in summary.issues:
                 lines.extend(_issue_lines(issue, tail))
-    total = sum(len(s.issues) for s in report.sessions)
-    affected = sum(1 for s in report.sessions if s.issues)
+    tests_width = max((len(t.label) for t in report.tests), default=0)
+    for tests in report.tests:
+        lines.append(_tests_line(tests, tests.label.ljust(tests_width)).rstrip())
+        if not quiet:
+            for issue in tests.issues:
+                lines.extend(_issue_lines(issue, tail))
+    issue_lists = [s.issues for s in report.sessions]
+    issue_lists += [t.issues for t in report.tests]
+    total = sum(len(issues) for issues in issue_lists)
+    affected = sum(1 for issues in issue_lists if issues)
     code = 0 if report.ok else 1
+    scope = f"{len(report.sessions)} session(s)"
+    if report.tests:
+        scope += f" and {len(report.tests)} test run(s)"
     if total:
-        lines.append(
-            f"report: {total} issue(s) in {affected} of {len(report.sessions)} "
-            f"session(s); exit {code}"
-        )
+        lines.append(f"report: {total} issue(s) in {affected} of {scope}; exit {code}")
     else:
-        lines.append(
-            f"report: no issue in {len(report.sessions)} session(s); exit {code}"
-        )
+        lines.append(f"report: no issue in {scope}; exit {code}")
     return lines

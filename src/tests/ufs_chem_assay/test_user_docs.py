@@ -205,6 +205,17 @@ def test_readme_documents_the_new_surfaces() -> None:
         "tests.enabled",
         "-DCECE_BUILD_TESTING=OFF",
         "CECE dependency ESMF: system",
+        "04-test-<application>.sbatch",
+        "submit-tests",
+        "evaluate-tests",
+        "tests.yaml",
+        "watch --only tests",
+        "cancel --tests-root",
+        "record-benchmarks --tests-root",
+        "tests-benchmarks.csv",
+        "build_type",
+        "tests-failed",
+        "tests-job-failed",
     ):
         assert needle in text, needle
     assert "buid-test-tweaks" not in text

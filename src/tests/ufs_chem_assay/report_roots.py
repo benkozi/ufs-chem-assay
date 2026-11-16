@@ -169,6 +169,7 @@ def benchmark(combo: Combo, job_id: str | None, **overrides: object) -> Benchmar
         "combo_id": combo.combo_id,
         "config_sha256": "a" * 64,
         "application_commit": "36da92e0f02ec9aa05d4261596927527350509b8",
+        "build_type": None,
         "harness_version": "0.1.0-rc.9",
         "harness_commit": "abc123",
         "platform": Platform.URSA,

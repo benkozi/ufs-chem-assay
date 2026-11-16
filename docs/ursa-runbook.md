@@ -124,6 +124,40 @@ First-run checks:
   netCDF line means the spack-stack `*_ROOT` variables were not picked
   up.
 
+### CECE's own tests (optional)
+
+The build above is Release without ESMF, which CECE's unit tests are not
+built against. To run them, build Debug with ESMF and the whole tree, with
+the test stage on — as overrides here, or in a run config of your own:
+
+```bash
+cd $ROOT/ufs-chem-assay
+TESTS=(
+  'applications:cece:cmake_args=[-DCMAKE_BUILD_TYPE=Debug, -DENABLE_ESMF=ON]'
+  'applications:cece:targets=[all]'
+  applications:cece:tests:enabled=true
+)
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --application cece \
+    --stage build --stage test --dry-run --override "${TESTS[@]}"
+less $ROOT/scripts/04-test-cece.sh $ROOT/scripts/04-test-cece.sbatch
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --application cece \
+    --stage build --stage test --override "${TESTS[@]}"
+uv run ufs-chem-assay watch --only tests     # evaluates the job when it leaves the queue
+uv run ufs-chem-assay report --only tests
+```
+
+The test stage submits one job — `04-test-cece.sbatch`: `ctest` directly
+on a compute node, each MPI test launching its own ranks — and returns;
+`$ROOT/tests/cece/` then holds `tests.yaml` (the test ledger), the job's
+`tests-<job id>.out` and junit report, and `benchmarks.csv` (one row per
+evaluated run). By hand, `ctest --test-dir $ROOT/CECE/build
+--output-on-failure` inside an allocation, with the modules loaded, is
+the same suite. Two things to know: this replaces the Release build in
+`$ROOT/CECE/build` with a Debug one, so rebuild (section 4) before the
+driver sessions if their timings matter — the benchmark rows record the
+build type either way — and `ufs-chem-assay cancel --tests-root
+$ROOT/tests/cece` scancels a queued test job.
+
 ## 5. Data
 
 ```bash

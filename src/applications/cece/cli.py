@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field
 
-from applications.base import ApplicationRunSection, RunConfigView, Stage
+from applications.base import ApplicationRunSection, RunConfigView, Stage, TestPlan
 from cli.stages import gate_lines, module_block, q, source_lines, toolchain_probe
 from platforms import Runtime
 
@@ -33,23 +33,34 @@ class CeceRunSection(ApplicationRunSection):
     targets: list[str] = Field(
         default_factory=lambda: ["cece_standalone_driver"],
         description=(
-            "CMake targets to build; `all` also builds CECE's test stack "
-            "(running it is issue #9)"
+            "CMake targets to build; `all` also builds CECE's test stack, which "
+            "tests.enabled requires and the test stage runs"
         ),
     )
 
-    @model_validator(mode="after")
-    def _tests_need_a_debug_build_with_esmf(self) -> CeceRunSection:
+    def build_flags(self) -> list[str]:
+        return list(self.cmake_args)
+
+    def runtime_problems(self, runtime: Runtime) -> list[str]:
+        """The rules of CECE's own tests. Under docker the container build
+        script owns the configure, so the flags are not this section's to
+        require there; the test stack is part of `all` everywhere."""
         if not self.tests.enabled:
-            return self
+            return []
+        problems: list[str] = []
         missing = [flag for flag in (_DEBUG, _ESMF_ON) if flag not in self.cmake_args]
-        if missing:
-            raise ValueError(
+        if missing and runtime is not Runtime.DOCKER:
+            problems.append(
                 f"tests.enabled requires {_DEBUG} and {_ESMF_ON} in cmake_args "
                 f"(missing: {', '.join(missing)}): CECE's unit tests are built and "
                 "run against a Debug build with ESMF; other builds keep tests off"
             )
-        return self
+        if "all" not in self.targets:
+            problems.append(
+                "tests.enabled requires `all` among targets: CECE's test stack is "
+                "part of it"
+            )
+        return problems
 
 
 def _as_cece(section: ApplicationRunSection) -> CeceRunSection:
@@ -142,6 +153,20 @@ def _build(config: RunConfigView, checkout: Path, section: CeceRunSection) -> li
             compile_targets,
         ]
     return lines
+
+
+def test_plan(section: ApplicationRunSection, junit: str) -> TestPlan:
+    """CECE's own tests: ctest over the build directory, from the checkout
+    root. Every MPI test launches its own ranks (the launcher is baked in at
+    configure time), so ctest itself is never behind one."""
+    tests = _as_cece(section).tests
+    words = ["ctest", "--test-dir", "build", "--output-on-failure"]
+    words += ["--output-junit", junit]
+    if tests.filter is not None:
+        words += ["-R", q(tests.filter)]
+    if tests.parallel is not None:
+        words += ["-j", str(tests.parallel)]
+    return TestPlan(requires="build/CTestTestfile.cmake", command=" ".join(words))
 
 
 def stage_lines(

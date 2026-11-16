@@ -45,6 +45,9 @@ from settings import Settings
 # hand (`sbatch <combo_id>.sbatch`). StrictUndefined: a missing variable
 # fails the render, never the job.
 TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "driver-job.sbatch.j2"
+# The test stage's job: the same script without the srun — the test runner
+# (ctest) is the launcher there, one step or fork per MPI test.
+TESTS_TEMPLATE_PATH = TEMPLATE_PATH.with_name("tests-job.sbatch.j2")
 _JOB_NAME_PREFIX = f"{HARNESS_NAME}-"
 
 

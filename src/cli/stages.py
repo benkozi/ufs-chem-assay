@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import shlex
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from pydantic import ConfigDict, Field
 
@@ -38,10 +38,17 @@ from cli.run_config import (
     RunConfig,
     search_path_value,
 )
+from identity import HARNESS_NAME
 from lmod import LMOD_INIT, module_lines
 from models.base import StrictModel
 from models.conventions import CONVENTIONS
 from platforms import Runtime
+from runner import (
+    TESTS_TEMPLATE_PATH,
+    docker_prefix,
+    render_job_script,
+    sbatch_directives,
+)
 from settings import Settings
 
 _DRIVER_COMBOS = "src/tests/test_driver_combos.py"
@@ -82,6 +89,13 @@ class ShellScript(StrictModel):
         )
     )
     text: str = Field(description="Complete bash source, shebang included")
+    attachments: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Files written beside the script under its stem, by suffix: the test "
+            "stage's Slurm job script (.sbatch), so a dry run shows the whole job"
+        ),
+    )
 
 
 def q(value: object) -> str:
@@ -188,6 +202,23 @@ def settings_mirror_fields() -> list[str]:
 
 # The stages rendered once per session (the others once per application).
 PER_SESSION = frozenset({Stage.HARNESS, Stage.RESUME})
+
+# Script file numbering (<NN>-<stage>-...): fixed slots, so the harness stage
+# is always 05 and its resume half 06. The application's own tests hold slot
+# 04 — the number says "after the build", though the stage runs before the
+# data stage (execution order is the Stage enum's, not the slots').
+SCRIPT_INDEX = {
+    Stage.SOURCE: 1,
+    Stage.BUILD: 2,
+    Stage.DATA: 3,
+    Stage.TEST: 4,
+    Stage.HARNESS: 5,
+    Stage.RESUME: 6,
+}
+
+# Where a tests root is mounted in the application's image (docker runtime).
+_TESTS_MOUNT = PurePosixPath("/assay-tests")
+_CLOCK = "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 
 def _env_value(value: object) -> str | None:
@@ -384,6 +415,142 @@ def _data(
     return lines
 
 
+def tests_enabled(config: RunConfig, app: Application) -> bool:
+    """Whether `app` has a test stage in this run: its section's
+    tests.enabled. ValueError when tests are enabled for an application that
+    has no test suite of its own."""
+    section = config.applications[app.name]
+    if not section.tests.enabled:
+        return False
+    if app.test_plan(section, "junit") is None:
+        raise ValueError(
+            f"applications.{app.name}.tests.enabled is true, but {app.name} has no "
+            "test suite of its own"
+        )
+    return True
+
+
+def _harness_command(
+    config: RunConfig, section: ApplicationRunSection, command: str
+) -> list[str]:
+    """One `ufs-chem-assay` subcommand from a stage script: the harness venv
+    clean of the module environment, uv on the PATH with its cache, from the
+    harness checkout — as the data stage calls `fetch`."""
+    return [
+        *clean_python_env(config, section),
+        'export PATH="$HOME/.local/bin:$PATH"',
+        f"export UV_CACHE_DIR={q(config.uv_cache_dir)}",
+        f"cd {q(HARNESS_ROOT)}",
+        f"uv run --no-sync ufs-chem-assay {command}",
+    ]
+
+
+def _test(
+    config: RunConfig, app: Application, section: ApplicationRunSection
+) -> tuple[list[str], dict[str, str]]:
+    """The test stage's body and attachments: the application's own tests
+    against the build the build stage left — never a compile. A guard that
+    the test stack exists, then the launch for the runtime. slurm: one job
+    (rendered beside the script as its .sbatch, the test command directly on
+    the node — the test runner launches the MPI ranks itself), submitted
+    through `submit-tests`, which records it; the stage returns at once and
+    `watch` evaluates. native and docker: the command in place, its output
+    teed to the tests root between tic/toc lines, then `evaluate-tests`
+    records the verdict and the stage exits with the tests' status."""
+    if not tests_enabled(config, app):
+        raise ValueError(
+            f"applications.{app.name}.tests.enabled is false: there is no test "
+            "stage to render"
+        )
+    tests = section.tests
+    checkout = config.checkout_dir(app)
+    tests_root = config.tests_root(app)
+    stem = CONVENTIONS.tests_stem
+    runtime = config.runtime
+    selection = f"--root-dir {q(config.root_dir)} --application {q(app.name)}"
+
+    def plan_for(junit: str) -> str:
+        plan = app.test_plan(section, junit)
+        assert plan is not None  # tests_enabled checked
+        return plan.command
+
+    required = app.test_plan(section, "junit")
+    assert required is not None
+    missing = (
+        f"no tests built ({checkout / required.requires} is missing): the build "
+        f"stage builds the test stack when applications.{app.name}.tests.enabled "
+        "is true"
+    )
+    guard = (
+        f"[ -f {q(checkout / required.requires)} ] || "
+        f"{{ echo {q(missing)} >&2; exit 1; }}"
+    )
+    exports = {name: q(value) for name, value in tests.env.items()}
+
+    if runtime is Runtime.SLURM:
+        assert config.slurm is not None, "slurm runtime needs a slurm: section"
+        job = render_job_script(
+            job_name=f"{HARNESS_NAME}-tests-{app.name}",
+            out_path=tests_root / f"{stem}-%j.out",
+            root_dir=checkout,
+            minutes=tests.minutes,
+            directives=sbatch_directives(
+                config.slurm.job_args(ntasks=tests.ntasks, cpus=tests.cpus)
+            ),
+            module_lines=module_block(config, checkout, section),
+            env=exports,
+            command=plan_for(f'{q(tests_root)}/{stem}-"$SLURM_JOB_ID".xml'),
+            srun_args="",
+            template_text=TESTS_TEMPLATE_PATH.read_text(),
+        )
+        lines = [guard, *_harness_command(config, section, f"submit-tests {selection}")]
+        return lines, {".sbatch": job}
+
+    out = q(tests_root / f"{stem}.out")
+    if runtime is Runtime.DOCKER:
+        settings = (
+            app.settings_model(root_dir=checkout)
+            if section.docker_image is None
+            else app.settings_model(
+                root_dir=checkout, docker_image=section.docker_image
+            )
+        )
+        prefix = docker_prefix(
+            settings, app.container_workdir, output_mount=(tests_root, _TESTS_MOUNT)
+        )
+        inside = [f"{name}={value}" for name, value in exports.items()]
+        command = " ".join(
+            [
+                *(q(part) for part in prefix),
+                *(["env", *inside] if inside else []),
+                plan_for(q(_TESTS_MOUNT / f"{stem}.xml")),
+            ]
+        )
+        setup = [f"mkdir -p {q(tests_root)}"]
+    else:
+        launcher = f"{config.harness.launcher} " if config.harness.launcher else ""
+        command = f"{launcher}{plan_for(q(tests_root / f'{stem}.xml'))}"
+        setup = [
+            f"mkdir -p {q(tests_root)}",
+            *module_block(config, checkout, section),
+            *(f"export {name}={value}" for name, value in exports.items()),
+            f"cd {q(checkout)}",
+        ]
+    lines = [
+        guard,
+        *setup,
+        "status=0",
+        f'echo "tic: {_CLOCK}" | tee {out}',
+        f"{command} 2>&1 | tee -a {out} || status=$?",
+        f'echo "toc: {_CLOCK}" | tee -a {out}',
+        *_harness_command(
+            config, section, f'evaluate-tests {selection} --exit-status "$status"'
+        ),
+        'exit "$status"',
+    ]
+    return lines, {}
+
+
 def _required_session(
     config: RunConfig, session: ResolvedSession | None
 ) -> ResolvedSession:
@@ -419,6 +586,7 @@ def render_stage(
     once per run, under the first application."""
     section = config.applications[app.name]
     who = app.name
+    attachments: dict[str, str] = {}
     if stage in PER_SESSION:
         session = _required_session(config, session)
         if stage is Stage.RESUME and not session.harness.submit_only:
@@ -439,6 +607,9 @@ def render_stage(
             config.resolved_sessions() if sessions is None else sessions,
         )
         name = f"{stage.value}-{app.name}"
+    elif stage is Stage.TEST:
+        body, attachments = _test(config, app, section)
+        name = f"{stage.value}-{app.name}"
     else:
         body = app.stage_lines(stage, config, section)
         name = f"{stage.value}-{app.name}"
@@ -448,4 +619,4 @@ def render_stage(
         f'echo ">>> stage: {stage.value} ({who})"',
         *body,
     ]
-    return ShellScript(name=name, text="\n".join(lines) + "\n")
+    return ShellScript(name=name, text="\n".join(lines) + "\n", attachments=attachments)

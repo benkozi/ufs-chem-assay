@@ -12,23 +12,14 @@ from cli.commands import Subparsers
 from cli.run_config import RunConfig
 from cli.selectors import selected_applications, selected_sessions, selected_stages
 from cli.shell import run_bash, write_script
-from cli.stages import PER_SESSION, render_stage
+from cli.stages import PER_SESSION, SCRIPT_INDEX, render_stage, tests_enabled
 from logs import get_logger
 from models.conventions import CONVENTIONS
 from platforms import Platform
 
 logger = get_logger("cli")
 
-# Script file numbering: fixed slots in the canonical order, so the harness
-# stage is always 05 (slot 04 is held for the application's own tests, issue #9)
-# and its resume half 06.
-_INDEX = {
-    Stage.SOURCE: 1,
-    Stage.BUILD: 2,
-    Stage.DATA: 3,
-    Stage.HARNESS: 5,
-    Stage.RESUME: 6,
-}
+_INDEX = SCRIPT_INDEX  # <NN>-<stage>-...: the fixed slots (cli/stages.py)
 _RESUME_NEEDS_SUBMIT_ONLY = "resume is rendered only with harness.submit_only: true"
 
 
@@ -87,9 +78,10 @@ def register(subparsers: Subparsers, name: str) -> None:
         metavar="STAGE",
         help=(
             "run only this stage (repeatable, executed in canonical order); "
-            f"one of {', '.join(stage.value for stage in Stage)}. resume (the "
-            "evaluation of a submit-only session, which `watch` runs) is "
-            "rendered by default but executed only when named"
+            f"one of {', '.join(stage.value for stage in Stage)}. test runs an "
+            "application's own tests against its build, where its tests are "
+            "enabled; resume (the evaluation of a submit-only session, which "
+            "`watch` runs) is rendered by default but executed only when named"
         ),
     )
     run.add_argument(
@@ -129,6 +121,12 @@ def handler(args: argparse.Namespace) -> int:
             session.harness.submit_only for session in sessions
         ):
             raise ValueError(_RESUME_NEEDS_SUBMIT_ONLY)
+        # The test stage exists for the applications whose own tests are
+        # enabled (and is an error for one with no test suite to enable).
+        testing = {
+            app.name: Stage.TEST in stages and tests_enabled(config, app)
+            for app in applications
+        }
     except ValueError as exc:
         logger.error("%s", exc)
         return 1
@@ -177,6 +175,14 @@ def handler(args: argparse.Namespace) -> int:
     to_run: list[Path] = []
     for stage in render:
         for position, app in enumerate(applications):
+            if stage is Stage.TEST and not testing[app.name]:
+                logger.info(
+                    "tests disabled for %s (applications.%s.tests.enabled): "
+                    "no test stage",
+                    app.name,
+                    app.name,
+                )
+                continue
             if stage in PER_SESSION:
                 for session in sessions:
                     if stage is Stage.RESUME and not session.harness.submit_only:

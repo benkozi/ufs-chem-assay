@@ -552,11 +552,12 @@ to check that an override landed.
 
 Stages (`--stage`, repeatable): `source` (clone or fast-forward the
 checkout), `build` (modules + cmake, or the application's container build
-script locally), `data` (`ufs-chem-assay fetch` for the inputs each
-session's `suite_config` selects, under that session's exports, plus the
-cartopy cache), `harness` (the pytest session), and `resume` (the second
-half of a submit-only session, below; rendered by default, executed only
-when named). Running CECE's own tests is a separate task (issue #9). Each
+script locally), `test` (the application's own test suite against that
+build, for applications with `tests.enabled`; below), `data`
+(`ufs-chem-assay fetch` for the inputs each session's `suite_config`
+selects, under that session's exports, plus the cartopy cache), `harness`
+(the pytest session), and `resume` (the second half of a submit-only
+session, below; rendered by default, executed only when named). Each
 renders to `<root_dir>/scripts/<NN>-<stage>-<application>.sh` —
 `<NN>-<stage>-<application>-<session>.sh` for the harness and resume
 stages of a named session — and runs with bash where the CLI runs; logs
@@ -565,6 +566,50 @@ comprehensive run: the stages render per application in stage-major order
 (every `source`, then every `build`, ...) and the harness stage runs one
 pytest session per application, each under `<output_root>/<application>`;
 `--application NAME` (repeatable) narrows such a run.
+
+**The application's own tests.** `tests.enabled: true` on an application
+section gives it a `test` stage: its own test suite — `ctest` for CECE,
+all 577 of its tests — run against the build the build stage left. The
+stage only runs tests: a guard fails it when the test stack is not there,
+and nothing in it compiles. Where they run follows the runtime. Under
+**slurm** they are one job, rendered beside the stage script as
+`04-test-<application>.sbatch` so a dry run shows all of it: the
+`slurm:` section's account, QOS, partition and `extra_args`, one node
+with `tests.ntasks` tasks of `tests.cpus` cores for `tests.minutes`, the
+application's module block, the `tests.env` exports, then `ctest`
+**directly on the node, not behind `srun`** — ctest is the launcher, and
+each MPI test starts its own ranks — writing a junit report, bracketed
+by `tic`/`toc` and followed by `report-mem` like a driver job. The stage
+script submits it with `ufs-chem-assay submit-tests` and returns at once:
+nothing waits on the queue, and the data and harness stages go on while
+the tests run. `submit-tests` records the job in the tests root,
+`<root_dir>/tests/<application>/tests.yaml` (the test ledger: the job,
+who submitted it, what build it ran against, and later the verdict),
+refuses a second submission while one is queued (`--resubmit` cancels
+and submits again), and evaluates a finished run nobody evaluated before
+replacing it. The job's files carry its id (`tests-<job id>.out`,
+`tests-<job id>.xml`), so a resubmission overwrites nothing. Under
+**native** and **docker** the stage runs the command in place — behind
+`harness.launcher` natively, in the application's image under docker —
+tees it to `tests.out`, then calls `ufs-chem-assay evaluate-tests` and
+exits with the tests' status. `tests.filter` and `tests.parallel` are
+`ctest -R` and `ctest -j`. For CECE the tests need a Debug build with
+ESMF and `all` among the targets (above); `config/ursa.yaml` ships with
+them off.
+
+`ufs-chem-assay watch` covers the test job with the sessions' jobs in
+one `squeue` per tick, and evaluates it in-process when it has left the
+queue (there is no resume script): Slurm's accounting, the junit counts,
+one line — `tests cece: evaluated (exit 0), 577 passed / 0 failed / 0
+skipped` — and its verdict in `watch`'s exit status. `watch --only tests`
+(or `--only sessions`) watches one kind; after a run of the source,
+build and test stages alone it is the form to use, since no session was
+submitted. `evaluate-tests` is the same evaluation by hand. `report`
+adds one line per test run and, for a run that failed, one issue:
+`tests-failed` with the failed tests' names (up to `--tail`) and the tail
+of the output, or `tests-job-failed` when the job died without a failed
+test to name (a time limit, no junit report). `cancel --tests-root
+<root_dir>/tests/<application>` scancels a queued test job.
 
 **Sessions.** `sessions:` is a map of session name → an overlay on the
 file's `harness:`, `slurm:` and `baselines:` sections, one level deep: an
@@ -951,7 +996,11 @@ a published baseline carries its own benchmark. A row is a `BenchmarkRow`
 (`src/benchmarks.py`; the model's fields are the columns): identity
 (`run_id`, `combo_id`, `suite`, `combo`, `config_sha256` — equal across
 runs of the same generated configuration), provenance
-(`application_commit`, `harness_version`, `harness_commit`, `platform`,
+(`application_commit`, `build_type` — the `CMAKE_BUILD_TYPE` of the
+checkout's build directory, read from its CMake cache at session start
+and recorded in `run.yaml`, so a Debug-build row is never read beside a
+Release one by mistake; empty without a cache and in rows older than the
+column — `harness_version`, `harness_commit`, `platform`,
 `runtime`, `modulefile`, the launch: `sbatch_args`, `srun_args`,
 `job_env`), timings (`duration_s`: docker/native, the harness's clock
 around the driver call; slurm, submission to end as `sacct` reports it,
@@ -980,6 +1029,20 @@ two sessions ending at once cannot interleave — `watch` evaluates them
 one after another anyway (on Lustre, locking across nodes needs the
 mount's `flock` option). Review the diff and commit it, as with baseline
 ULIDs and input digests.
+
+An application's own test runs are benchmarked as whole runs: every
+evaluated run appends one row to `<root_dir>/tests/<application>/benchmarks.csv`
+(a `TestBenchmarkRow`: the run's id, `application`, `toolchain`,
+`platform`, `runtime`, `modulefile`, `build_type`, `cmake_args`,
+`application_commit`, the harness's identity, the Slurm job and its
+accounting, `exit_code`, `wall_s`, the junit counts — `tests_total`,
+`tests_passed`, `tests_failed`, `tests_skipped` — and `ctest_s`, the
+tests' own durations summed).
+`ufs-chem-assay record-benchmarks --tests-root=<root_dir>/tests/<application>`
+appends those rows to the committed per-application file,
+`src/tests/config/<application>/tests-benchmarks.csv`, skipping runs
+already there. A regression shows in the whole-run numbers; the run's
+junit report in the tests root has the individual tests.
 
 ## Environment variables
 

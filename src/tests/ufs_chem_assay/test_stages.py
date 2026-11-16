@@ -11,7 +11,7 @@ import pytest
 from applications.base import Application, Stage
 from applications.registry import REGISTRY, get_application
 from cli.run_config import HARNESS_ROOT, ResolvedSession, RunConfig
-from cli.stages import render_stage
+from cli.stages import SCRIPT_INDEX, render_stage
 from platforms import Platform
 from tests.ufs_chem_assay.run_configs import (
     TEMPLATES_DIR,
@@ -76,6 +76,8 @@ def test_every_stage_script_starts_with_shebang_and_strict_mode(
     # keeps the bare names.
     per_session = {Stage.HARNESS, Stage.RESUME}
     for stage in Stage:
+        if stage is Stage.TEST:
+            continue  # rendered only with tests.enabled (below)
         script = render_stage(stage, ursa, _CECE, _session(ursa, "simple-maccity"))
         suffix = "-simple-maccity" if stage in per_session else ""
         assert script.name == f"{stage.value}-cece{suffix}"
@@ -84,8 +86,8 @@ def test_every_stage_script_starts_with_shebang_and_strict_mode(
         who = "cece/simple-maccity" if stage in per_session else "cece"
         assert f'echo ">>> stage: {stage.value} ({who})"' in lines
     for stage in Stage:
-        if stage is Stage.RESUME:
-            continue  # not rendered without submit_only (below)
+        if stage in {Stage.RESUME, Stage.TEST}:
+            continue  # not rendered without submit_only / tests.enabled (below)
         script = render_stage(stage, local, _CECE)
         assert script.name == f"{stage.value}-cece"
         assert f'echo ">>> stage: {stage.value} (cece)"' in script.text.splitlines()
@@ -239,16 +241,18 @@ def test_shared_data_lines_render_once_per_run(ursa: RunConfig) -> None:
     )
 
 
-def test_cece_tests_is_not_a_stage_of_this_feature() -> None:
-    # Running CECE's own tests is issue #9; the build stage can still build
-    # the test stack (targets) for it.
+def test_test_stage_is_slot_04_between_build_and_data() -> None:
+    # The application's own tests (issue #9) run against the build, before
+    # the driver sessions: the slot the script numbering always held.
     assert [stage.value for stage in Stage] == [
         "source",
         "build",
+        "test",
         "data",
         "harness",
         "resume",
     ]
+    assert [SCRIPT_INDEX[stage] for stage in Stage] == [1, 2, 4, 3, 5, 6]
 
 
 def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) -> None:
@@ -903,3 +907,198 @@ def test_esmf_builds_gate_on_the_systems_esmf(ursa: RunConfig, tmp_path: Path) -
 def test_docker_build_has_no_build_node(local: RunConfig) -> None:
     # The container build script owns the whole build: no node to name.
     assert "build node" not in render_stage(Stage.BUILD, local, _CECE).text
+
+
+# ── The test stage: the application's own tests, against the build ───────────
+
+_TESTS: dict[str, object] = {
+    "enabled": True,
+    "ntasks": 4,
+    "cpus": 8,
+    "minutes": 5,
+    "env": {"I_MPI_HYDRA_BOOTSTRAP": "fork"},
+}
+_NO_TESTS_BUILT = (
+    "the build stage builds the test stack when applications.cece.tests.enabled is true"
+)
+
+
+def _tests_on(tmp_path: Path, **overrides: object) -> RunConfig:
+    return _ursa(
+        tmp_path,
+        {**_TESTED_CECE, "applications.cece.tests": {**_TESTS}, **overrides},
+    )
+
+
+def test_test_stage_is_rendered_only_with_tests_enabled(
+    ursa: RunConfig, stub: Application, tmp_path: Path
+) -> None:
+    with pytest.raises(
+        ValueError, match=r"applications\.cece\.tests\.enabled is false"
+    ):
+        render_stage(Stage.TEST, ursa, _CECE)
+    config = _ursa(
+        tmp_path,
+        {"applications.stub": {"git_url": "u", "ref": "m", "tests": {"enabled": True}}},
+    )
+    with pytest.raises(ValueError, match="stub has no test suite of its own"):
+        render_stage(Stage.TEST, config, stub)
+
+
+def test_slurm_test_stage_guards_then_submits_through_the_harness(
+    tmp_path: Path,
+) -> None:
+    config = _tests_on(tmp_path)
+    script = render_stage(Stage.TEST, config, _CECE)
+    assert script.name == "test-cece"
+    lines = script.text.splitlines()
+    clone = config.checkout_dir(_CECE)
+    assert lines[:3] == [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        'echo ">>> stage: test (cece)"',
+    ]
+    # The guard: the test stage never compiles, so the test stack must be there.
+    assert lines[3].startswith(f"[ -f {clone}/build/CTestTestfile.cmake ] || {{ echo ")
+    assert _NO_TESTS_BUILT in lines[3]
+    assert lines[3].endswith(">&2; exit 1; }")
+    # The submit is the harness's own command, in the harness's clean
+    # environment, from the harness checkout — as the data stage calls fetch.
+    assert lines[-1] == (
+        "uv run --no-sync ufs-chem-assay submit-tests "
+        f"--root-dir {config.root_dir} --application cece"
+    )
+    assert lines[-2] == f"cd {HARNESS_ROOT}"
+    assert lines.index("module purge") + 1 == lines.index("unset PYTHONPATH")
+    assert f"export UV_CACHE_DIR={config.root_dir}/uv-cache" in lines
+    # Nothing compiles, nothing runs here: the tests are the job's.
+    for absent in ("cmake -", "ctest ", "sbatch ", "srun ", "module load"):
+        assert absent not in script.text, absent
+
+
+def test_slurm_test_job_runs_ctest_directly_on_the_node(tmp_path: Path) -> None:
+    config = _tests_on(tmp_path, **{"slurm.extra_args": "--clusters=c6"})
+    script = render_stage(Stage.TEST, config, _CECE)
+    assert list(script.attachments) == [".sbatch"]
+    lines = script.attachments[".sbatch"].splitlines()
+    clone = config.checkout_dir(_CECE)
+    tests_root = config.root_dir / "tests" / "cece"
+    assert lines[0] == "#!/bin/bash"
+    directives = [line for line in lines if line.startswith("#SBATCH")]
+    assert directives == [
+        "#SBATCH --job-name=ufs-chem-assay-tests-cece",
+        f"#SBATCH --output={tests_root}/tests-%j.out",  # named by the job id
+        f"#SBATCH --chdir={clone}",
+        "#SBATCH --time=5",
+        "#SBATCH -A epic",
+        "#SBATCH -q debug",
+        "#SBATCH -p u1-compute",
+        "#SBATCH -N 1",
+        "#SBATCH -n 4",  # tests.ntasks: the suite's largest rank count
+        "#SBATCH -c 8",
+        "#SBATCH --clusters=c6",
+    ]
+    body = lines[len(directives) + 1 :]
+    assert body[0] == "set -euo pipefail"
+    # The module environment the build loaded, then the tests' own exports.
+    load = body.index("module load cece_ursa.intelllvm")
+    assert body[load - 2 : load] == ["module purge", f"module use {clone}/modulefiles"]
+    assert load < body.index("export I_MPI_HYDRA_BOOTSTRAP=fork")
+    # ctest is the launcher: it runs on the node, never behind srun (each
+    # MPI test is its own step or fork), with the junit named by the job id.
+    command = (
+        "ctest --test-dir build --output-on-failure "
+        f'--output-junit {tests_root}/tests-"$SLURM_JOB_ID".xml'
+    )
+    # A failing suite must still close its clock and report its memory: the
+    # status is held, not left to `set -e`, and is the job's exit.
+    launch = body.index(f"{command} || status=$?")
+    assert body[launch - 2] == 'echo "tic: $(date -u +%Y-%m-%dT%H:%M:%SZ)"'
+    assert body[launch - 1] == "status=0"
+    assert body[launch + 1] == 'echo "toc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"'
+    assert body[-2].startswith("if command -v report-mem")
+    assert body[-1] == 'exit "$status"'
+    assert not any(line.startswith("srun") for line in body)
+    assert "cmake" not in script.attachments[".sbatch"]
+
+
+def test_test_command_takes_the_filter_and_the_parallelism(tmp_path: Path) -> None:
+    tests = {**_TESTS, "filter": "^Cece(Axis|Core)", "parallel": 4}
+    config = _tests_on(tmp_path, **{"applications.cece.tests": tests})
+    job = render_stage(Stage.TEST, config, _CECE).attachments[".sbatch"]
+    assert " -R '^Cece(Axis|Core)' -j 4" in job
+    assert job.count("ctest ") == 1
+
+
+def test_native_test_stage_runs_ctest_in_place_and_records_it(tmp_path: Path) -> None:
+    # Inside an allocation: the launcher prefix, the module environment, the
+    # run teed to the tests root, then the harness records the verdict.
+    config = _tests_on(
+        tmp_path,
+        **{
+            "harness.runtime": "native",
+            "harness.submit_only": False,
+            "harness.launcher": "srun --ntasks=1 --cpus-per-task=8",
+        },
+    )
+    script = render_stage(Stage.TEST, config, _CECE)
+    assert script.attachments == {}
+    lines = script.text.splitlines()
+    clone = config.checkout_dir(_CECE)
+    tests_root = config.root_dir / "tests" / "cece"
+    out = f"{tests_root}/tests.out"
+    assert lines[3].startswith(f"[ -f {clone}/build/CTestTestfile.cmake ]")
+    run = lines.index(
+        "srun --ntasks=1 --cpus-per-task=8 ctest --test-dir build --output-on-failure "
+        f"--output-junit {tests_root}/tests.xml 2>&1 | tee -a {out} || status=$?"
+    )
+    assert lines.index("module load cece_ursa.intelllvm") < run
+    assert lines.index("export I_MPI_HYDRA_BOOTSTRAP=fork") < run
+    assert lines.index(f"mkdir -p {tests_root}") < lines.index(f"cd {clone}") < run
+    assert lines[run - 2] == "status=0"
+    assert lines[run - 1] == f'echo "tic: $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee {out}'
+    assert lines[run + 1] == (
+        f'echo "toc: $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a {out}'
+    )
+    # Then the harness venv, clean of the modules, records the run; the
+    # stage's exit is the tests'.
+    assert run < lines.index("unset PYTHONPATH") < lines.index(f"cd {HARNESS_ROOT}")
+    assert lines[-2] == (
+        "uv run --no-sync ufs-chem-assay evaluate-tests "
+        f'--root-dir {config.root_dir} --application cece --exit-status "$status"'
+    )
+    assert lines[-1] == 'exit "$status"'
+    assert "sbatch" not in script.text
+    assert "submit-tests" not in script.text
+
+
+def test_docker_test_stage_runs_ctest_in_the_applications_image(
+    tmp_path: Path,
+) -> None:
+    config = load_run_config(
+        run_config_file(
+            tmp_path,
+            "local.yaml",
+            overrides={
+                "applications.cece.targets": ["all"],
+                "applications.cece.tests": {"enabled": True},
+            },
+            root_dir=tmp_path / "runs",
+        )
+    )
+    script = render_stage(Stage.TEST, config, _CECE)
+    assert script.attachments == {}
+    lines = script.text.splitlines()
+    clone = config.checkout_dir(_CECE)
+    tests_root = config.root_dir / "tests" / "cece"
+    run = next(i for i, line in enumerate(lines) if line.startswith("docker run"))
+    assert lines[run] == (
+        f"docker run --rm -v {clone}:/work -v {tests_root}:/assay-tests -w /work "
+        "-e OMPI_ALLOW_RUN_AS_ROOT=1 -e OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1 cece/cece-dev "
+        "ctest --test-dir build --output-on-failure "
+        f"--output-junit /assay-tests/tests.xml 2>&1 | tee -a {tests_root}/tests.out "
+        "|| status=$?"
+    )
+    assert "module" not in script.text
+    assert lines[-2].startswith("uv run --no-sync ufs-chem-assay evaluate-tests ")
+    assert lines[-1] == 'exit "$status"'

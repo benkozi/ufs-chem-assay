@@ -244,15 +244,21 @@ class SlurmSection(StrictModel):
         ),
     )
 
+    def job_args(self, *, ntasks: int, cpus: int) -> str:
+        """The sbatch options of one single-node job: the account, QOS and
+        partition, `ntasks` tasks of `cpus` cores, then the extra directives
+        verbatim."""
+        base = (
+            f"-A {self.account} -q {self.qos} -p {self.partition} "
+            f"-N 1 -n {ntasks} -c {cpus}"
+        )
+        return f"{base} {self.extra_args}".strip()
+
     @property
     def sbatch_args(self) -> str:
         """ASSAY_SBATCH_ARGS: one node, the configured tasks and cpus per
         task, then the extra directives verbatim."""
-        base = (
-            f"-A {self.account} -q {self.qos} -p {self.partition} "
-            f"-N 1 -n {self.ntasks} -c {self.cpus}"
-        )
-        return f"{base} {self.extra_args}".strip()
+        return self.job_args(ntasks=self.ntasks, cpus=self.cpus)
 
     def build_launcher(self, *, cpus: int, minutes: int) -> list[str]:
         """The srun of one compile step under build_node: compute: the

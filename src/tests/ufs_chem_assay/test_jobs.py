@@ -22,6 +22,7 @@ from jobs import (
     ledger_path,
     queue_states,
     read_ledger,
+    scancel,
     submit_job,
     submitted_by,
     wait_for_job,
@@ -296,3 +297,9 @@ def test_cancel_jobs_cancels_only_the_queued_ones(mocker: MockerFixture) -> None
     states.return_value = {}
     assert cancel_jobs(ledger) == []
     run.assert_not_called()
+
+
+def test_scancel_is_one_call_and_never_raises(mocker: MockerFixture) -> None:
+    run = mocker.patch("jobs.subprocess.run")
+    scancel(["10", "11"])
+    run.assert_called_once_with(["scancel", "10", "11"], check=False)

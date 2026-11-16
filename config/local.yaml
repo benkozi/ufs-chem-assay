@@ -28,8 +28,14 @@ applications:  # one section per application in the run, keyed by adapter name
     extras: []  # optional pyproject extras installed into <clone>/.venv
     build_node: login  # the only choice: the build is a uv install from the network
     build_minutes: 10  # unused on the login node
-    tests:
+    tests:  # monetio has no test suite of its own in the harness: enabled must stay false
       enabled: false
+      filter:
+      parallel:
+      ntasks: 1
+      cpus: 8
+      minutes: 5
+      env: {}
   cece:
     git_url: git@github.com:ufs-community/CECE.git
     ref: develop
@@ -48,8 +54,14 @@ applications:  # one section per application in the run, keyed by adapter name
       - cece_standalone_driver
     build_node: login  # compute needs the slurm runtime; unused under docker
     build_minutes: 10  # unused on the login node
-    tests:  # CECE's own unit tests
-      enabled: false  # true needs -DCMAKE_BUILD_TYPE=Debug and -DENABLE_ESMF=ON in cmake_args
+    tests:  # CECE's own unit tests: ctest in the cece/cece-dev image, against <clone>/build
+      enabled: false  # true needs targets: [all] (the container build script owns the build type)
+      filter:  # ctest -R regex; null = every test
+      parallel:  # ctest -j N; null = one at a time
+      ntasks: 1  # slurm runtime only
+      cpus: 8  # slurm runtime only
+      minutes: 5  # slurm runtime only
+      env: {}  # passed to ctest in the container
 data:
   warm_cartopy: false
   input_search_path: []  # ASSAY_INPUT_SEARCH_PATH: dirs fetch links url-null inputs from, by basename

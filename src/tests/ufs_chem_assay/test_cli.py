@@ -236,23 +236,86 @@ def test_local_config_runs_the_same_stages(
     assert _scripts(tmp_path) == _LOCAL_SCRIPTS  # no resume without submit_only
 
 
-def test_harness_keeps_slot_05_without_a_04(
-    tmp_path: Path, mocker: MockerFixture
+_TESTS_ENABLED: dict[str, object] = {
+    "applications.cece.cmake_args": ["-DCMAKE_BUILD_TYPE=Debug", "-DENABLE_ESMF=ON"],
+    "applications.cece.targets": ["all"],
+    "applications.cece.tests": {"enabled": True, "ntasks": 4},
+}
+
+
+def test_test_stage_is_skipped_with_a_note_when_tests_are_disabled(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    # Slot 04 is held for the application-tests stage of issue #9.
-    mocker.patch("cli.commands.run.run_bash")
-    assert (
-        main(
+    # Slot 04 is the application's own tests (issue #9): nothing is rendered
+    # for an application whose tests are off, and the run says so.
+    run_bash = mocker.patch("cli.commands.run.run_bash", return_value=0)
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(
             [
                 "run",
                 f"--config-file={_config(tmp_path)}",
                 "--application=cece",
-                "--dry-run",
+                "--stage=test",
             ]
         )
-        == 0
+    assert code == 0
+    run_bash.assert_not_called()
+    assert _scripts(tmp_path) == []
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("tests disabled for cece" in m for m in messages)
+    assert any("stages: test" in m for m in messages)
+
+
+def test_test_stage_renders_the_script_and_its_job_and_runs_after_the_build(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    run_bash = mocker.patch("cli.commands.run.run_bash", return_value=0)
+    path = _config(tmp_path, overrides=_TESTS_ENABLED)
+    assert (
+        main(["run", f"--config-file={path}", "--application=cece", "--dry-run"]) == 0
     )
-    assert _scripts(tmp_path) == _CECE_SCRIPTS
+    run_bash.assert_not_called()
+    scripts = tmp_path / "root" / "scripts"
+    assert _scripts(tmp_path) == sorted([*_CECE_SCRIPTS, "04-test-cece.sh"])
+    # The whole job is reviewable before anything is submitted.
+    job = (scripts / "04-test-cece.sbatch").read_text()
+    assert "#SBATCH -n 4" in job
+    assert "ctest --test-dir build" in job
+    assert "submit-tests" in (scripts / "04-test-cece.sh").read_text()
+    assert sorted(p.name for p in (tmp_path / "root").iterdir()) == ["scripts"]
+
+    assert main(["run", f"--config-file={path}", "--application=cece"]) == 0
+    ran = [call.args[0].name for call in run_bash.call_args_list]
+    assert ran == [
+        "01-source-cece.sh",
+        "02-build-cece.sh",
+        "04-test-cece.sh",  # stage order, not slot order: tests follow the build
+        "03-data-cece.sh",
+        "05-harness-cece-simple-maccity.sh",
+        "05-harness-cece-gcafs-anthro.sh",
+    ]
+
+
+@pytest.mark.usefixtures("stub")
+def test_tests_enabled_without_a_test_suite_is_a_clean_error(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    run_bash = mocker.patch("cli.commands.run.run_bash")
+    path = _config(
+        tmp_path,
+        overrides={
+            "applications.stub": {
+                "git_url": "u",
+                "ref": "m",
+                "tests": {"enabled": True},
+            }
+        },
+    )
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(["run", f"--config-file={path}", "--application=stub", "--dry-run"])
+    assert code == 1
+    run_bash.assert_not_called()
+    assert "stub has no test suite of its own" in caplog.records[-1].getMessage()
 
 
 def test_platform_flag_overrides_file(tmp_path: Path, mocker: MockerFixture) -> None:

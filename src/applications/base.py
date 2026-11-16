@@ -40,7 +40,8 @@ class Stage(StrEnum):
     (stage_lines) names it and this module imports nothing from cli."""
 
     SOURCE = "source"  # clone / update the application checkout
-    BUILD = "build"  # configure + build the driver
+    BUILD = "build"  # configure + build the driver (and, when asked, the tests)
+    TEST = "test"  # the application's own test suite, against that build
     DATA = "data"  # input data (the application's) + cartopy cache
     HARNESS = "harness"  # the pytest session, on this node; driver calls per runtime
     RESUME = "resume"  # (harness.submit_only) the session's second half: wait, evaluate
@@ -55,6 +56,24 @@ class BuildNode(StrEnum):
 
 
 _SHELL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _as_exports(value: object, key: str) -> object:
+    """A run-config mapping rendered as `export NAME=value` lines: the names
+    must be shell identifiers, and a YAML number (kokkos_ver: 4.5,
+    OMP_NUM_THREADS: 8) is as good a value as a string."""
+    if not isinstance(value, dict):
+        return value
+    exports: dict[object, object] = {}
+    for name, item in value.items():
+        if not isinstance(name, str) or not _SHELL_NAME.fullmatch(name):
+            raise ValueError(
+                f"{key}: {name!r} is not a shell variable name "
+                "(letters, digits and underscores, not starting with a digit)"
+            )
+        is_number = isinstance(item, int | float) and not isinstance(item, bool)
+        exports[name] = str(item) if is_number else item
+    return exports
 
 
 class RunConfigView(Protocol):
@@ -154,6 +173,23 @@ class ApplicationSettings(BaseSettings):
             return list(self.modulepath)
         return [] if self.root_dir is None else [self.root_dir / "modulefiles"]
 
+    def build_type(self) -> str | None:
+        """CMAKE_BUILD_TYPE of the checkout's build directory
+        (<root_dir>/build/CMakeCache.txt), for run.yaml and the benchmark
+        rows. None without a checkout, without a cache (not a CMake build,
+        or not built yet), or when the cache leaves it empty."""
+        if self.root_dir is None:
+            return None
+        cache = self.root_dir / "build" / "CMakeCache.txt"
+        if not cache.is_file():
+            return None
+        match = re.search(
+            r"^CMAKE_BUILD_TYPE:[A-Z]+=(.*)$",
+            cache.read_text(errors="replace"),
+            re.MULTILINE,
+        )
+        return (match.group(1).strip() or None) if match else None
+
     def commit_sha(self) -> str | None:
         """HEAD commit SHA of the application checkout, for run.yaml.
 
@@ -224,9 +260,70 @@ class TestsSection(StrictModel):
         default=False,
         description=(
             "true: the build stage builds the application's test stack (after a "
-            "compute-node build, in a login-node finish) so the tests can run "
-            "against this build; false: the driver alone is built"
+            "compute-node build, in a login-node finish) and the test stage runs "
+            "it; false: the driver alone is built and there is no test stage"
         ),
+    )
+    filter: str | None = Field(
+        default=None,
+        description="Run only the tests matching this regex (ctest -R); null: all",
+    )
+    parallel: int | None = Field(
+        default=None,
+        gt=0,
+        description="Tests run at once (ctest -j); null: one at a time",
+    )
+    ntasks: int = Field(
+        default=1,
+        gt=0,
+        description=(
+            "slurm runtime: the test job's task count (sbatch -n) — the largest "
+            "MPI rank count any test asks for"
+        ),
+    )
+    cpus: int = Field(
+        default=8,
+        gt=0,
+        description="slurm runtime: the test job's cores per task (sbatch -c)",
+    )
+    minutes: int = Field(
+        default=5,
+        gt=0,
+        description="slurm runtime: the test job's time limit, in minutes",
+    )
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Variables exported before the tests run (inside the job under slurm), "
+            "e.g. an MPI bootstrap hint; numbers are exported as strings"
+        ),
+    )
+
+    @field_validator("env", mode="before")
+    @classmethod
+    def _env_as_exports(cls, value: object) -> object:
+        return _as_exports(value, "tests.env")
+
+
+class TestPlan(StrictModel):
+    """What the test stage launches for one application: the adapter's
+    knowledge of its own test suite; where and how it is launched (a Slurm
+    job, the image, a launcher prefix) is the shared stage's."""
+
+    __test__: ClassVar[bool] = False  # a model, not a pytest class
+
+    requires: str = Field(
+        description=(
+            "A file, relative to the checkout, that exists only when the test "
+            "stack was built (build/CTestTestfile.cmake): the stage's guard — "
+            "the test stage never compiles"
+        )
+    )
+    command: str = Field(
+        description=(
+            "The shell command that runs the suite from the checkout root and "
+            "writes its junit report where the stage asked"
+        )
     )
 
 
@@ -331,20 +428,20 @@ class ApplicationRunSection(StrictModel):
     @field_validator("module_env", mode="before")
     @classmethod
     def _module_env_as_exports(cls, value: object) -> object:
-        # Rendered as `export NAME=value`: the names must be identifiers, and
-        # a YAML number (kokkos_ver: 4.5) is as good a value as a string.
-        if not isinstance(value, dict):
-            return value
-        exports: dict[object, object] = {}
-        for name, item in value.items():
-            if not isinstance(name, str) or not _SHELL_NAME.fullmatch(name):
-                raise ValueError(
-                    f"module_env: {name!r} is not a shell variable name "
-                    "(letters, digits and underscores, not starting with a digit)"
-                )
-            is_number = isinstance(item, int | float) and not isinstance(item, bool)
-            exports[name] = str(item) if is_number else item
-        return exports
+        return _as_exports(value, "module_env")
+
+    def build_flags(self) -> list[str]:
+        """The configure flags this section gives the build, for the record
+        of what a test run ran against; none by default."""
+        return []
+
+    def runtime_problems(self, runtime: Runtime) -> list[str]:
+        """What is wrong with this section under `runtime`, one sentence
+        each — the rules that need more than the section itself (the run
+        config raises the first as a validation error). None by default; an
+        adapter's section overrides it."""
+        _ = runtime
+        return []
 
 
 class Application(ABC):
@@ -468,4 +565,12 @@ class Application(ABC):
         self, stage: Stage, config: RunConfigView, section: ApplicationRunSection
     ) -> list[str]:
         """The shell lines of the source, build, or data stage for this
-        application (the harness stage is shared)."""
+        application (the test, harness and resume stages are shared)."""
+
+    def test_plan(self, section: ApplicationRunSection, junit: str) -> TestPlan | None:
+        """The application's own test suite as the test stage launches it:
+        `junit` is the shell word of the junit report the command must
+        write. None — the default — means the application has no test suite
+        of its own, and tests.enabled is an error for it."""
+        _ = section, junit
+        return None

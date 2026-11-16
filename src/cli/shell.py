@@ -16,11 +16,14 @@ logger = get_logger("cli")
 
 def write_script(script: ShellScript, scripts_dir: Path, index: int) -> Path:
     """<scripts_dir>/<NN>-<stage>-<application>.sh, executable, overwritten
-    per invocation."""
+    per invocation; the script's attachments beside it under the same stem
+    (the test stage's job script, <NN>-test-<application>.sbatch)."""
     scripts_dir.mkdir(parents=True, exist_ok=True)
     path = scripts_dir / f"{index:02d}-{script.name}.sh"
     path.write_text(script.text)
     path.chmod(0o755)
+    for suffix, text in script.attachments.items():
+        path.with_suffix(suffix).write_text(text)
     return path
 
 

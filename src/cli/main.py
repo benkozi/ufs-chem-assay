@@ -18,6 +18,12 @@ report [--root-dir DIR | --output-root PATH] [--session NAME ...] [--tail N]
 states, test counts, one block per issue with the paths to open — from the
 files alone, exit 1 when anything is wrong (cli/run_report.py).
 
+`ufs-chem-assay submit-tests --application NAME [--root-dir DIR]
+[--resubmit]` and `evaluate-tests --application NAME [--root-dir DIR]
+[--exit-status N]`: the two halves of an application's own test run that
+the rendered test stage calls — submit the test job and record it (slurm);
+turn a finished run into a verdict and a benchmark row (apptests.py).
+
 `ufs-chem-assay fetch [--application NAME] [--suite-config SELECTOR]
 [--dry-run]`: stage the inputs the selected suites declare into the
 application checkout's data directory — the same selection and settings a
@@ -40,11 +46,13 @@ from cli.commands import (
     Subparsers,
     cancel,
     download_output,
+    evaluate_tests,
     fetch,
     publish_baselines,
     record_benchmarks,
     report,
     run,
+    submit_tests,
     upload_output,
     watch,
 )
@@ -65,6 +73,8 @@ class Command(StrEnum):
     WATCH = "watch"
     CANCEL = "cancel"
     REPORT = "report"
+    SUBMIT_TESTS = "submit-tests"
+    EVALUATE_TESTS = "evaluate-tests"
 
 
 class CommandModule(Protocol):
@@ -89,6 +99,8 @@ COMMANDS: dict[Command, CommandModule] = {
     Command.WATCH: watch,
     Command.CANCEL: cancel,
     Command.REPORT: report,
+    Command.SUBMIT_TESTS: submit_tests,
+    Command.EVALUATE_TESTS: evaluate_tests,
 }
 
 

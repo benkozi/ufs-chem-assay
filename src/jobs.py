@@ -30,6 +30,7 @@ from benchmarks import SlurmAccounting, slurm_accounting
 from logs import get_logger
 from models.base import StrictModel
 from models.conventions import CONVENTIONS
+from platforms import Platform, Runtime
 
 logger = get_logger("jobs")
 
@@ -96,6 +97,113 @@ class JobLedger(StrictModel):
     )
 
 
+class TestCounts(StrictModel):
+    """What a junit report says of one run of an application's own tests."""
+
+    __test__ = False  # a model, not a pytest class
+
+    total: int = Field(ge=0, description="Tests in the report")
+    passed: int = Field(ge=0, description="Tests that ran and passed")
+    failed: int = Field(ge=0, description="Tests that failed or errored")
+    skipped: int = Field(ge=0, description="Tests skipped, disabled, or not run")
+    ctest_s: float = Field(
+        ge=0, description="The tests' own durations, summed, in seconds"
+    )
+
+
+class TestProvenance(StrictModel):
+    """What a test run ran against, as known when it was launched: the
+    benchmark row's identity columns, recorded then so an evaluation hours
+    later describes the build the tests actually ran."""
+
+    __test__ = False
+
+    platform: Platform = Field(description="Machine the tests ran on")
+    runtime: Runtime = Field(description="How the tests were launched")
+    modulefile: str | None = Field(
+        description="Modulefile the build and the tests loaded; null without one"
+    )
+    build_type: str | None = Field(
+        description="CMAKE_BUILD_TYPE of the build directory; null when unknown"
+    )
+    cmake_args: str | None = Field(
+        description="The run config's configure flags, space-joined; null when none"
+    )
+    application_commit: str | None = Field(
+        description="HEAD of the application checkout; null when unknown"
+    )
+    harness_version: str = Field(description="Harness package version")
+    harness_commit: str | None = Field(
+        description="Harness checkout HEAD (-dirty when edited); null outside a checkout"
+    )
+
+
+class TestJob(StrictModel):
+    """The Slurm job of one test run: enough to wait for it, judge it and
+    cancel it from any later process."""
+
+    __test__ = False
+
+    job_id: str = Field(description="The Slurm job id sbatch returned")
+    script: Path = Field(
+        description="The submitted job script (04-test-<application>.sbatch)"
+    )
+    timeout_s: int = Field(
+        gt=0, description="The job's own time limit in seconds (tests.minutes)"
+    )
+    queue_wait_s: int = Field(
+        gt=0,
+        description="Seconds the job may wait in the queue before the harness cancels it",
+    )
+    submitted_at: datetime = Field(
+        description="When sbatch accepted the job (UTC); the deadline counts from here"
+    )
+
+    @property
+    def deadline(self) -> datetime:
+        """When the harness gives up on the job: submission plus its time
+        limit plus its queue allowance."""
+        return self.submitted_at + timedelta(seconds=self.timeout_s + self.queue_wait_s)
+
+
+class TestLedger(StrictModel):
+    """`tests.yaml`: the latest run of an application's own tests at a
+    tests root — submitted (slurm) or run in place (native, docker), and
+    whether it has been evaluated. Earlier runs live on in the root's
+    benchmark rows and in their own output and junit files."""
+
+    __test__ = False
+
+    run_id: str = Field(description="The test run's ULID, minted when it was launched")
+    application: str = Field(description="The application (registry name)")
+    toolchain: str | None = Field(
+        default=None,
+        description="The run config's toolchain the build used; null without one",
+    )
+    submitted_by: str = Field(
+        description="user@host of the process that launched the run"
+    )
+    provenance: TestProvenance = Field(description="What the run ran against")
+    job: TestJob | None = Field(
+        description="The run's Slurm job; null for a run in place (native, docker)"
+    )
+    out_path: Path = Field(
+        description="The run's output (tic/toc lines around the tests)"
+    )
+    junit_path: Path = Field(description="The junit report the test command writes")
+    evaluated_at: datetime | None = Field(
+        default=None, description="When the run was evaluated (UTC); null until then"
+    )
+    exit_status: int | None = Field(
+        default=None,
+        description="The run's verdict (0: every test passed); null until evaluated",
+    )
+    tests: TestCounts | None = Field(
+        default=None,
+        description="The junit report's counts; null until evaluated, or without a report",
+    )
+
+
 class SlurmSubmissionError(subprocess.CalledProcessError):
     """`sbatch` refused the job script or printed no job id."""
 
@@ -159,10 +267,7 @@ def read_ledger(output_root: Path) -> JobLedger:
         raise ValueError(f"{path}: not a job ledger ({exc})") from exc
 
 
-def write_ledger(ledger: JobLedger, output_root: Path) -> Path:
-    """Write the ledger whole, keys in model order, through a temporary file
-    and an atomic rename so a reader (`watch`) never sees a partial file."""
-    path = ledger_path(output_root)
+def _write_whole(ledger: StrictModel, path: Path) -> Path:
     tmp = path.with_name(f".{path.name}.tmp")
     with open(tmp, "w") as f:
         yaml.safe_dump(
@@ -170,6 +275,36 @@ def write_ledger(ledger: JobLedger, output_root: Path) -> Path:
         )
     os.replace(tmp, path)
     return path
+
+
+def write_ledger(ledger: JobLedger, output_root: Path) -> Path:
+    """Write the ledger whole, keys in model order, through a temporary file
+    and an atomic rename so a reader (`watch`) never sees a partial file."""
+    return _write_whole(ledger, ledger_path(output_root))
+
+
+def path_of_test_ledger(tests_root: Path) -> Path:
+    return tests_root / CONVENTIONS.test_ledger
+
+
+def read_test_ledger(tests_root: Path) -> TestLedger:
+    """The test ledger at a tests root; ValueError naming the path when it
+    is missing or does not validate."""
+    path = path_of_test_ledger(tests_root)
+    if not path.is_file():
+        raise ValueError(
+            f"{tests_root} has no {CONVENTIONS.test_ledger}: no test run recorded"
+        )
+    try:
+        with open(path) as f:
+            return TestLedger.model_validate(yaml.safe_load(f))
+    except (ValueError, yaml.YAMLError) as exc:  # ValidationError is a ValueError
+        raise ValueError(f"{path}: not a test ledger ({exc})") from exc
+
+
+def write_test_ledger(ledger: TestLedger, tests_root: Path) -> Path:
+    """Write the test ledger whole, atomically, as write_ledger does."""
+    return _write_whole(ledger, path_of_test_ledger(tests_root))
 
 
 # ── slurm ────────────────────────────────────────────────────────────────────
@@ -276,6 +411,11 @@ def wait_for_job(
     if accounting is None:
         raise SlurmAccountingMissing(job.job_id)
     return accounting
+
+
+def scancel(job_ids: list[str]) -> None:
+    """`scancel <ids>` in one call; a job already gone is not an error."""
+    subprocess.run(["scancel", *job_ids], check=False)
 
 
 def cancel_jobs(ledger: JobLedger, *, dry_run: bool = False) -> list[str]:

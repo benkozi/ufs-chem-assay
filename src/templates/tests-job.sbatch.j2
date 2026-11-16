@@ -1,0 +1,15 @@
+#!/bin/bash
+#SBATCH --job-name={{ job_name }}
+#SBATCH --output={{ out_path }}
+#SBATCH --chdir={{ root_dir }}
+#SBATCH --time={{ minutes }}
+{% for directive in directives %}#SBATCH {{ directive }}
+{% endfor %}set -euo pipefail
+{% for line in module_lines %}{{ line }}
+{% endfor %}{% for name, value in env.items() %}export {{ name }}={{ value }}
+{% endfor %}echo "tic: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+status=0
+{{ command }} || status=$?
+echo "toc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if command -v report-mem >/dev/null 2>&1; then report-mem || true; fi
+exit "$status"

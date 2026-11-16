@@ -36,6 +36,7 @@ from cli.run_config.sessions import (
 )
 from identity import HARNESS_ROOT
 from models.base import StrictModel
+from models.conventions import CONVENTIONS
 from platforms import (
     ModuleInit,
     Platform,
@@ -144,6 +145,17 @@ class RunConfig(StrictModel):
                 )
         return self
 
+    @model_validator(mode="after")
+    def _sections_fit_the_runtime(self) -> RunConfig:
+        # The rules a section cannot check alone (they depend on how the
+        # application is built and run here): the adapter's section states
+        # them, the first one fails the load.
+        for name, section in self.applications.items():
+            problems = section.runtime_problems(self.runtime)
+            if problems:
+                raise ValueError(f"applications.{name}: {problems[0]}")
+        return self
+
     @field_validator("root_dir", mode="before")
     @classmethod
     def _expand_root(cls, value: object) -> object:
@@ -234,6 +246,12 @@ class RunConfig(StrictModel):
         <root_dir>/<the adapter's checkout_dirname>."""
         section = self.applications[app.name]
         return section.clone_dir or self.root_dir / app.checkout_dirname
+
+    def tests_root(self, app: Application) -> Path:
+        """Where the application's own test runs leave their files: the
+        output, the junit report, the test ledger, the benchmark rows —
+        <root_dir>/tests/<application>."""
+        return self.root_dir / CONVENTIONS.tests_dirname / app.name
 
     def build_launcher(self, section: ApplicationRunSection, *, cpus: int) -> list[str]:
         """The command prefix of one compile step of `section`: empty on the

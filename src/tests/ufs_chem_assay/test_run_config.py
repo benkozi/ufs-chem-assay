@@ -245,7 +245,7 @@ def test_build_placement_defaults_to_the_login_node() -> None:
         for section in config.applications.values():
             assert section.build_node is BuildNode.LOGIN
             assert section.build_minutes == 10
-            assert section.tests == TestsSection(enabled=False)
+            assert section.tests.enabled is False
             assert config.build_launcher(section, cpus=8) == []
 
 
@@ -322,7 +322,10 @@ def test_build_minutes_must_be_positive(tmp_path: Path) -> None:
 
 def test_cece_tests_need_a_debug_build_with_esmf(tmp_path: Path) -> None:
     # The shipped template builds Release without ESMF: fine, with tests off.
-    enabled: dict[str, object] = {"applications.cece.tests": {"enabled": True}}
+    enabled: dict[str, object] = {
+        "applications.cece.tests": {"enabled": True},
+        "applications.cece.targets": ["all"],
+    }
     with pytest.raises(ValidationError) as release:
         load_run_config(run_config_file(tmp_path, overrides=enabled))
     message = str(release.value)
@@ -345,6 +348,74 @@ def test_cece_tests_need_a_debug_build_with_esmf(tmp_path: Path) -> None:
         "cece"
     ]
     assert cece.tests.enabled is True
+
+
+def test_cece_test_rules_follow_the_runtime_and_the_targets(tmp_path: Path) -> None:
+    # Under docker the container build script owns the configure: cmake_args
+    # is unused there, so the Debug / ESMF rule does not apply.
+    local = run_config_file(
+        tmp_path,
+        "local.yaml",
+        overrides={
+            "applications.cece.tests": {"enabled": True},
+            "applications.cece.targets": ["all"],
+        },
+    )
+    assert load_run_config(local).applications["cece"].tests.enabled is True
+    # Everywhere, the test stack is part of `all`.
+    driver_only = run_config_file(
+        tmp_path, "local.yaml", overrides={"applications.cece.tests": {"enabled": True}}
+    )
+    with pytest.raises(
+        ValidationError, match=r"applications\.cece: tests\.enabled requires `all`"
+    ):
+        load_run_config(driver_only)
+
+
+def test_tests_section_defaults_and_validation() -> None:
+    assert TestsSection().model_dump() == {
+        "enabled": False,
+        "filter": None,
+        "parallel": None,
+        "ntasks": 1,
+        "cpus": 8,
+        "minutes": 5,
+        "env": {},
+    }
+    tests = TestsSection.model_validate({"env": {"OMP_NUM_THREADS": 8}})
+    assert tests.env == {"OMP_NUM_THREADS": "8"}  # numbers are exported as strings
+    for bad in (
+        {"ntasks": 0},
+        {"cpus": 0},
+        {"minutes": 0},
+        {"parallel": 0},
+        {"env": {"not a name": "x"}},
+    ):
+        with pytest.raises(ValidationError):
+            TestsSection.model_validate(bad)
+
+
+def test_build_flags_are_the_adapters_to_name() -> None:
+    # What a test run is recorded as running against: CECE's cmake_args;
+    # nothing for a section without configure flags.
+    assert ApplicationRunSection(git_url="u", ref="r").build_flags() == []
+    cece = CeceRunSection(git_url="u", ref="r", cmake_args=["-DX=1", "-DY=2"])
+    assert cece.build_flags() == ["-DX=1", "-DY=2"]
+
+
+def test_tests_root_is_under_the_run_root(tmp_path: Path) -> None:
+    config = load_run_config(run_config_file(tmp_path, root_dir=tmp_path / "root"))
+    assert config.tests_root(get_application("cece")) == tmp_path / "root/tests/cece"
+
+
+def test_monetio_has_no_test_suite_to_enable(tmp_path: Path) -> None:
+    path = run_config_file(
+        tmp_path,
+        "local.yaml",
+        overrides={"applications.monetio.tests": {"enabled": True}},
+    )
+    with pytest.raises(ValidationError, match="monetio has no test suite of its own"):
+        load_run_config(path)
 
 
 def test_tests_section_rejects_unknown_keys(tmp_path: Path) -> None:

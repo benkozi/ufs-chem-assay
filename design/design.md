@@ -430,6 +430,13 @@ is written to a pytest-managed temporary directory** (session-scoped
 lands in the repo checkout and nothing needs git-ignoring; pytest keeps the
 last few runs under its base temp dir and prunes older ones.
 
+An application's own test runs (the CLI's `test` stage) leave their files
+in a tests root of their own, `<root_dir>/tests/<application>/`, outside
+any session's output root: `tests.yaml` (the test ledger), the run's
+output and junit report (`tests-<job id>.out` / `.xml` for a Slurm job,
+`tests.out` / `tests.xml` for a run in place), and `benchmarks.csv` (one
+`TestBenchmarkRow` per evaluated run).
+
 Passing `--combo-output-root=PATH` opts out of the temp default: the path is
 then interpreted as container-relative, resolved against `/work` (the mounted
 CECE checkout), so results persist in that checkout. Resolving it requires
@@ -599,8 +606,60 @@ rule its tests need: `tests.enabled` requires `-DCMAKE_BUILD_TYPE=Debug`
 and `-DENABLE_ESMF=ON` in `cmake_args`, the error naming what is missing;
 and with `-DENABLE_ESMF=ON` the adapter gates the configure log on
 `CECE dependency ESMF: system`, ahead of the run config's gates. The
-stage's first line echoes the node. The `test` stage, toolchains and the
-two new applications follow. The path model is one
+stage's first line echoes the node.
+
+**The `test` stage** (2026-11-16, chunk 3 of the same feature; issue #9) is
+the application's own test suite run against that build. `Stage.TEST` sits
+between `build` and `data` and renders to script slot `04`
+(`cli/stages.SCRIPT_INDEX` — the slot numbers are fixed names, the
+execution order is the enum's). It exists only for an application whose
+section sets `tests.enabled` (`TestsSection`: `enabled`, `filter`,
+`parallel`, `ntasks`, `cpus`, `minutes`, `env`): `run` renders nothing
+for the others and logs that their tests are disabled, and
+`tests.enabled` for an application with no test suite of its own is a
+clean error. The adapter's part is `Application.test_plan(section,
+junit)` — a `TestPlan`: the file whose presence proves the test stack was
+built, and the command that runs the suite from the checkout root and
+writes its junit report (CECE: `ctest --test-dir build
+--output-on-failure --output-junit …`, with `-R` / `-j` from the
+section); everything about *where* is the shared `cli/stages._test`. The
+stage never compiles: its first line is a guard on that file. Under
+**slurm** the tests are one job from `templates/tests-job.sbatch.j2` —
+the driver template without the `srun`, because the test runner launches
+the MPI ranks itself — rendered at render time as the script's
+attachment, `04-test-<application>.sbatch`, so a dry run shows it; the
+stage script calls `ufs-chem-assay submit-tests`, which loads the
+effective config (as `watch` does, so nothing drifts), settles the
+previous run (a queued job is refused unless `--resubmit`; a finished,
+unevaluated one is evaluated first), submits with `sbatch --parsable`
+and writes the **test ledger**, `<root_dir>/tests/<application>/tests.yaml`
+(`jobs.TestLedger`: the run's ULID, its provenance — platform, runtime,
+modulefile, build type, configure flags, application and harness commits
+— the job with its deadline, the output and junit paths, and once
+evaluated the verdict and the `TestCounts`). `run` never waits. Under
+**native** and **docker** the stage runs the command in place (behind
+`harness.launcher`; in the application's image with the tests root
+mounted at `/assay-tests`), tees it between `tic`/`toc` lines, and calls
+`evaluate-tests --exit-status "$status"` before exiting with that
+status. `apptests.evaluate` is the one evaluation: Slurm's accounting for
+a job (its exit code; else 1 for a job that did not complete or whose
+report shows failures; without accounting, the junit report alone), the
+command's exit status for a run in place; the junit counts
+(`apptests.parse_junit`); one `TestBenchmarkRow` appended to the tests
+root's `benchmarks.csv`; the ledger rewritten. `watch` polls the test
+jobs with the sessions' in one `squeue` (`cli/sessions.poll`), evaluates
+a finished one in-process (`evaluate_tests`: there is no resume script),
+cancels one still queued past its deadline, and folds the verdicts into
+its exit status; `--only sessions|tests` narrows `watch` and `report`.
+`report` summarizes a tests root from its files (`summarize_tests`): a
+line per run and, for a failed one, `tests-failed` (the failed tests'
+names from the junit, the output's tail) or `tests-job-failed` (no failed
+test to name). `cancel --tests-root` and `record-benchmarks --tests-root`
+are the per-root commands. The Debug / ESMF rule moved with this chunk
+from a validator of `CeceRunSection` to `ApplicationRunSection.runtime_problems(runtime)`,
+which `RunConfig` checks at load: under docker the container build
+script owns the configure, so only the `all`-among-targets half applies
+there. Toolchains and the two new applications follow. The path model is one
 abstraction: `ComboRoots.driver` is the output root *as the driver sees
 it* — a container path under docker, the host path natively — and
 generated configs carry it in `output.directory` and `driver.log_file`.
@@ -1001,6 +1060,21 @@ uses the test prefix of the private bucket.
 Persistent benchmarking (2026-10-23, `src/benchmarks.py`; full design in
 `design/feat/20261019-1447-global-anthro-use-case/20261023-0847-add-benchmarking.md`):
 
+- **`build_type`** (2026-11-16): `BenchmarkRow` and `run.yaml` record the
+  `CMAKE_BUILD_TYPE` of the checkout's build directory
+  (`ApplicationSettings.build_type`, from `<root_dir>/build/CMakeCache.txt`
+  at session start; null without a cache), after `application_commit`.
+  The committed files were migrated once (an empty cell per existing row,
+  each line's own terminator kept); `read_benchmarks_csv` still reads a
+  file older than the column (an old output root, a published baseline's
+  row) with the cell null, and appending to such a file is refused.
+- **One row per test run** (2026-11-16): an application's own tests are
+  benchmarked as whole runs — `TestBenchmarkRow`, its own model because a
+  test run has no combination, configuration or baseline — appended to
+  the tests root's `benchmarks.csv` at evaluation and, by
+  `record-benchmarks --tests-root`, to the committed per-application
+  `src/tests/config/<application>/tests-benchmarks.csv` (key: the run's
+  ULID). The CSV helpers are generic over the two models.
 - **One row per executed combination per run** — `BenchmarkRow`, a strict
   model whose fields are the CSV columns: identity (`run_id`, `combo_id`,
   `suite`, `combo`, `config_sha256` — the SHA-256 of the adapter's
@@ -1222,7 +1296,8 @@ All code under `src/`; the project is `uv`-managed with its own
       commands/           # one module per subcommand, each `register(subparsers, name)`
                           #   + `handler(args)`: run, fetch, publish_baselines,
                           #   record_benchmarks, upload_output, download_output
-                          #   (output_store.py shared by the last two), watch, cancel, report
+                          #   (output_store.py shared by the last two), watch, cancel, report,
+                          #   submit_tests, evaluate_tests (the test stage's two calls)
       run_config/         # the run config as a package: sections.py (data:, baselines:,
                           #   outputs:, harness:, slurm:, uv:), sessions.py (the overlay,
                           #   the resolved session, the overlay rule), config.py (RunConfig:
@@ -1240,6 +1315,10 @@ All code under `src/`; the project is `uv`-managed with its own
                           #   MODULE_INIT (purge / reset) per platform
     lmod.py               # module_lines: the one module block of stage and job scripts
     templates/driver-job.sbatch.j2  # the slurm runtime's per-driver job script
+    templates/tests-job.sbatch.j2   # the test stage's job: the same, without the srun
+    apptests.py           # an application's own tests: parse_junit, submit (the guard,
+                          #   sbatch, the ledger), record_local, evaluate (verdict, counts,
+                          #   one TestBenchmarkRow), cancel, cancel_overdue
     analysis.py           # descriptive stats (dask distributed), CSV writing
     baselines/            # models (conventions, manifest, records), plan (the gate,
                           #   the plan, the CLI's reader), publish (manifest, probe,
@@ -1257,8 +1336,10 @@ All code under `src/`; the project is `uv`-managed with its own
     runner.py             # driver command per runtime (docker run / native +
                           #   launcher / sbatch --parsable), check_output, .out writing,
                           #   submit_driver_job / finish_driver_job (slurm's two halves)
-    jobs.py               # the job ledger (SubmittedJob, JobLedger, jobs.yaml), sbatch /
-                          #   squeue / sacct / scancel: submit, poll, judge, cancel
+    jobs.py               # the job ledger (SubmittedJob, JobLedger, jobs.yaml), the test
+                          #   ledger (TestLedger, TestJob, TestProvenance, TestCounts,
+                          #   tests.yaml), sbatch / squeue / sacct / scancel: submit, poll,
+                          #   judge, cancel
     fslock.py             # locked(path): flock around the committed files' rewrites
     s3_sync.py            # stand-alone `aws s3 sync` wrapper; credentials are
                           #   the CLI's own; one harness import (the logger)

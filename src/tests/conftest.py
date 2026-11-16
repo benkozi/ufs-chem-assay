@@ -1093,6 +1093,7 @@ def combo_roots(
         platform=settings.platform,
         runtime=settings.runtime,
         modulefile=request.config.stash[_APP_SETTINGS].modulefile,
+        build_type=request.config.stash[_APP_SETTINGS].build_type(),
         launch=(
             LaunchRecord(
                 sbatch_args=settings.sbatch_args,
