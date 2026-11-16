@@ -30,7 +30,7 @@
 -- pins a version through applications.<name>.module_env.
 
 help([[
-  This module loads libraries required for building and running UFS Weather Model 
+  This module loads libraries required for building and running UFS Weather Model
   on the NOAA RDHPC machine Gaea C6 using Intel-2023.2.0.
 ]])
 

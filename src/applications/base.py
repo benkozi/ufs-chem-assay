@@ -46,6 +46,14 @@ class Stage(StrEnum):
     RESUME = "resume"  # (harness.submit_only) the session's second half: wait, evaluate
 
 
+@unique
+class BuildNode(StrEnum):
+    """Where an application's configure and build run (slurm runtime)."""
+
+    LOGIN = "login"  # where the CLI runs: network access, so fetches work
+    COMPUTE = "compute"  # behind srun: the offline compile probe
+
+
 _SHELL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
@@ -66,6 +74,12 @@ class RunConfigView(Protocol):
     def checkout_dir(self, app: Application) -> Path:
         """The application's checkout: its section's clone_dir, else
         <root_dir>/<the adapter's checkout_dirname>."""
+
+    def build_launcher(self, section: ApplicationRunSection, *, cpus: int) -> list[str]:
+        """The command prefix of one compile step (a configure, a build) of
+        `section`: empty on the login node; under build_node: compute, the
+        srun that gives the step one task with `cpus` cores for the
+        section's build_minutes, charged as the slurm: section says."""
 
 
 class ApplicationSettings(BaseSettings):
@@ -199,6 +213,23 @@ class SweepSelectorBase(StrictModel):
     """Base of every application's baseline sweep-selector schema."""
 
 
+class TestsSection(StrictModel):
+    """An application's own test suite (`applications.<name>.tests:`): what
+    the application's developers run — ctest for a CMake project — as
+    opposed to the driver sweeps the harness's pytest sessions run."""
+
+    __test__: ClassVar[bool] = False  # a model, not a pytest class
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "true: the build stage builds the application's test stack (after a "
+            "compute-node build, in a login-node finish) so the tests can run "
+            "against this build; false: the driver alone is built"
+        ),
+    )
+
+
 class ApplicationRunSection(StrictModel):
     """An application's section of the run config (`applications.<name>:`):
     where its checkout comes from, plus the mirror of ApplicationSettings —
@@ -273,6 +304,28 @@ class ApplicationRunSection(StrictModel):
     driver_path: str | None = Field(
         default=None,
         description="The DRIVER_PATH setting; null keeps the adapter's default",
+    )
+    build_node: BuildNode = Field(
+        default=BuildNode.LOGIN,
+        description=(
+            "Where the configure and the build run. login: where the CLI runs, "
+            "with network access. compute (slurm runtime only): each behind its "
+            "own srun, as an offline compile probe — the adapter turns off what "
+            "would fetch at configure time, and with tests.enabled finishes the "
+            "build on the login node"
+        ),
+    )
+    build_minutes: int = Field(
+        default=10,
+        gt=0,
+        description=(
+            "build_node: compute only: the time limit, in minutes, of each "
+            "compile step's srun"
+        ),
+    )
+    tests: TestsSection = Field(
+        default_factory=TestsSection,
+        description="The application's own test suite; off by default",
     )
 
     @field_validator("module_env", mode="before")

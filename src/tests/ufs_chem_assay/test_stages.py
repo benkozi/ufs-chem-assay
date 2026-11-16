@@ -737,3 +737,169 @@ def test_harness_stage_exports_the_module_environment_for_the_driver_jobs(
         "CECE_CONFIGURE_GATES",
     ):
         assert absent not in text, absent
+
+
+# ── Build placement: the login node, or a compute node behind srun ───────────
+
+# The Ursa template's slurm: section as the compile step's srun (one node, one
+# task, build_jobs cpus, build_minutes).
+_BUILD_SRUN = (
+    "srun -A epic -q debug -p u1-compute --nodes=1 --ntasks=1 "
+    "--cpus-per-task=8 --time=10"
+)
+_TESTED_CECE: dict[str, object] = {
+    "applications.cece.cmake_args": ["-DCMAKE_BUILD_TYPE=Debug", "-DENABLE_ESMF=ON"],
+    "applications.cece.targets": ["all"],
+    "applications.cece.tests": {"enabled": True},
+}
+
+
+def _starting(lines: list[str], prefix: str) -> list[int]:
+    return [index for index, line in enumerate(lines) if line.startswith(prefix)]
+
+
+def test_login_build_is_the_default_and_says_so(ursa: RunConfig) -> None:
+    lines = render_stage(Stage.BUILD, ursa, _CECE).text.splitlines()
+    assert lines[3] == "echo 'build node: login'"  # first, after the banner
+    assert not any("srun" in line for line in lines)
+    # One configure with the cmake_args as written: no test-stack flag added.
+    assert len(_starting(lines, "cmake -S")) == 1
+    assert "CECE_BUILD_TESTING" not in "\n".join(lines)
+
+
+def test_compute_build_probes_offline_behind_srun(tmp_path: Path) -> None:
+    config = _ursa(tmp_path, {"applications.cece.build_node": "compute"})
+    lines = render_stage(Stage.BUILD, config, _CECE).text.splitlines()
+    clone = str(config.checkout_dir(_CECE))
+    assert (
+        lines[3] == f"echo {shlex.quote('build node: compute (' + _BUILD_SRUN + ')')}"
+    )
+    # Configure and build are two srun steps (two allocations), never one
+    # spanning both; the configure has the test stack off, because GTest and
+    # RapidCheck are fetched at configure time and compute nodes have no network.
+    configure, build = _starting(lines, "srun ")
+    assert lines[configure] == (
+        f"{_BUILD_SRUN} cmake -S {clone} -B {clone}/build -DCMAKE_BUILD_TYPE=Release "
+        f"-DCECE_BUILD_TESTING=OFF 2>&1 | tee {clone}/build/configure.log"
+    )
+    assert lines[build] == (
+        f"{_BUILD_SRUN} cmake --build {clone}/build "
+        "--target cece_standalone_driver --parallel 8"
+    )
+    note = lines[configure - 1]
+    assert note.startswith("echo ")
+    assert "-DCECE_BUILD_TESTING=OFF" in note
+    assert "no network" in note
+    # Modules and the probe run in the login shell (srun inherits them); the
+    # gates sit between the two steps.
+    assert lines.index("module list") < configure
+    assert _starting(lines, "which ")[0] < configure
+    mpi = next(i for i, line in enumerate(lines) if "Found MPI" in line)
+    assert configure < mpi < build
+    # Tests are off: the stage ends with the probe — no login-node finish.
+    assert build == len(lines) - 1
+    assert len([line for line in lines if "cmake -S" in line]) == 1
+
+
+def test_compute_build_launcher_follows_the_section_and_the_slurm_keys(
+    tmp_path: Path,
+) -> None:
+    config = _ursa(
+        tmp_path,
+        {
+            "applications.cece.build_node": "compute",
+            "applications.cece.build_minutes": 25,
+            "applications.cece.build_jobs": 4,
+            "slurm.account": "bil-fire3",
+            "slurm.qos": "normal",
+            "slurm.partition": "batch",
+            "slurm.extra_args": "--clusters=c6",
+        },
+    )
+    lines = render_stage(Stage.BUILD, config, _CECE).text.splitlines()
+    launcher = (
+        "srun -A bil-fire3 -q normal -p batch --clusters=c6 --nodes=1 --ntasks=1 "
+        "--cpus-per-task=4 --time=25"
+    )
+    assert len(_starting(lines, f"{launcher} cmake ")) == 2
+    assert lines[-1].endswith("--parallel 4")
+
+
+def test_compute_build_finishes_on_the_login_node_when_tests_are_enabled(
+    tmp_path: Path,
+) -> None:
+    config = _ursa(
+        tmp_path, {"applications.cece.build_node": "compute", **_TESTED_CECE}
+    )
+    lines = render_stage(Stage.BUILD, config, _CECE).text.splitlines()
+    clone = str(config.checkout_dir(_CECE))
+    args = "-DCMAKE_BUILD_TYPE=Debug -DENABLE_ESMF=ON"
+    where = f"build node: compute ({_BUILD_SRUN}), then login (tests)"
+    assert lines[3] == f"echo {shlex.quote(where)}"
+    # Phase 1, the compute-node probe; phase 2, the login-node finish: the
+    # same build directory re-configured with the test stack on, the gates
+    # again, the build reusing the compute-built objects.
+    probe_configure, probe_build = _starting(lines, "srun ")
+    finish_configure, finish_build = _starting(lines, "cmake ")
+    assert probe_configure < probe_build < finish_configure < finish_build
+    assert lines[probe_configure] == (
+        f"{_BUILD_SRUN} cmake -S {clone} -B {clone}/build {args} "
+        f"-DCECE_BUILD_TESTING=OFF 2>&1 | tee {clone}/build/configure.log"
+    )
+    assert lines[finish_configure] == (
+        f"cmake -S {clone} -B {clone}/build {args} "
+        f"-DCECE_BUILD_TESTING=ON 2>&1 | tee {clone}/build/configure.log"
+    )
+    assert lines[probe_build] == (
+        f"{_BUILD_SRUN} cmake --build {clone}/build --target all --parallel 8"
+    )
+    assert lines[finish_build] == (
+        f"cmake --build {clone}/build --target all --parallel 8"
+    )
+    assert finish_build == len(lines) - 1
+    assert "-DCECE_BUILD_TESTING=ON" in lines[finish_configure - 1]  # the note
+    # Every gate is checked after each configure.
+    for needle in ("Found MPI", "netcdf", "CECE dependency ESMF: system"):
+        gates = [
+            i for i, line in enumerate(lines) if needle in line and "grep -" in line
+        ]
+        assert any(probe_configure < i < probe_build for i in gates), needle
+        assert any(finish_configure < i < finish_build for i in gates), needle
+
+
+def test_login_build_with_tests_is_one_configure(tmp_path: Path) -> None:
+    # On the login node the one configure is the build: the test stack is
+    # what cmake_args and targets say, nothing is turned off or back on.
+    config = _ursa(tmp_path, _TESTED_CECE)
+    lines = render_stage(Stage.BUILD, config, _CECE).text.splitlines()
+    assert lines[3] == "echo 'build node: login'"
+    assert len(_starting(lines, "cmake -S")) == 1
+    assert "CECE_BUILD_TESTING" not in "\n".join(lines)
+    assert lines[-1].endswith("--target all --parallel 8")
+
+
+def test_esmf_builds_gate_on_the_systems_esmf(ursa: RunConfig, tmp_path: Path) -> None:
+    # The adapter's own gate: with ESMF on, the configure must have found
+    # the module environment's ESMF. Ahead of the run config's gates.
+    gate = "CECE dependency ESMF: system"
+    assert gate not in render_stage(Stage.BUILD, ursa, _CECE).text
+    config = _ursa(
+        tmp_path,
+        {
+            "applications.cece.cmake_args": ["-DENABLE_ESMF=ON"],
+            "applications.cece.configure_gates": ["CECE dependency Kokkos: system"],
+        },
+    )
+    lines = render_stage(Stage.BUILD, config, _CECE).text.splitlines()
+    log = f"{config.checkout_dir(_CECE)}/build/configure.log"
+    failing = (
+        f"grep -Eq {shlex.quote(gate)} {log} || "
+        f"{{ echo {shlex.quote('configure gate failed: ' + gate)} >&2; exit 1; }}"
+    )
+    kokkos = f"grep -E {shlex.quote('CECE dependency Kokkos: system')} {log}"
+    assert lines.index(failing) < lines.index(kokkos)
+
+
+def test_docker_build_has_no_build_node(local: RunConfig) -> None:
+    # The container build script owns the whole build: no node to name.
+    assert "build node" not in render_stage(Stage.BUILD, local, _CECE).text

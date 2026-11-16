@@ -6,9 +6,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
-from applications.base import ApplicationRunSection, RunConfigView, Stage
+from applications.base import (
+    ApplicationRunSection,
+    BuildNode,
+    RunConfigView,
+    Stage,
+)
 from applications.monetio.settings import MonetioSettings
 from cli.stages import module_block, q, source_lines
 from platforms import Runtime
@@ -19,6 +24,15 @@ class MonetioRunSection(ApplicationRunSection):
         default_factory=list,
         description="Optional pyproject extras installed into the checkout's `.venv`",
     )
+
+    @model_validator(mode="after")
+    def _builds_on_the_login_node(self) -> MonetioRunSection:
+        if self.build_node is BuildNode.COMPUTE:
+            raise ValueError(
+                "build_node: compute is not available: monetio installs from the "
+                "network (uv pip install), which a compute node does not have"
+            )
+        return self
 
 
 def _as_monetio(section: ApplicationRunSection) -> MonetioRunSection:

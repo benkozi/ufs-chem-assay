@@ -5,6 +5,7 @@ own, so a session overlay re-validates one section with the same rules."""
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 from pydantic import ConfigDict, Field, model_validator
@@ -252,6 +253,27 @@ class SlurmSection(StrictModel):
             f"-N 1 -n {self.ntasks} -c {self.cpus}"
         )
         return f"{base} {self.extra_args}".strip()
+
+    def build_launcher(self, *, cpus: int, minutes: int) -> list[str]:
+        """The srun of one compile step under build_node: compute: the
+        account, QOS and partition of the driver jobs, the extra directives
+        verbatim (a cluster, a memory request), then one node, one task,
+        `cpus` cores and a `minutes` limit of its own — a build is not a
+        driver job, so the driver's task count and time limit do not apply."""
+        return [
+            "srun",
+            "-A",
+            self.account,
+            "-q",
+            self.qos,
+            "-p",
+            self.partition,
+            *shlex.split(self.extra_args),
+            "--nodes=1",
+            "--ntasks=1",
+            f"--cpus-per-task={cpus}",
+            f"--time={minutes}",
+        ]
 
     @property
     def srun_args_value(self) -> str:

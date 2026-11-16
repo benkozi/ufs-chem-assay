@@ -449,6 +449,9 @@ class _FakeRunConfigView:
     def checkout_dir(self, _app: object) -> Path:
         return self._checkout
 
+    def build_launcher(self, _section: object, *, cpus: int) -> list[str]:
+        raise AssertionError(f"monetio never builds behind a launcher ({cpus})")
+
 
 def test_monetio_stage_lines_source_build_and_data(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

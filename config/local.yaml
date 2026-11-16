@@ -26,6 +26,10 @@ applications:  # one section per application in the run, keyed by adapter name
     docker_image:  # MONETIO_DOCKER_IMAGE; null = monetio/monetio-dev (unused under native)
     driver_path:  # MONETIO_DRIVER_PATH; null = .venv/bin/monetio
     extras: []  # optional pyproject extras installed into <clone>/.venv
+    build_node: login  # the only choice: the build is a uv install from the network
+    build_minutes: 10  # unused on the login node
+    tests:
+      enabled: false
   cece:
     git_url: git@github.com:ufs-community/CECE.git
     ref: develop
@@ -42,6 +46,10 @@ applications:  # one section per application in the run, keyed by adapter name
     build_jobs: 4
     targets:
       - cece_standalone_driver
+    build_node: login  # compute needs the slurm runtime; unused under docker
+    build_minutes: 10  # unused on the login node
+    tests:  # CECE's own unit tests
+      enabled: false  # true needs -DCMAKE_BUILD_TYPE=Debug and -DENABLE_ESMF=ON in cmake_args
 data:
   warm_cartopy: false
   input_search_path: []  # ASSAY_INPUT_SEARCH_PATH: dirs fetch links url-null inputs from, by basename

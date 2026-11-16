@@ -8,7 +8,12 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from applications.base import ApplicationRunSection, ApplicationSettings
+from applications.base import (
+    ApplicationRunSection,
+    ApplicationSettings,
+    BuildNode,
+    TestsSection,
+)
 from applications.cece.cli import CeceRunSection
 from applications.monetio.cli import MonetioRunSection
 from applications.registry import REGISTRY, get_application
@@ -229,6 +234,134 @@ def test_module_init_follows_the_platform() -> None:
     assert gaea.runtime is Runtime.SLURM
     local = load_run_config(TEMPLATES_DIR / "local.yaml")
     assert local.module_init is ModuleInit.PURGE
+
+
+# ── Build placement and the application's own tests ──────────────────────────
+
+
+def test_build_placement_defaults_to_the_login_node() -> None:
+    for name in ("ursa.yaml", "local.yaml"):
+        config = load_run_config(TEMPLATES_DIR / name)
+        for section in config.applications.values():
+            assert section.build_node is BuildNode.LOGIN
+            assert section.build_minutes == 10
+            assert section.tests == TestsSection(enabled=False)
+            assert config.build_launcher(section, cpus=8) == []
+
+
+def test_compute_build_launcher_is_the_slurm_sections_srun(tmp_path: Path) -> None:
+    path = run_config_file(
+        tmp_path,
+        overrides={
+            "applications.cece.build_node": "compute",
+            "applications.cece.build_minutes": 15,
+            "slurm.extra_args": "--clusters=c6 --mem=0",
+        },
+    )
+    config = load_run_config(path)
+    section = config.applications["cece"]
+    assert section.build_node is BuildNode.COMPUTE
+    assert config.build_launcher(section, cpus=6) == [
+        "srun",
+        "-A",
+        "epic",
+        "-q",
+        "debug",
+        "-p",
+        "u1-compute",
+        "--clusters=c6",
+        "--mem=0",
+        "--nodes=1",
+        "--ntasks=1",
+        "--cpus-per-task=6",
+        "--time=15",
+    ]
+
+
+def test_compute_build_needs_the_slurm_runtime(tmp_path: Path) -> None:
+    # docker: the container builds; native: already inside an allocation.
+    local = run_config_file(
+        tmp_path, "local.yaml", overrides={"applications.cece.build_node": "compute"}
+    )
+    with pytest.raises(
+        ValidationError, match=r"applications\.cece: build_node: compute"
+    ):
+        load_run_config(local)
+    native = run_config_file(
+        tmp_path,
+        overrides={
+            "applications.cece.build_node": "compute",
+            "harness.runtime": "native",
+            "harness.submit_only": False,
+        },
+    )
+    with pytest.raises(
+        ValidationError, match=r"needs the slurm runtime; ursa runs native"
+    ):
+        load_run_config(native)
+
+
+def test_compute_build_needs_a_slurm_section(tmp_path: Path) -> None:
+    path = run_config_file(
+        tmp_path,
+        overrides={
+            "applications.cece.build_node": "compute",
+            "slurm": REMOVE,
+            "sessions": REMOVE,  # their overlays need the section too
+        },
+    )
+    with pytest.raises(ValidationError, match="build_node: compute needs a slurm:"):
+        load_run_config(path)
+
+
+def test_build_minutes_must_be_positive(tmp_path: Path) -> None:
+    path = run_config_file(tmp_path, overrides={"applications.cece.build_minutes": 0})
+    with pytest.raises(ValidationError, match="build_minutes"):
+        load_run_config(path)
+
+
+def test_cece_tests_need_a_debug_build_with_esmf(tmp_path: Path) -> None:
+    # The shipped template builds Release without ESMF: fine, with tests off.
+    enabled: dict[str, object] = {"applications.cece.tests": {"enabled": True}}
+    with pytest.raises(ValidationError) as release:
+        load_run_config(run_config_file(tmp_path, overrides=enabled))
+    message = str(release.value)
+    assert "tests.enabled requires" in message
+    assert "missing: -DCMAKE_BUILD_TYPE=Debug, -DENABLE_ESMF=ON" in message
+    debug_only: dict[str, object] = {
+        **enabled,
+        "applications.cece.cmake_args": ["-DCMAKE_BUILD_TYPE=Debug"],
+    }
+    with pytest.raises(ValidationError, match="missing: -DENABLE_ESMF=ON"):
+        load_run_config(run_config_file(tmp_path, overrides=debug_only))
+    both: dict[str, object] = {
+        **enabled,
+        "applications.cece.cmake_args": [
+            "-DENABLE_ESMF=ON",
+            "-DCMAKE_BUILD_TYPE=Debug",
+        ],
+    }
+    cece = load_run_config(run_config_file(tmp_path, overrides=both)).applications[
+        "cece"
+    ]
+    assert cece.tests.enabled is True
+
+
+def test_tests_section_rejects_unknown_keys(tmp_path: Path) -> None:
+    path = run_config_file(
+        tmp_path, overrides={"applications.cece.tests": {"enabled": False, "nope": 1}}
+    )
+    with pytest.raises(ValidationError, match="nope"):
+        load_run_config(path)
+
+
+def test_monetio_builds_on_the_login_node_only(tmp_path: Path) -> None:
+    # Its build is a uv install from the network: nothing to probe offline.
+    path = run_config_file(
+        tmp_path, "local.yaml", overrides={"applications.monetio.build_node": "compute"}
+    )
+    with pytest.raises(ValidationError, match="monetio installs from the network"):
+        load_run_config(path)
 
 
 def test_explicit_clone_dir_is_used(tmp_path: Path) -> None:

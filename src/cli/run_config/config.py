@@ -18,7 +18,7 @@ from pydantic import (
     model_validator,
 )
 
-from applications.base import Application, ApplicationRunSection
+from applications.base import Application, ApplicationRunSection, BuildNode
 from cli.override import apply_overrides
 from cli.run_config.sections import (
     BaselinesSection,
@@ -123,6 +123,27 @@ class RunConfig(StrictModel):
                 )
         return self
 
+    @model_validator(mode="after")
+    def _compute_builds_have_somewhere_to_go(self) -> RunConfig:
+        # build_node: compute is an srun from a login node: it needs the
+        # slurm runtime (docker builds in the container; native is already
+        # inside an allocation) and the slurm: section's account to charge.
+        for name, section in self.applications.items():
+            if section.build_node is not BuildNode.COMPUTE:
+                continue
+            if self.runtime is not Runtime.SLURM:
+                raise ValueError(
+                    f"applications.{name}: build_node: compute needs the slurm "
+                    f"runtime; {self.platform.value} runs {self.runtime.value} "
+                    "(there is no compute node to build on)"
+                )
+            if self.slurm is None:
+                raise ValueError(
+                    f"applications.{name}: build_node: compute needs a slurm: "
+                    "section (the account, QOS and partition of the compile srun)"
+                )
+        return self
+
     @field_validator("root_dir", mode="before")
     @classmethod
     def _expand_root(cls, value: object) -> object:
@@ -213,6 +234,14 @@ class RunConfig(StrictModel):
         <root_dir>/<the adapter's checkout_dirname>."""
         section = self.applications[app.name]
         return section.clone_dir or self.root_dir / app.checkout_dirname
+
+    def build_launcher(self, section: ApplicationRunSection, *, cpus: int) -> list[str]:
+        """The command prefix of one compile step of `section`: empty on the
+        login node; the slurm: section's srun under build_node: compute."""
+        if section.build_node is not BuildNode.COMPUTE:
+            return []
+        assert self.slurm is not None  # validated at load
+        return self.slurm.build_launcher(cpus=cpus, minutes=section.build_minutes)
 
     # ── sessions ─────────────────────────────────────────────────────────
 

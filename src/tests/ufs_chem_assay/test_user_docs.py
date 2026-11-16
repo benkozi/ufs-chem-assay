@@ -200,6 +200,11 @@ def test_readme_documents_the_new_surfaces() -> None:
         "module reset",
         "gaea-c6",
         "gaea-c7",
+        "build_node",
+        "build_minutes",
+        "tests.enabled",
+        "-DCECE_BUILD_TESTING=OFF",
+        "CECE dependency ESMF: system",
     ):
         assert needle in text, needle
     assert "buid-test-tweaks" not in text

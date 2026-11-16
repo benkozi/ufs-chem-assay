@@ -570,8 +570,37 @@ and a tolerant arborx load); they name no environment — the run config's
 `modulepath` does, or the optional `ASSAY_SPACK_ENV_ROOT` in `module_env`
 — and `test_modulefiles.py` keeps hard-coded roots out. See
 `design/feat/20261113-1348-build-test-kokkos/20261113-1349-build-test-kokkos.md`
-(chunk 1 of that feature; the `test` stage, build placement, toolchains
-and the two new applications follow). The path model is one
+(chunk 1 of that feature).
+
+**Build placement** (2026-11-16, chunk 2 of the same feature) is a key of
+the application section, `build_node: login | compute`
+(`applications.base.BuildNode`), with `build_minutes` for the compute
+case. `RunConfigView.build_launcher(section, cpus=...)` is the command
+prefix of one compile step: empty on the login node; under `compute`,
+`SlurmSection.build_launcher` — `srun -A/-q/-p`, the `extra_args`
+verbatim, `--nodes=1 --ntasks=1 --cpus-per-task=<build_jobs>
+--time=<build_minutes>` — and `RunConfig` refuses `compute` outside the
+slurm runtime or without a `slurm:` section at load. The adapter renders
+the prefix in front of its configure and its build as two separate
+`srun` steps, in the module environment the login shell loaded, and owns
+what must be off for an offline configure: CECE appends
+`-DCECE_BUILD_TESTING=OFF` (GTest and RapidCheck are fetched at configure
+time) and echoes why; monetio's section rejects `compute` (its build is a
+network install). `tests: {enabled}` (`TestsSection`, on every section)
+asks the build stage for the application's own test stack. On the login
+node that is the one configure as written. After a compute-node probe it
+is **phase 2, inside the build stage**: a login-node re-configure of the
+same build directory with `-DCECE_BUILD_TESTING=ON`, every gate again
+(the configure log is overwritten; the second is the one that stays),
+and a build reusing the compute-built objects — rendered only when
+`tests.enabled`, so a tests-disabled compute build is the pure probe and
+the coming `test` stage never compiles. `CeceRunSection` validates the
+rule its tests need: `tests.enabled` requires `-DCMAKE_BUILD_TYPE=Debug`
+and `-DENABLE_ESMF=ON` in `cmake_args`, the error naming what is missing;
+and with `-DENABLE_ESMF=ON` the adapter gates the configure log on
+`CECE dependency ESMF: system`, ahead of the run config's gates. The
+stage's first line echoes the node. The `test` stage, toolchains and the
+two new applications follow. The path model is one
 abstraction: `ComboRoots.driver` is the output root *as the driver sees
 it* — a container path under docker, the host path natively — and
 generated configs carry it in `output.directory` and `driver.log_file`.
@@ -1160,8 +1189,9 @@ All code under `src/`; the project is `uv`-managed with its own
   src/
     applications/
       base.py             # Application ABC (incl. data_dirname, write_config), ApplicationSettings,
-                          #   DriverConfig, SweepBase, SweepSelectorBase, ApplicationRunSection,
-                          #   Stage (the run's stages), RunConfigView (what an adapter reads)
+                          #   DriverConfig, SweepBase, SweepSelectorBase, ApplicationRunSection
+                          #   (with BuildNode and TestsSection), Stage (the run's stages),
+                          #   RunConfigView (what an adapter reads)
       registry.py         # REGISTRY (name -> adapter), get_application, load_suite
       cece/
         application.py    # CeceApplication: the wiring, registered by name
@@ -1262,7 +1292,7 @@ and never an adapter; the adapters import the shared modules freely; the
 registry imports the adapters. Two rules follow, each guarded by a
 subprocess test in `test_import_graph.py`. `base.py` imports nothing from
 `cli`: the `Stage` enum and the `RunConfigView` protocol (the `runtime`,
-`module_init` and `checkout_dir` an adapter may read of the run config) are declared in
+`module_init`, `checkout_dir` and `build_launcher` an adapter may read of the run config) are declared in
 `base.py`, and `cli/stages.py`, `cli/commands/run.py` and the adapters import
 them from there; `base.py`'s only typing-time imports are `combos` and
 `models/suite_config`, under `if TYPE_CHECKING:`. And `cli/run_config/` —

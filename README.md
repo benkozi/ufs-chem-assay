@@ -441,6 +441,8 @@ applications:            # one section per application in the run
     module_env: {}       # exported before the load (what the modulefile reads)
     toolchain_tools: []  # `which` these after the load; empty: the adapter's probe
     configure_gates: []  # extra grep -E patterns the configure log must match
+    build_node: login    # or compute: configure and build behind srun
+    tests: {enabled: false}  # build the application's own test stack
     ...
 harness:
   suite_config: simple-maccity-suite.yaml
@@ -494,6 +496,30 @@ They carry no environment of their own — name it in the run config:
 (`ASSAY_SPACK_ENV_ROOT: /path/to/spack-stack/envs/<env>` in `module_env`
 is the one-variable alternative to the second path: the modulefiles turn
 it into the same `modules/Core` entry.)
+
+**Where the build runs is a key too.** `build_node: login` (the default)
+configures and builds where the CLI runs, with network access.
+`build_node: compute` — slurm runtime only, and it needs the `slurm:`
+section — puts the configure and the build each behind its own `srun`
+(the section's account, QOS, partition and `extra_args`, one task with
+`build_jobs` cores, `build_minutes` minutes), in the module environment
+the login shell loaded: an offline compile probe, the way a workflow that
+compiles on compute nodes must build. The adapter turns off what would
+reach the network at configure time and says so in the log; CECE
+configures with `-DCECE_BUILD_TESTING=OFF`, because its test stack
+fetches GTest and RapidCheck. `tests.enabled: true` asks the build stage
+for the application's own test stack: on the login node that is the one
+configure as `cmake_args` and `targets` say; after a compute-node probe
+it is a second, login-node configure of the same build directory with
+the test stack back on, the gates again, and a build that reuses the
+compute-built objects. For CECE, `tests.enabled` requires
+`-DCMAKE_BUILD_TYPE=Debug` and `-DENABLE_ESMF=ON` in `cmake_args` (a
+validation error names the missing flag) — its unit tests are built
+against a Debug build with ESMF; any other build keeps the tests off.
+And whenever `-DENABLE_ESMF=ON` is among the `cmake_args`, the configure
+log must show `CECE dependency ESMF: system`: the environment's ESMF,
+never a fetched one. The build stage's first line names the node
+(`build node: login`, or `compute (srun ...)`, `then login (tests)`).
 
 **Command-line arguments are overrides on the file.** `--override`
 (`-o`) takes `key:path=value` entries, repeatable and several per flag;
