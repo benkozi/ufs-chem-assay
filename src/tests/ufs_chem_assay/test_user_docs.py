@@ -11,11 +11,12 @@ from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _RUNBOOK = _REPO_ROOT / "docs" / "ursa-runbook.md"
 _GCAFS_RUNBOOK = _REPO_ROOT / "docs" / "gcafs-anthro-runbook.md"
+_KOKKOS_RUNBOOK = _REPO_ROOT / "docs" / "kokkos-runbook.md"
 _README = _REPO_ROOT / "README.md"
 
 
 def _user_facing_files() -> list[Path]:
-    files = [_RUNBOOK, _GCAFS_RUNBOOK]
+    files = [_RUNBOOK, _GCAFS_RUNBOOK, _KOKKOS_RUNBOOK]
     files += sorted((_REPO_ROOT / "config").glob("*.yaml"))
     files += sorted((_REPO_ROOT / "modulefiles").glob("*.lua"))
     return files
@@ -25,6 +26,7 @@ def test_templates_live_in_config() -> None:
     assert TEMPLATES_DIR == _REPO_ROOT / "config"
     assert sorted(p.name for p in TEMPLATES_DIR.glob("*.yaml")) == [
         "local.yaml",
+        "ursa-kokkos.yaml",
         "ursa.yaml",
     ]
     assert not (_REPO_ROOT / "scripts").exists()  # nothing hand-written ships there
@@ -53,7 +55,9 @@ def test_nothing_user_specific(path: Path) -> None:
         assert needle not in text, f"{path.name} contains {needle!r}"
 
 
-@pytest.mark.parametrize("path", [_RUNBOOK, _GCAFS_RUNBOOK], ids=lambda p: p.name)
+@pytest.mark.parametrize(
+    "path", [_RUNBOOK, _GCAFS_RUNBOOK, _KOKKOS_RUNBOOK], ids=lambda p: p.name
+)
 def test_runbook_never_mentions_the_design(path: Path) -> None:
     assert "design/" not in path.read_text()
     assert "design doc" not in path.read_text().lower()
@@ -230,6 +234,8 @@ def test_readme_documents_the_new_surfaces() -> None:
         "<root_dir>/<toolchain>",
         "selected_toolchains",
         "-DMPIEXEC_EXECUTABLE",
+        "config/ursa-kokkos.yaml",
+        "kokkos-runbook.md",
     ):
         assert needle in text, needle
     assert "buid-test-tweaks" not in text
@@ -260,3 +266,46 @@ def test_documented_driver_commands_name_an_application_or_a_suite() -> None:
                 f"{path.name}: {command.strip()}"
             )
     assert "`cece` today" not in _README.read_text()  # monetio is registered too
+
+
+def test_kokkos_runbook_covers_the_use_case() -> None:
+    # The runbook of config/ursa-kokkos.yaml: what the template builds and
+    # tests, what to edit first, the commands, the same steps by hand, and
+    # what to record from a first run. No user's paths, no forks by name.
+    text = _KOKKOS_RUNBOOK.read_text()
+    for needle in (
+        "ursa-runbook.md",
+        "config/ursa-kokkos.yaml",
+        "modulefiles/",
+        "modules/Core",
+        "--toolchain all",
+        "--stage source --stage build --stage test",
+        "--dry-run",
+        "02-build-cece-oneapi.sh",
+        "04-test-cece-gnu.sbatch",
+        "watch --only tests",
+        "report --only tests",
+        "cancel --tests-root",
+        "record-benchmarks --tests-root",
+        "submit-tests",
+        "--resubmit",
+        "tests.yaml",
+        "--session simple-maccity",
+        "module purge",
+        "module load ufs_ursa.oneapi",
+        "srun ",
+        "-DCECE_BUILD_TESTING=OFF",
+        "-DCATCHEM_BUILD_MUSICA=OFF",
+        "Using system Kokkos",
+        "CECE dependency Kokkos: system",
+        "SMOKE TEST PASSED",
+        "ctest --test-dir build",
+        "module avail kokkos",
+        "kokkos_ver",
+        "mpi_launcher",
+        "report-mem",
+    ):
+        assert needle in text, needle
+    for absent in ("benkozi", "Richard.Grubin", "build-test-kokkos.sh"):
+        assert absent not in text, absent
+    assert "example" not in text.lower()

@@ -736,7 +736,20 @@ log lookup includes the toolchain); `submit-tests` and `evaluate-tests`
 take `--toolchain` and work on exactly one (`one_toolchain_config`). The
 test ledger and `TestBenchmarkRow` carry the toolchain; `run.yaml` and
 the driver `BenchmarkRow` do not — a driver row's `modulefile` and
-`build_type` tell the toolchains apart. The path model is one
+`build_type` tell the toolchains apart.
+
+**The kokkos template** (2026-11-16, chunk 6) is the shipped use of the
+four pieces above: `config/ursa-kokkos.yaml` declares the `oneapi` and
+`gnu` toolchains (the harness's `ufs_ursa.*` modulefiles over each
+environment's `modules/Core`, the ArborX gate, `mpiexec` for Intel MPI
+and `srun` for OpenMPI), builds `cece`, `catchem` and `kokkos-smoke` with
+`build_node: compute` and `tests.enabled`, and keeps one named session
+that the standard run — the source, build and test stages — does not
+touch (`record_benchmarks` and baselines are off: the build is Debug).
+Unlike `local.yaml` and `ursa.yaml` it lists the keys that matter to it
+rather than every key. `docs/kokkos-runbook.md` is its runbook; the
+template's two tests (in `test_toolchains.py`) load it and render every
+toolchain's scripts. The path model is one
 abstraction: `ComboRoots.driver` is the output root *as the driver sees
 it* — a container path under docker, the host path natively — and
 generated configs carry it in `output.directory` and `driver.log_file`.
@@ -1332,8 +1345,11 @@ All code under `src/`; the project is `uv`-managed with its own
   README.md               # user-facing setup + run instructions
   docs/ursa-runbook.md    # manual native run on Ursa (what the CLI automates)
   docs/gcafs-anthro-runbook.md  # the global anthropogenic use case on top of it
+  docs/kokkos-runbook.md  # config/ursa-kokkos.yaml: three applications, two toolchains, by hand
   config/                 # run-config templates: local.yaml (docker), ursa.yaml (native + slurm;
-                          #   sessions: simple-maccity, gcafs-anthro, a commented exhaustive-maccity)
+                          #   sessions: simple-maccity, gcafs-anthro, a commented exhaustive-maccity),
+                          #   ursa-kokkos.yaml (toolchains oneapi + gnu; cece, catchem and
+                          #   kokkos-smoke built as the offline probe and tested; sessions opt-in)
   modulefiles/            # harness-owned UFS platform modulefiles (ufs_common, ufs_ursa.oneapi,
                           #   ufs_ursa.gnu, ufs_gaeac6.oneapi): no environment root of their own
   design/design.md

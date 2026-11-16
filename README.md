@@ -428,7 +428,11 @@ application's section under `applications:` mirrors its own settings
 (`CECE_*`) plus how to obtain and build it. The shipped templates
 (`config/local.yaml` for a laptop, `config/ursa.yaml` for Ursa — whose
 `sessions:` map carries `simple-maccity` and the gcafs-anthro use case)
-list every key and run as-is from a checkout laid out like the runbook:
+list every key and run as-is from a checkout laid out like the runbook.
+A third, `config/ursa-kokkos.yaml`, builds and tests CECE, CATChem and
+the Kokkos smoke project against a spack-stack environment with two
+toolchains (below; its runbook is
+[docs/kokkos-runbook.md](docs/kokkos-runbook.md)):
 
 ```yaml
 platform: ursa
@@ -725,6 +729,10 @@ the last `run` selected (`--toolchain` narrows them), labelling each
 session and test run with its toolchain (`gnu/simple-maccity`, `tests
 cece/gnu`). Without a `toolchains:` map nothing changes: one unnamed
 build, the module keys on the application section, today's paths.
+`config/ursa-kokkos.yaml` is the shipped use of all of this: the
+`oneapi` and `gnu` toolchains on Ursa, the three applications built as
+the offline compile probe and tested, the driver sessions left to be
+asked for.
 
 **Sessions.** `sessions:` is a map of session name → an overlay on the
 file's `harness:`, `slurm:` and `baselines:` sections, one level deep: an

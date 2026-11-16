@@ -11,7 +11,7 @@ import yaml
 from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
-from applications.base import MpiLauncher, Stage, ToolchainSection
+from applications.base import BuildNode, MpiLauncher, Stage, ToolchainSection
 from applications.registry import get_application
 from benchmarks import read_test_benchmarks_csv
 from cli.main import main
@@ -23,6 +23,7 @@ from cli.stages import render_stage
 from jobs import read_test_ledger
 from logs import LOGGER_NAME
 from tests.ufs_chem_assay.run_configs import (
+    TEMPLATES_DIR,
     TOOLCHAIN_OVERRIDES,
     TOOLCHAINS,
     load_run_config,
@@ -721,3 +722,109 @@ def test_the_report_finds_a_toolchains_logs(tmp_path: Path) -> None:
     )
     assert summary.toolchain == "gnu"
     assert summary.label == "gnu/simple-maccity"
+
+
+# ── config/ursa-kokkos.yaml, as shipped ──────────────────────────────────────
+
+_KOKKOS = TEMPLATES_DIR / "ursa-kokkos.yaml"
+
+
+def test_the_kokkos_template_loads_as_shipped() -> None:
+    config = load_run_config(_KOKKOS)
+    assert config.platform.value == "ursa"
+    assert list(config.toolchains) == ["oneapi", "gnu"]
+    assert config.application_names == ["cece", "catchem", "kokkos-smoke"]
+    assert config.toolchains["oneapi"].mpi_launcher is MpiLauncher.MPIEXEC
+    assert config.toolchains["gnu"].mpi_launcher is MpiLauncher.SRUN
+    for build in toolchain_configs(config, ["all"]):
+        for name, section in build.applications.items():
+            # Every application: the harness's UFS modulefile for this
+            # compiler, against the environment's own module directory;
+            # built as the offline probe; tested.
+            assert section.modulefile == f"ufs_ursa.{build.toolchain}", name
+            harness_files, environment = section.modulepath
+            assert harness_files == Path("modulefiles")
+            assert environment.is_absolute()
+            assert environment.parts[-2:] == ("modules", "Core")
+            assert section.build_node is BuildNode.COMPUTE, name
+            assert section.tests.enabled is True, name
+            assert _ARBORX in section.configure_gates, name  # both envs carry it
+        cece = build.applications["cece"]
+        assert {"-DCMAKE_BUILD_TYPE=Debug", "-DENABLE_ESMF=ON"} <= set(
+            cece.build_flags()
+        )
+        assert "CECE dependency Kokkos: system" in cece.configure_gates
+        assert cece.tests.ntasks == 4
+        assert build.applications["catchem"].tests.ntasks == 1
+    # The driver sessions are there to be asked for, not run by default
+    # against a Debug build; nothing is recorded into the committed files.
+    assert list(config.sessions) == ["simple-maccity"]
+    assert config.harness.submit_only is True
+    assert config.harness.record_benchmarks is False
+    assert config.baselines.enabled is False
+    text = _KOKKOS.read_text()
+    assert not any(line.startswith("root_dir:") for line in text.splitlines())
+    for command in (
+        "--application all --toolchain all --stage source --stage build --stage test",
+        "ufs-chem-assay watch --only tests",
+        "ufs-chem-assay report --only tests",
+        "--stage data --stage harness --session simple-maccity",
+        "docs/kokkos-runbook.md",
+    ):
+        assert command in text, command
+
+
+def test_the_kokkos_template_renders_every_toolchain(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    run_bash = mocker.patch("cli.commands.run.run_bash")
+    command = ["run", f"--config-file={_KOKKOS}", f"--root-dir={tmp_path / 'root'}"]
+    stages = ["--stage=source", "--stage=build", "--stage=test"]
+    assert (
+        main([*command, "--application=all", "--toolchain=all", *stages, "--dry-run"])
+        == 0
+    )
+    run_bash.assert_not_called()
+    scripts = tmp_path / "root" / "scripts"
+    expected = [
+        f"{slot}-{stage}-{app}-{toolchain}.sh"
+        for toolchain in ("oneapi", "gnu")
+        for slot, stage, apps in (
+            (
+                "01",
+                "source",
+                ("cece", "catchem"),
+            ),  # kokkos-smoke ships with the harness
+            ("02", "build", ("cece", "catchem", "kokkos-smoke")),
+            ("04", "test", ("cece", "catchem", "kokkos-smoke")),
+        )
+        for app in apps
+    ]
+    assert sorted(p.name for p in scripts.glob("*.sh")) == sorted(expected)
+    assert len(list(scripts.glob("04-test-*.sbatch"))) == 6
+    gnu = (scripts / "02-build-cece-gnu.sh").read_text()
+    assert "module load ufs_ursa.gnu" in gnu
+    assert '-DMPIEXEC_EXECUTABLE="$(command -v srun)"' in gnu
+    assert "-DCECE_BUILD_TESTING=OFF" in gnu  # the compute-node probe
+    assert "-DCECE_BUILD_TESTING=ON" in gnu  # the login-node finish
+    oneapi = (scripts / "02-build-cece-oneapi.sh").read_text()
+    assert "-DCMAKE_CXX_FLAGS=-fp-model=precise" in oneapi
+    assert "MPIEXEC" not in oneapi
+    # The opt-in driver session, against one toolchain's build.
+    assert (
+        main(
+            [
+                *command,
+                "--application=cece",
+                "--toolchain=oneapi",
+                "--stage=data",
+                "--stage=harness",
+                "--session=simple-maccity",
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    harness = (scripts / "05-harness-cece-oneapi-simple-maccity.sh").read_text()
+    assert f"export CECE_ROOT_DIR={tmp_path}/root/oneapi/CECE" in harness
+    assert "export CECE_MODULEFILE=ufs_ursa.oneapi" in harness
