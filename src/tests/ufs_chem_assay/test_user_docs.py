@@ -17,6 +17,7 @@ _README = _REPO_ROOT / "README.md"
 def _user_facing_files() -> list[Path]:
     files = [_RUNBOOK, _GCAFS_RUNBOOK]
     files += sorted((_REPO_ROOT / "config").glob("*.yaml"))
+    files += sorted((_REPO_ROOT / "modulefiles").glob("*.lua"))
     return files
 
 
@@ -40,10 +41,15 @@ def test_templates_carry_the_applications_map(name: str) -> None:
     assert "ufs-community/CECE" in raw["applications"]["cece"]["git_url"]
 
 
+def test_modulefiles_are_user_facing() -> None:
+    names = {path.name for path in _user_facing_files()}
+    assert {"ufs_common.lua", "ufs_ursa.oneapi.lua"} <= names
+
+
 @pytest.mark.parametrize("path", _user_facing_files(), ids=lambda p: p.name)
 def test_nothing_user_specific(path: Path) -> None:
     text = path.read_text()
-    for needle in ("Benjamin.Koziol", "my_stmp", "NCEPDEV/stmp"):
+    for needle in ("Benjamin.Koziol", "Richard.Grubin", "my_stmp", "NCEPDEV/stmp"):
         assert needle not in text, f"{path.name} contains {needle!r}"
 
 
@@ -183,6 +189,17 @@ def test_readme_documents_the_new_surfaces() -> None:
         "--output-root PATH",
         "--write PATH",
         "pipeline-error",
+        "CECE_MODULEPATH",
+        "CECE_MODULE_ENV",
+        "modulepath",
+        "module_env",
+        "toolchain_tools",
+        "configure_gates",
+        "modulefiles/ufs_ursa.oneapi.lua",
+        "ASSAY_SPACK_ENV_ROOT",
+        "module reset",
+        "gaea-c6",
+        "gaea-c7",
     ):
         assert needle in text, needle
     assert "buid-test-tweaks" not in text
@@ -195,3 +212,21 @@ def test_user_docs_never_say_example() -> None:
     # configurations of an application, declared by suites.
     for path in (_README, _RUNBOOK, *sorted(TEMPLATES_DIR.glob("*.yaml"))):
         assert "example" not in path.read_text().lower(), path.name
+
+
+def test_documented_driver_commands_name_an_application_or_a_suite() -> None:
+    # Several applications are registered, so a bare
+    # `pytest src/tests/test_driver_combos.py` is a usage error ("pass
+    # --application or --suite-config"): every documented command selects.
+    for path in (_README, _RUNBOOK, _GCAFS_RUNBOOK):
+        joined = path.read_text().replace("\\\n", " ")  # shell continuations
+        commands = [
+            line
+            for line in joined.splitlines()
+            if "src/tests/test_driver_combos.py" in line and "pytest" in line
+        ]
+        for command in commands:
+            assert "--application" in command or "--suite-config" in command, (
+                f"{path.name}: {command.strip()}"
+            )
+    assert "`cece` today" not in _README.read_text()  # monetio is registered too

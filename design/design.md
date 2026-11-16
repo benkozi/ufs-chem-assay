@@ -165,7 +165,7 @@ session each.
 **Two settings namespaces.** Harness-wide settings (`settings.Settings`)
 read `ASSAY_*`; each adapter's
 `ApplicationSettings` subclass (`CeceSettings`: `root_dir`, `docker_image`,
-`driver_path`, `modulefile`) reads its own prefix. Both classes ignore the
+`driver_path`, `modulefile`, `modulepath`, `module_env`) reads its own prefix. Both classes ignore the
 other's keys in the shared `.env`.
 
 **Every artifact names the application.** An `application` column sits
@@ -524,7 +524,7 @@ the pipeline's own `ERROR` lines from the newest resume log
 (`pipeline-error`) — with no Slurm call, so it works on a downloaded root
 and after the jobs are gone; `watch` ends with it. Each job runs
 from a rendered `<combo_id>.sbatch` (Jinja2 template) kept beside the
-combo's artifacts — directives, `CECE_MODULEFILE` load, `ASSAY_JOB_ENV`,
+combo's artifacts — directives, the module block (below), `ASSAY_JOB_ENV`,
 and the driver behind `srun ${ASSAY_SRUN_ARGS}` (`--ntasks=<slurm.ntasks>`
 plus `slurm.srun_args`; `sbatch -n` renders from the same `ntasks`, and
 `slurm.extra_args` appends directives such as `--mem=0`), bracketed by
@@ -537,7 +537,41 @@ property of the run, not of the configuration under test; and
 `native` — the driver as a host process, `cwd` = the application checkout,
 prefixed by the `launcher` setting, for a session inside an allocation. The platform is detected from the
 hostname (`ASSAY_PLATFORM` overrides; `local` when nothing matches) and
-`run.yaml` records `platform`, `runtime`, and `modulefile`. The path model is one
+`run.yaml` records `platform`, `runtime`, and `modulefile`. `gaea-c6` and
+`gaea-c7` are platforms too (2026-11-16): slurm by default, detected from
+the login-node hostnames (`gaea6\d+` — C6 is `gaea61`–`gaea68` — and
+`gaea7\d+` for C7 by the same scheme, to be confirmed on a first login;
+the run configs name the platform anyway), and without an `ACCOUNTING`
+entry until their `sacct` is confirmed — a Gaea run records the harness's
+own clock.
+
+**The module block** (2026-11-16) is one rendering, `lmod.module_lines`,
+for the build stage (`cli/stages.py:module_block`, from the run config's
+application section) and for every driver job (`runner.job_module_lines`,
+from the `ApplicationSettings` the harness stage exported), so a job loads
+exactly what the build loaded: Lmod's guarded init, `module <init>`, one
+`export` per `module_env` entry (before the load — the modulefile reads
+them), one `module use` per `modulepath` directory (default: the
+checkout's own `modulefiles`; a relative run-config entry is under the
+harness checkout and is exported absolute), `module load <modulefile>`,
+`module list`. `<init>` is a platform fact beside `ACCOUNTING`
+(`platforms.MODULE_INIT`, read through `RunConfigView.module_init`):
+`purge` on Ursa and by default, `reset` on Gaea, where a purge strips
+Cray's `craype`/`PrgEnv` machinery; the harness venv's shell is cleaned
+the same way before `unset PYTHONPATH`. `modulefile: null` switches the
+whole block off. Two more section keys are the build stage's alone:
+`toolchain_tools` (the `which` probe after the load; empty keeps the
+adapter's default) and `configure_gates` (grep -E patterns the configure
+log must match after the adapter's own gates and before the build, each
+rendered as a failing check and then a print of the matched lines). The
+harness ships UFS platform modulefiles under the top-level `modulefiles/`
+(copies of ufs-weather-model `feature/ss2.x` plus kokkos, kokkos-kernels
+and a tolerant arborx load); they name no environment — the run config's
+`modulepath` does, or the optional `ASSAY_SPACK_ENV_ROOT` in `module_env`
+— and `test_modulefiles.py` keeps hard-coded roots out. See
+`design/feat/20261113-1348-build-test-kokkos/20261113-1349-build-test-kokkos.md`
+(chunk 1 of that feature; the `test` stage, build placement, toolchains
+and the two new applications follow). The path model is one
 abstraction: `ComboRoots.driver` is the output root *as the driver sees
 it* — a container path under docker, the host path natively — and
 generated configs carry it in `output.directory` and `driver.log_file`.
@@ -717,8 +751,9 @@ the one flag that feeds a setting; see Pytest integration):
 - `settings.Settings` — **harness-wide**, env prefix `ASSAY_` (init kwargs >
   `ASSAY_` environment > `ASSAY_` `.env` > default).
 - the adapter's `ApplicationSettings` subclass (`CeceSettings`, prefix
-  `CECE_`) — the checkout root, image, driver path, modulefile, and the
-  checkout's commit SHA for run.yaml.
+  `CECE_`) — the checkout root, image, driver path, the module environment
+  (modulefile, modulepath, module_env), and the checkout's commit SHA for
+  run.yaml.
 
 Both are **frozen** (constructed once at sessionstart) and `extra="ignore"`,
 since the one cwd-relative **`.env` file** (gitignored — it carries
@@ -1095,6 +1130,8 @@ The CECE adapter (`CeceSettings`):
 | `docker_image`   | `CECE_DOCKER_IMAGE`   | `cece/cece-dev`      |
 | `driver_path`    | `CECE_DRIVER_PATH`    | `./build/cece_standalone_driver` |
 | `modulefile`     | `CECE_MODULEFILE`     | unset                |
+| `modulepath`     | `CECE_MODULEPATH`     | unset → `<checkout>/modulefiles`; `os.pathsep`-separated |
+| `module_env`     | `CECE_MODULE_ENV`     | empty; `NAME=VALUE` pairs exported before `module load` |
 
 `config_search_path`, when set, overrides normal config resolution: the
 search directory is prepended to the suite's relative `config_path`, kept
@@ -1117,6 +1154,8 @@ All code under `src/`; the project is `uv`-managed with its own
   docs/gcafs-anthro-runbook.md  # the global anthropogenic use case on top of it
   config/                 # run-config templates: local.yaml (docker), ursa.yaml (native + slurm;
                           #   sessions: simple-maccity, gcafs-anthro, a commented exhaustive-maccity)
+  modulefiles/            # harness-owned UFS platform modulefiles (ufs_common, ufs_ursa.oneapi,
+                          #   ufs_ursa.gnu, ufs_gaeac6.oneapi): no environment root of their own
   design/design.md
   src/
     applications/
@@ -1167,7 +1206,9 @@ All code under `src/`; the project is `uv`-managed with its own
       run_report.py       # the per-root classifier (SessionSummary, Issue, RunReport)
                           #   and its renderer; `report` and `watch` both end with it
     identity.py           # HARNESS_NAME, HARNESS_ROOT, harness_version/commit
-    platforms.py          # Platform / Runtime enums, hostname detection
+    platforms.py          # Platform / Runtime enums, hostname detection, ACCOUNTING and
+                          #   MODULE_INIT (purge / reset) per platform
+    lmod.py               # module_lines: the one module block of stage and job scripts
     templates/driver-job.sbatch.j2  # the slurm runtime's per-driver job script
     analysis.py           # descriptive stats (dask distributed), CSV writing
     baselines/            # models (conventions, manifest, records), plan (the gate,
@@ -1220,8 +1261,8 @@ Import direction (2026-10-16): the shared modules import `applications/base.py`
 and never an adapter; the adapters import the shared modules freely; the
 registry imports the adapters. Two rules follow, each guarded by a
 subprocess test in `test_import_graph.py`. `base.py` imports nothing from
-`cli`: the `Stage` enum and the `RunConfigView` protocol (the `runtime` and
-`checkout_dir` an adapter may read of the run config) are declared in
+`cli`: the `Stage` enum and the `RunConfigView` protocol (the `runtime`,
+`module_init` and `checkout_dir` an adapter may read of the run config) are declared in
 `base.py`, and `cli/stages.py`, `cli/commands/run.py` and the adapters import
 them from there; `base.py`'s only typing-time imports are `combos` and
 `models/suite_config`, under `if TYPE_CHECKING:`. And `cli/run_config/` —

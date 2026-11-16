@@ -44,8 +44,16 @@ def test_prefixes() -> None:
 def test_no_application_settings_on_the_harness_model(
     clean_env: pytest.MonkeyPatch,
 ) -> None:
-    # root_dir / docker_image / driver_path / modulefile are the adapters'.
-    for name in ("root_dir", "docker_image", "driver_path", "modulefile"):
+    # root_dir / docker_image / driver_path / the module environment are the
+    # adapters'.
+    for name in (
+        "root_dir",
+        "docker_image",
+        "driver_path",
+        "modulefile",
+        "modulepath",
+        "module_env",
+    ):
         assert name not in Settings.model_fields
     clean_env.setenv("CECE_ROOT_DIR", "/host/cece")
     assert not hasattr(Settings(), "root_dir")

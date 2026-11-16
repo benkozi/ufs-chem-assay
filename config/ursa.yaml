@@ -21,7 +21,11 @@ applications:  # one section per application in the run, keyed by adapter name
     ref: develop
     clone_dir:  # default <root_dir>/CECE; an existing checkout is used as-is
     update_source: false  # true: fetch, checkout ref, pull --ff-only, submodule update --init --recursive
-    modulefile: cece_ursa.intelllvm  # CECE_MODULEFILE: from <clone>/modulefiles after `module purge`
+    modulefile: cece_ursa.intelllvm  # CECE_MODULEFILE: loaded after `module purge` (`module reset` on Gaea)
+    modulepath: []  # CECE_MODULEPATH: dirs to `module use` first; empty = <clone>/modulefiles; relative = in this repo
+    module_env: {}  # CECE_MODULE_ENV: exported before the load (what the modulefile reads, e.g. a <name>_ver pin)
+    toolchain_tools: []  # `which` these after the load; empty = cmake and $CC $CXX $FC
+    configure_gates: []  # extra grep -E patterns the configure log must match before the build
     docker_image:  # CECE_DOCKER_IMAGE; unused under slurm
     driver_path:  # CECE_DRIVER_PATH; null = the adapter's default (./build/cece_standalone_driver)
     cmake_args:

@@ -35,8 +35,9 @@ from jobs import (
     submit_job,
     wait_for_job,
 )
+from lmod import module_lines as lmod_lines
 from models.conventions import CONVENTIONS
-from platforms import Runtime
+from platforms import Runtime, module_init
 from settings import Settings
 
 # The slurm job-script template: one rendered `<combo_id>.sbatch` per driver
@@ -83,7 +84,7 @@ def render_job_script(
     root_dir: Path,
     minutes: int,
     directives: list[str],
-    modulefile: str | None,
+    module_lines: list[str],
     env: dict[str, str],
     command: str,
     srun_args: str,
@@ -91,8 +92,8 @@ def render_job_script(
     extra: dict[str, object] | None = None,
 ) -> str:
     """The job script text for one command: every per-job setting as a
-    #SBATCH directive, the module block when a modulefile is given, the
-    exports, then `srun <srun_args> <command>` — MPI programs inside a batch
+    #SBATCH directive, the module block (`module_lines`: lmod.module_lines,
+    empty for no module environment), the exports, then `srun <srun_args> <command>` — MPI programs inside a batch
     job need Slurm's PMI endpoint, which only srun provides — bracketed by
     tic/toc timestamps and followed by RDHPCS's report-mem when present, so
     the job's output records its own wall time and memory."""
@@ -110,7 +111,7 @@ def render_job_script(
         root_dir=str(root_dir),
         minutes=minutes,
         directives=directives,
-        modulefile=modulefile,
+        module_lines=module_lines,
         env=env,
         command=command,
         srun_args=srun_args,
@@ -133,6 +134,24 @@ def driver_command(
         else app.driver_arguments(driver_yaml, host_yaml=host_yaml)
     )
     return [app_settings.driver_path, *args]
+
+
+def job_module_lines(
+    settings: Settings, app_settings: ApplicationSettings
+) -> list[str]:
+    """The module block of a driver job: the application's modulefile loaded
+    from its module paths (default: the checkout's own modulefiles) after
+    its module_env exports, cleared the platform's way — what the build
+    stage loaded, read back from the settings the harness stage exported.
+    Empty without a modulefile."""
+    if app_settings.modulefile is None:
+        return []
+    return lmod_lines(
+        init=module_init(settings.platform),
+        env=app_settings.module_env_pairs,
+        paths=app_settings.resolved_modulepath(),
+        modulefile=app_settings.modulefile,
+    )
 
 
 def job_script_path(out_path: Path) -> Path:
@@ -162,7 +181,7 @@ def write_job_script(
             root_dir=app_settings.root_dir,
             minutes=slurm_minutes(timeout_s),
             directives=sbatch_directives(settings.sbatch_args),
-            modulefile=app_settings.modulefile,
+            module_lines=job_module_lines(settings, app_settings),
             env=settings.job_env_pairs,
             command=" ".join(
                 shlex.quote(part)

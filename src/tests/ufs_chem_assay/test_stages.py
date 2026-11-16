@@ -3,6 +3,7 @@ per application. Golden-line assertions — the runbook (docs/ursa-runbook.md)
 and these scripts must stay recognisably the same commands."""
 
 import os
+import shlex
 from pathlib import Path
 
 import pytest
@@ -614,3 +615,125 @@ def test_session_runtime_override_exports_per_session_runtime(tmp_path: Path) ->
     ).text
     assert "export ASSAY_RUNTIME=docker" in docker_text
     assert "export ASSAY_RUNTIME=native" in native_text
+
+
+# ── The module environment: paths, exports, probes, gates ────────────────────
+
+_KOKKOS_ENV: dict[str, object] = {
+    "applications.cece.modulefile": "ufs_ursa.oneapi",
+    "applications.cece.modulepath": ["modulefiles", "/envs/ue-oneapi/modules/Core"],
+    "applications.cece.module_env": {"kokkos_ver": "4.5.01", "arborx_ver": "2.0"},
+}
+
+
+def test_default_module_environment_is_the_checkouts_modulefiles(
+    ursa: RunConfig,
+) -> None:
+    # Nothing but `modulefile` set: purge, the clone's own modulefiles, the
+    # compiler-variable probe — exactly what the runbook does by hand.
+    lines = render_stage(Stage.BUILD, ursa, _CECE).text.splitlines()
+    clone = str(ursa.checkout_dir(_CECE))
+    start = lines.index("module purge")
+    assert lines[start : start + 4] == [
+        "module purge",
+        f"module use {clone}/modulefiles",
+        "module load cece_ursa.intelllvm",
+        "module list",
+    ]
+    assert "which cmake ${CC:-} ${CXX:-} ${FC:-}" in lines
+    assert not any("configure gate failed" in line for line in lines)
+
+
+def test_build_stage_uses_the_configured_module_environment(tmp_path: Path) -> None:
+    config = _ursa(tmp_path, _KOKKOS_ENV)
+    lines = render_stage(Stage.BUILD, config, _CECE).text.splitlines()
+    clone = str(config.checkout_dir(_CECE))
+    start = lines.index("module purge")
+    assert lines[start : start + 7] == [
+        "module purge",
+        "export kokkos_ver=4.5.01",  # before the load: the modulefile reads it
+        "export arborx_ver=2.0",
+        f"module use {HARNESS_ROOT}/modulefiles",  # relative: the harness checkout
+        "module use /envs/ue-oneapi/modules/Core",  # absolute: as written
+        "module load ufs_ursa.oneapi",
+        "module list",
+    ]
+    assert f"module use {clone}/modulefiles" not in lines  # replaced, not added
+
+
+def test_build_stage_probes_the_configured_toolchain_tools(tmp_path: Path) -> None:
+    tools = ["mpiicx", "mpiicpx", "mpiifx", "cmake", "ctest"]
+    config = _ursa(tmp_path, {"applications.cece.toolchain_tools": tools})
+    lines = render_stage(Stage.BUILD, config, _CECE).text.splitlines()
+    assert "which mpiicx mpiicpx mpiifx cmake ctest" in lines
+    assert "which cmake ${CC:-} ${CXX:-} ${FC:-}" not in lines
+    assert lines.index("module list") < lines.index(
+        "which mpiicx mpiicpx mpiifx cmake ctest"
+    )
+
+
+def test_build_stage_gates_the_configure_log_on_the_configured_claims(
+    tmp_path: Path,
+) -> None:
+    gates = [
+        "CECE dependency Kokkos: system",
+        "AXIS: ArborX .* found via find_package",
+    ]
+    config = _ursa(tmp_path, {"applications.cece.configure_gates": gates})
+    lines = render_stage(Stage.BUILD, config, _CECE).text.splitlines()
+    log = f"{config.checkout_dir(_CECE)}/build/configure.log"
+    build = next(i for i, line in enumerate(lines) if line.startswith("cmake --build"))
+    for gate in gates:
+        failing = (
+            f"grep -Eq {shlex.quote(gate)} {log} || "
+            f"{{ echo {shlex.quote('configure gate failed: ' + gate)} >&2; exit 1; }}"
+        )
+        showing = f"grep -E {shlex.quote(gate)} {log}"  # the matched line, in the log
+        assert lines.index(failing) + 1 == lines.index(showing)
+        assert lines.index(showing) < build  # a failed gate never builds
+    # The adapter's own gates stay ahead of the configured ones.
+    mpi = next(i for i, line in enumerate(lines) if "Found MPI" in line)
+    assert mpi < lines.index(f"grep -E {shlex.quote(gates[0])} {log}")
+
+
+def test_gaea_resets_modules_where_ursa_purges(tmp_path: Path) -> None:
+    config = _ursa(tmp_path, {"platform": "gaea-c7"})
+    assert config.platform is Platform.GAEA_C7
+    build = render_stage(Stage.BUILD, config, _CECE).text.splitlines()
+    assert "module reset" in build
+    assert "module purge" not in build
+    # The harness venv's shell is cleaned the same way: never a purge on Gaea.
+    for stage in (Stage.DATA, Stage.HARNESS):
+        lines = render_stage(
+            stage, config, _CECE, _session(config, "simple-maccity")
+        ).text.splitlines()
+        assert "module reset" in lines
+        assert "module purge" not in lines
+        assert lines.index("module reset") + 1 == lines.index("unset PYTHONPATH")
+    assert "export ASSAY_PLATFORM=gaea-c7" in lines
+
+
+def test_harness_stage_exports_the_module_environment_for_the_driver_jobs(
+    ursa: RunConfig, tmp_path: Path
+) -> None:
+    # The driver jobs must load what the build loaded: the pytest session
+    # reads the paths and exports from the application's settings.
+    config = _ursa(tmp_path, _KOKKOS_ENV)
+    for stage in (Stage.DATA, Stage.HARNESS):
+        text = render_stage(stage, config, _CECE, _first(config)).text
+        assert "export CECE_MODULEFILE=ufs_ursa.oneapi" in text
+        assert (
+            f"export CECE_MODULEPATH={HARNESS_ROOT}/modulefiles"
+            f"{os.pathsep}/envs/ue-oneapi/modules/Core"
+        ) in text
+        assert "export CECE_MODULE_ENV='kokkos_ver=4.5.01 arborx_ver=2.0'" in text
+    # Defaults are not exported (the settings' own defaults apply), and the
+    # build-only keys never are.
+    text = render_stage(Stage.HARNESS, ursa, _CECE, _first(ursa)).text
+    for absent in (
+        "CECE_MODULEPATH",
+        "CECE_MODULE_ENV",
+        "CECE_TOOLCHAIN_TOOLS",
+        "CECE_CONFIGURE_GATES",
+    ):
+        assert absent not in text, absent

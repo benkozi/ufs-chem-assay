@@ -11,7 +11,7 @@ from pathlib import Path
 from pydantic import Field
 
 from applications.base import ApplicationRunSection, RunConfigView, Stage
-from cli.stages import module_block, q, source_lines
+from cli.stages import gate_lines, module_block, q, source_lines, toolchain_probe
 from platforms import Runtime
 
 
@@ -49,7 +49,7 @@ def _build(config: RunConfigView, checkout: Path, section: CeceRunSection) -> li
         ]
     build = clone / "build"
     log = build / "configure.log"
-    modules = module_block(clone, section)
+    modules = module_block(config, clone, section)
     configure = " ".join(
         [
             f"cmake -S {q(clone)} -B {q(build)}",
@@ -58,12 +58,14 @@ def _build(config: RunConfigView, checkout: Path, section: CeceRunSection) -> li
     )
     return [
         *modules,
-        "which cmake ${CC:-} ${CXX:-} ${FC:-}",
+        toolchain_probe(section, "which cmake ${CC:-} ${CXX:-} ${FC:-}"),
         f"mkdir -p {q(build)}",
         f"{configure} 2>&1 | tee {q(log)}",
         # Configure-log gates: the toolchain must come from the modules.
         f'grep -q "Found MPI" {q(log)} || {{ echo "configure did not find MPI" >&2; exit 1; }}',
         f'grep -qi "netcdf" {q(log)} || {{ echo "configure did not mention netCDF" >&2; exit 1; }}',
+        # The run config's gates: what this module environment claims to supply.
+        *gate_lines(log, section.configure_gates),
         f"cmake --build {q(build)} {targets} --parallel {section.build_jobs}",
     ]
 

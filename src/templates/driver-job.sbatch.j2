@@ -5,12 +5,8 @@
 #SBATCH --time={{ minutes }}
 {% for directive in directives %}#SBATCH {{ directive }}
 {% endfor %}set -euo pipefail
-{% if modulefile %}if [ -n "${MODULESHOME:-}" ]; then source "$MODULESHOME/init/bash"; fi
-module purge
-module use {{ root_dir }}/modulefiles
-module load {{ modulefile }}
-module list
-{% endif %}{% for name, value in env.items() %}export {{ name }}={{ value }}
+{% for line in module_lines %}{{ line }}
+{% endfor %}{% for name, value in env.items() %}export {{ name }}={{ value }}
 {% endfor %}echo "tic: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 srun {{ srun_args }} {{ command }}
 echo "toc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"

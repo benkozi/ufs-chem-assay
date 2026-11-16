@@ -38,7 +38,7 @@ def _build(
     target = (
         f"{checkout}[{','.join(section.extras)}]" if section.extras else str(checkout)
     )
-    modules = module_block(checkout, section)
+    modules = module_block(config, checkout, section)
     return [
         *modules,
         f"uv venv --allow-existing {q(venv)}",

@@ -21,7 +21,7 @@ from cli.run_config import (
     SlurmSection,
 )
 from cli.stages import SETTINGS_NOT_MIRRORED, settings_mirror_fields
-from platforms import Platform, Runtime
+from platforms import ModuleInit, Platform, Runtime
 from settings import Settings
 from tests.ufs_chem_assay.run_configs import (
     REMOVE,
@@ -173,6 +173,62 @@ def test_harness_env_numbers_become_strings(tmp_path: Path) -> None:
         "OMP_NUM_THREADS": "8",
         "FI_PROVIDER": "tcp",
     }
+
+
+def test_module_environment_keys_default_empty() -> None:
+    for name in ("ursa.yaml", "local.yaml"):
+        cece = load_run_config(TEMPLATES_DIR / name).applications["cece"]
+        assert cece.modulepath == []  # the clone's own modulefiles
+        assert cece.module_env == {}
+        assert cece.toolchain_tools == []  # the adapter's default probe
+        assert cece.configure_gates == []  # the adapter's own gates only
+
+
+def test_module_environment_keys_parse(tmp_path: Path) -> None:
+    path = run_config_file(
+        tmp_path,
+        overrides={
+            "applications.cece.modulepath": ["modulefiles", "/envs/stack/modules/Core"],
+            # Version pins are numbers as often as not; exported as strings.
+            "applications.cece.module_env": {"kokkos_ver": 4.5, "esmf_ver": "8.8.0"},
+            "applications.cece.toolchain_tools": ["mpiicx", "cmake"],
+            "applications.cece.configure_gates": ["Using system Kokkos"],
+        },
+    )
+    cece = load_run_config(path).applications["cece"]
+    assert cece.modulepath == [Path("modulefiles"), Path("/envs/stack/modules/Core")]
+    assert cece.module_env == {"kokkos_ver": "4.5", "esmf_ver": "8.8.0"}
+    assert cece.toolchain_tools == ["mpiicx", "cmake"]
+    assert cece.configure_gates == ["Using system Kokkos"]
+
+
+@pytest.mark.parametrize("name", ["not a name", "1st", "a-b", ""])
+def test_module_env_names_must_be_shell_identifiers(tmp_path: Path, name: str) -> None:
+    # They are rendered as `export NAME=value` ahead of `module load`.
+    path = run_config_file(
+        tmp_path, overrides={"applications.cece.module_env": {name: "x"}}
+    )
+    with pytest.raises(ValidationError, match="module_env"):
+        load_run_config(path)
+
+
+def test_module_env_must_be_a_mapping(tmp_path: Path) -> None:
+    # The settings' NAME=VALUE spelling is the environment's, not the file's.
+    path = run_config_file(
+        tmp_path, overrides={"applications.cece.module_env": "kokkos_ver=4.5.01"}
+    )
+    with pytest.raises(ValidationError, match="module_env"):
+        load_run_config(path)
+
+
+def test_module_init_follows_the_platform() -> None:
+    ursa = load_run_config(TEMPLATES_DIR / "ursa.yaml")
+    assert ursa.module_init is ModuleInit.PURGE
+    gaea = load_run_config(TEMPLATES_DIR / "ursa.yaml", platform=Platform.GAEA_C6)
+    assert gaea.module_init is ModuleInit.RESET
+    assert gaea.runtime is Runtime.SLURM
+    local = load_run_config(TEMPLATES_DIR / "local.yaml")
+    assert local.module_init is ModuleInit.PURGE
 
 
 def test_explicit_clone_dir_is_used(tmp_path: Path) -> None:

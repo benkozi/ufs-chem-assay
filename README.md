@@ -85,7 +85,7 @@ uv run pytest --combo-clean-root   # delete an existing output root first
 uv run pytest src/tests/ufs_chem_assay                  # harness only: fast, no docker
 uv run pytest src/tests/ufs_chem_assay --cov            # ... with coverage: CI fails under 100%
 uv run pytest src/tests/ufs_chem_assay/applications/cece  # the CECE adapter's tests only
-uv run pytest src/tests/test_driver_combos.py  # integration only (real docker)
+uv run pytest src/tests/test_driver_combos.py --application=cece  # integration only (real docker)
 
 uv run mypy                        # type checking (all of src/; zero errors expected)
 uv run pre-commit run --all-files  # everything the commit hook runs: ruff check/format,
@@ -93,8 +93,10 @@ uv run pre-commit run --all-files  # everything the commit hook runs: ruff check
                                    #   uv lock --check, yamlfix/yamllint, whitespace,
                                    #   merge markers, private keys, large files
 
-# everything except driver execution (no docker needed); all combo tests skip
-uv run pytest src/tests/test_driver_combos.py --dry-run
+# everything except driver execution (no docker needed); all combo tests skip.
+# --application picks the adapter and runs its default suite (several adapters are
+# registered, so a command naming neither an application nor a suite is a usage error)
+uv run pytest src/tests/test_driver_combos.py --dry-run --application=cece
 
 # stage the inputs the selected suites declare (inputs:) into <CECE_ROOT_DIR>/data —
 # a present file with the declared sha256 is skipped without touching the network —
@@ -172,7 +174,7 @@ skipped with a `driver run failed: ...` reason.
 Options:
 
 - `--application=NAME` — run only suites of this application (registry
-  name; `cece` today), overriding `ASSAY_APPLICATION`. Without it the
+  name: `cece`, `monetio`), overriding `ASSAY_APPLICATION`. Without it the
   application is inferred from the selected suites, which must all agree
   (a mixed selection is a usage error naming the flag); with it, suites
   of other applications are dropped from the selection with a log line.
@@ -435,6 +437,10 @@ applications:            # one section per application in the run
     ref: develop
     clone_dir:           # null: <root_dir>/CECE (CECE_ROOT_DIR)
     modulefile: cece_ursa.intelllvm
+    modulepath: []       # dirs to `module use` first; empty: <clone>/modulefiles
+    module_env: {}       # exported before the load (what the modulefile reads)
+    toolchain_tools: []  # `which` these after the load; empty: the adapter's probe
+    configure_gates: []  # extra grep -E patterns the configure log must match
     ...
 harness:
   suite_config: simple-maccity-suite.yaml
@@ -448,6 +454,46 @@ sessions:              # one pytest session per entry, under <output_root>/<sess
     harness: {suite_config: gcafs-anthro-suite.yaml, run_timeout_s: 28800, env: {...}}
     slurm: {cpus: 1, srun_args: --cpu-bind=cores, extra_args: --mem=0}
 ```
+
+**The module environment is four keys of an application section.**
+`modulefile` names the module to load and switches the whole block on
+(null: no modules at all). `modulepath` lists the directories to
+`module use` first, in order: an absolute entry is used as written (a
+spack-stack environment's `modules/Core`), a relative one is under the
+harness checkout, and an empty list means the application's own
+`<clone>/modulefiles`. `module_env` is exported before the load — what
+the modulefile reads, such as a `<name>_ver` version pin. The build
+stage and every driver job render the same block from them
+(`CECE_MODULEFILE`, `CECE_MODULEPATH`, `CECE_MODULE_ENV` carry it to the
+pytest session), so a job loads exactly what the build loaded. How the
+block starts is a fact of the platform, not a key: `module purge` on
+Ursa, `module reset` on Gaea (`gaea-c6`, `gaea-c7`; detected from the
+login-node hostnames `gaea6N` / `gaea7N`), where a purge
+strips the Cray programming environment. Two more keys shape the build
+stage only: `toolchain_tools` (the commands `which` locates after the
+load, so the log names the compilers the configure will see) and
+`configure_gates` (extended regular expressions the configure log must
+match before anything is built, after the adapter's own gates — the
+claims of the environment, such as `Using system Kokkos`).
+
+The harness ships UFS platform modulefiles of its own under
+`modulefiles/` (`modulefiles/ufs_ursa.oneapi.lua`, `ufs_ursa.gnu.lua`,
+`ufs_gaeac6.oneapi.lua`, and the `ufs_common.lua` they load): copies of
+the ufs-weather-model files plus the Kokkos packages, for building an
+application against a spack-stack environment the way the UFS does.
+They carry no environment of their own — name it in the run config:
+
+```yaml
+    modulefile: ufs_ursa.oneapi
+    modulepath:
+      - modulefiles                              # this checkout's modulefiles/
+      - /path/to/spack-stack/envs/<env>/modules/Core
+    module_env: {kokkos_ver: 4.5.01}             # optional pins
+```
+
+(`ASSAY_SPACK_ENV_ROOT: /path/to/spack-stack/envs/<env>` in `module_env`
+is the one-variable alternative to the second path: the modulefiles turn
+it into the same `modules/Core` entry.)
 
 **Command-line arguments are overrides on the file.** `--override`
 (`-o`) takes `key:path=value` entries, repeatable and several per flag;
@@ -586,7 +632,10 @@ a rendered script, `<combo_id>.sbatch`, kept beside the combo's `.yaml`
 and `.out` so a failed job is reproducible by hand: `#SBATCH` directives
 from `ASSAY_SBATCH_ARGS` (account, QOS, partition, `-N 1 -n <ntasks> -c
 <cpus>`, then `slurm.extra_args` verbatim) and the suite's
-`timeout_s` rounded up to whole minutes, the `CECE_MODULEFILE` load,
+`timeout_s` rounded up to whole minutes, the module block (the
+platform's `module purge` or `module reset`, the `CECE_MODULE_ENV`
+exports, a `module use` per `CECE_MODULEPATH` entry — the checkout's
+own `modulefiles` by default — and the `CECE_MODULEFILE` load),
 the `ASSAY_JOB_ENV` exports, and the driver behind `srun` with
 `ASSAY_SRUN_ARGS` (`--ntasks=<ntasks>` plus `slurm.srun_args`, e.g.
 `--cpu-bind=cores`; MPI inside a batch job needs Slurm's PMI endpoint),
@@ -921,7 +970,7 @@ Harness-wide:
 | Env var                         | Meaning                                        | Default                          |
 |---------------------------------|------------------------------------------------|----------------------------------|
 | `ASSAY_APPLICATION`             | the application the session runs (`--application` overrides) | unset → inferred from the selected suites |
-| `ASSAY_PLATFORM`                | machine the harness runs on (`local`, `ursa`)  | detected from the hostname, else `local` |
+| `ASSAY_PLATFORM`                | machine the harness runs on (`local`, `ursa`, `gaea-c6`, `gaea-c7`) | detected from the hostname, else `local` |
 | `ASSAY_RUNTIME`                 | how the driver is spawned (`docker`, `native`, `slurm`) | `docker` on `local`, `slurm` elsewhere |
 | `ASSAY_LAUNCHER`                | command prefix for native driver runs (e.g. `srun --ntasks=1`) | empty (run directly) |
 | `ASSAY_SBATCH_ARGS`             | slurm runtime: sbatch options per driver job (`-A … -q … -p … -N 1 -n 1 -c …`) | empty |
@@ -950,6 +999,8 @@ The CECE adapter:
 | `CECE_DOCKER_IMAGE`             | container image (docker runtime)               | `cece/cece-dev`                  |
 | `CECE_DRIVER_PATH`              | driver path, relative to the checkout          | `./build/cece_standalone_driver` |
 | `CECE_MODULEFILE`               | modulefile each driver job loads before the driver (slurm runtime; recorded in `run.yaml`) | unset |
+| `CECE_MODULEPATH`               | colon-separated dirs each driver job `module use`s before the load | unset → `<checkout>/modulefiles` |
+| `CECE_MODULE_ENV`               | `NAME=VALUE` pairs exported in each driver job before the load (what the modulefile reads) | empty |
 
 The MONETIO adapter:
 
@@ -959,6 +1010,8 @@ The MONETIO adapter:
 | `MONETIO_DOCKER_IMAGE`          | container image (docker runtime)               | `monetio/monetio-dev`            |
 | `MONETIO_DRIVER_PATH`           | CLI executable path, relative to the checkout  | `.venv/bin/monetio`              |
 | `MONETIO_MODULEFILE`            | modulefile each driver job loads before the CLI (slurm runtime; recorded in `run.yaml`) | unset |
+| `MONETIO_MODULEPATH`            | colon-separated dirs each driver job `module use`s before the load | unset → `<checkout>/modulefiles` |
+| `MONETIO_MODULE_ENV`            | `NAME=VALUE` pairs exported in each driver job before the load | empty |
 
 There is no AWS table: the AWS CLI's own `~/.aws/credentials`,
 `~/.aws/config`, and `AWS_*` variables apply unchanged to

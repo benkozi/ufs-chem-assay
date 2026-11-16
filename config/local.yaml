@@ -19,6 +19,10 @@ applications:  # one section per application in the run, keyed by adapter name
     clone_dir:  # default <root_dir>/monetio (MONETIO_ROOT_DIR)
     update_source: false
     modulefile:  # MONETIO_MODULEFILE; none locally
+    modulepath: []  # MONETIO_MODULEPATH; unused without a modulefile
+    module_env: {}  # MONETIO_MODULE_ENV; unused without a modulefile
+    toolchain_tools: []  # unused: the build is a uv install
+    configure_gates: []  # unused: no configure step
     docker_image:  # MONETIO_DOCKER_IMAGE; null = monetio/monetio-dev (unused under native)
     driver_path:  # MONETIO_DRIVER_PATH; null = .venv/bin/monetio
     extras: []  # optional pyproject extras installed into <clone>/.venv
@@ -28,6 +32,10 @@ applications:  # one section per application in the run, keyed by adapter name
     clone_dir:  # default <root_dir>/CECE; point at your sandbox checkout instead
     update_source: false  # true: fetch, checkout ref, pull --ff-only, submodule update --init --recursive
     modulefile:  # CECE_MODULEFILE; none locally
+    modulepath: []  # CECE_MODULEPATH; unused without a modulefile
+    module_env: {}  # CECE_MODULE_ENV; unused without a modulefile
+    toolchain_tools: []  # unused: the container build script owns the toolchain
+    configure_gates: []  # unused: the container build script owns the configure
     docker_image:  # CECE_DOCKER_IMAGE; null = the adapter's default (cece/cece-dev)
     driver_path:  # CECE_DRIVER_PATH; null = the adapter's default (./build/cece_standalone_driver)
     cmake_args: []  # unused: the container build script owns the configure

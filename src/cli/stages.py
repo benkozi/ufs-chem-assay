@@ -29,6 +29,7 @@ from applications.base import (
     Application,
     ApplicationRunSection,
     ApplicationSettings,
+    RunConfigView,
     Stage,
 )
 from cli.run_config import (
@@ -37,6 +38,7 @@ from cli.run_config import (
     RunConfig,
     search_path_value,
 )
+from lmod import LMOD_INIT, module_lines
 from models.base import StrictModel
 from models.conventions import CONVENTIONS
 from platforms import Runtime
@@ -86,22 +88,52 @@ def q(value: object) -> str:
     return shlex.quote(str(value))
 
 
-LMOD_INIT = 'if [ -n "${MODULESHOME:-}" ]; then source "$MODULESHOME/init/bash"; fi'
+def harness_paths(paths: list[Path]) -> list[Path]:
+    """Run-config module directories as the scripts name them: an absolute
+    entry as written, a relative one under the harness checkout
+    (`modulefiles` is the harness's own UFS modulefiles)."""
+    return [path if path.is_absolute() else HARNESS_ROOT / path for path in paths]
 
 
-def module_block(checkout: Path, section: ApplicationRunSection) -> list[str]:
+def module_block(
+    config: RunConfigView, checkout: Path, section: ApplicationRunSection
+) -> list[str]:
     """Load the application's modulefile in this shell — only where compiled
-    code runs in-process (the build stage). Returns `[]` when no modulefile
-    is configured."""
+    code runs in-process (the build stage): the platform's purge or reset,
+    the section's module_env exports, its modulepath (default: the
+    checkout's own modulefiles), the load. Returns `[]` when no modulefile
+    is configured. The job scripts render the same block from the settings
+    the harness stage exports (runner.py)."""
     if section.modulefile is None:
         return []
-    return [
-        LMOD_INIT,
-        "module purge",
-        f"module use {q(checkout)}/modulefiles",
-        f"module load {q(section.modulefile)}",
-        "module list",
-    ]
+    return module_lines(
+        init=config.module_init,
+        env=section.module_env,
+        paths=harness_paths(section.modulepath) or [checkout / "modulefiles"],
+        modulefile=section.modulefile,
+    )
+
+
+def toolchain_probe(section: ApplicationRunSection, default: str) -> str:
+    """The build stage's `which` line: the section's toolchain_tools when it
+    names any, else the adapter's `default` probe."""
+    if not section.toolchain_tools:
+        return default
+    return "which " + " ".join(q(tool) for tool in section.toolchain_tools)
+
+
+def gate_lines(log: Path, gates: list[str]) -> list[str]:
+    """Two lines per configure gate: fail the stage, naming the gate, when
+    the configure log does not match it (grep -E); then print the matching
+    lines so the stage log shows what satisfied it."""
+    lines: list[str] = []
+    for gate in gates:
+        message = q(f"configure gate failed: {gate}")
+        lines += [
+            f"grep -Eq {q(gate)} {q(log)} || {{ echo {message} >&2; exit 1; }}",
+            f"grep -E {q(gate)} {q(log)}",
+        ]
+    return lines
 
 
 def source_lines(
@@ -137,13 +169,16 @@ def source_lines(
     return lines
 
 
-def clean_python_env(section: ApplicationRunSection) -> list[str]:
+def clean_python_env(
+    config: RunConfigView, section: ApplicationRunSection
+) -> list[str]:
     """The harness venv must never see the module environment (spack-stack
     sets PYTHONPATH to python3.11 site-packages that shadow the venv's
-    numpy): undo any modules the calling shell had loaded."""
+    numpy): undo any modules the calling shell had loaded, the platform's
+    way (purge, or reset where purge strips the machine's own environment)."""
     if section.modulefile is None:
         return []
-    return [LMOD_INIT, "module purge", "unset PYTHONPATH"]
+    return [LMOD_INIT, f"module {config.module_init.value}", "unset PYTHONPATH"]
 
 
 def settings_mirror_fields() -> list[str]:
@@ -157,10 +192,13 @@ PER_SESSION = frozenset({Stage.HARNESS, Stage.RESUME})
 
 def _env_value(value: object) -> str | None:
     """The export's value for one mirrored field; None means "not set"."""
-    if value is None or value == "" or value == []:
+    if value is None or value == "" or value == [] or value == {}:
         return None
     if isinstance(value, list):
         return q(search_path_value(value))
+    if isinstance(value, dict):
+        # NAME=VALUE pairs, each a shell word (ASSAY_JOB_ENV's spelling).
+        return q(" ".join(q(f"{name}={item}") for name, item in value.items()))
     if isinstance(value, StrEnum):
         return q(value.value)
     return q(value)
@@ -188,7 +226,12 @@ def _exports(
     for field in ApplicationSettings.model_fields:
         if field == "root_dir":
             continue
-        value = _env_value(getattr(section, field))
+        setting: object = getattr(section, field)
+        if field == "modulepath":
+            # As the scripts name them: the jobs run from the checkout, not
+            # from the harness.
+            setting = harness_paths(section.modulepath)
+        value = _env_value(setting)
         if value is not None:
             exports.append((f"{prefix}{field.upper()}", value))
     exports += [
@@ -291,7 +334,7 @@ def _pytest_stage(
         pytest_args.append("--upload-output")
     pytest_args += harness.pytest_args
     return [
-        *clean_python_env(section),
+        *clean_python_env(config, section),
         *(
             f"export {key}={value}"
             for key, value in _exports(config, app, section, session)
@@ -314,7 +357,7 @@ def _data(
     # same baseline settings), from the harness checkout — sessions that
     # fetch the same thing fetch once; then whatever data lines the adapter
     # adds, and the harness-wide cartopy warm-up.
-    lines = [*clean_python_env(section)]
+    lines = [*clean_python_env(config, section)]
     seen: set[tuple[tuple[tuple[str, str], ...], str]] = set()
     for session in sessions:
         exports = tuple(_exports(config, app, section, session))

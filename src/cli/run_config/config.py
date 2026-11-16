@@ -36,7 +36,14 @@ from cli.run_config.sessions import (
 )
 from identity import HARNESS_ROOT
 from models.base import StrictModel
-from platforms import Platform, Runtime, default_runtime, detect_platform
+from platforms import (
+    ModuleInit,
+    Platform,
+    Runtime,
+    default_runtime,
+    detect_platform,
+    module_init,
+)
 
 # name -> adapter, or ValueError naming the registered ones: the registry's
 # get_application. Injected by the caller (cli/main.py, the tests) because
@@ -187,6 +194,11 @@ class RunConfig(StrictModel):
     @property
     def runtime(self) -> Runtime:
         return self.harness.runtime or default_runtime(self.platform)
+
+    @property
+    def module_init(self) -> ModuleInit:
+        """How this platform clears its module environment (purge or reset)."""
+        return module_init(self.platform)
 
     @property
     def uv_cache_dir(self) -> Path:

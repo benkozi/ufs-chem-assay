@@ -14,16 +14,19 @@ view of the run config that an adapter may read are declared here, so the
 
 from __future__ import annotations
 
+import os
+import re
 from abc import ABC, abstractmethod
 from enum import StrEnum, unique
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, ClassVar, Protocol, Self
+from typing import TYPE_CHECKING, Annotated, ClassVar, Protocol, Self
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from models.base import StrictModel
-from platforms import Runtime
+from platforms import ModuleInit, Runtime
+from settings import parse_env_pairs
 
 if TYPE_CHECKING:
     from combos import Combo, Dimension, ParameterRow
@@ -43,6 +46,9 @@ class Stage(StrEnum):
     RESUME = "resume"  # (harness.submit_only) the session's second half: wait, evaluate
 
 
+_SHELL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
 class RunConfigView(Protocol):
     """What an adapter may read of the run config (cli/run_config.py's
     RunConfig satisfies it): the effective runtime and its own checkout."""
@@ -51,6 +57,12 @@ class RunConfigView(Protocol):
     def runtime(self) -> Runtime:
         """The effective runtime: the harness override, else the platform's."""
 
+    @property
+    def module_init(self) -> ModuleInit:
+        """How the platform clears its module environment before a
+        modulefile is loaded (purge, or reset where purge strips the
+        machine's own compiler environment)."""
+
     def checkout_dir(self, app: Application) -> Path:
         """The application's checkout: its section's clone_dir, else
         <root_dir>/<the adapter's checkout_dirname>."""
@@ -58,12 +70,14 @@ class RunConfigView(Protocol):
 
 class ApplicationSettings(BaseSettings):
     """An application's environment-derived settings: its checkout, image,
-    driver, and modulefile, under the adapter's own prefix (the subclass sets
-    env_prefix and the defaults; nothing else). Frozen, .env-aware, and
-    tolerant of the other prefixes' keys in the same .env file."""
+    driver, and module environment, under the adapter's own prefix (the
+    subclass sets env_prefix and the defaults; nothing else). Frozen,
+    .env-aware, and tolerant of the other prefixes' keys in the same .env
+    file."""
 
     model_config = SettingsConfigDict(frozen=True, env_file=".env", extra="ignore")
 
+    env_prefix: ClassVar[str] = ""  # the subclass's namespace ("CECE_")
     container_workdir: ClassVar[PurePosixPath] = PurePosixPath("/work")
 
     root_dir: Path | None = Field(
@@ -83,10 +97,48 @@ class ApplicationSettings(BaseSettings):
     modulefile: str | None = Field(
         None,
         description=(
-            "Modulefile under <checkout>/modulefiles that each rendered job "
-            "script loads before the driver (slurm runtime); recorded in run.yaml"
+            "Modulefile each rendered job script loads before the driver (slurm "
+            "runtime), found through modulepath; recorded in run.yaml"
         ),
     )
+    # NoDecode: pydantic-settings would otherwise JSON-decode the env value
+    # for a complex type; the validator splits on os.pathsep instead.
+    modulepath: Annotated[list[Path], NoDecode] = Field(
+        default_factory=list,
+        description=(
+            "Directories each job script `module use`s before loading the "
+            "modulefile, in order, os.pathsep-separated in the environment; "
+            "empty means <checkout>/modulefiles"
+        ),
+    )
+    module_env: str = Field(
+        default="",
+        description=(
+            "NAME=VALUE pairs, whitespace-separated, exported in each job script "
+            "before `module load` — what the modulefile reads (version pins such "
+            "as 'kokkos_ver=4.5.01', an environment root)"
+        ),
+    )
+
+    @field_validator("modulepath", mode="before")
+    @classmethod
+    def _split_modulepath(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [Path(part) for part in value.split(os.pathsep) if part]
+        return value
+
+    @property
+    def module_env_pairs(self) -> dict[str, str]:
+        """module_env as a mapping, in the order written; ValueError naming
+        the variable for an entry that is not NAME=VALUE."""
+        return parse_env_pairs(self.module_env, variable=f"{self.env_prefix}MODULE_ENV")
+
+    def resolved_modulepath(self) -> list[Path]:
+        """The directories a job script `module use`s: modulepath as given,
+        else the checkout's own modulefiles (none without a checkout)."""
+        if self.modulepath:
+            return list(self.modulepath)
+        return [] if self.root_dir is None else [self.root_dir / "modulefiles"]
 
     def commit_sha(self) -> str | None:
         """HEAD commit SHA of the application checkout, for run.yaml.
@@ -174,8 +226,44 @@ class ApplicationRunSection(StrictModel):
     modulefile: str | None = Field(
         default=None,
         description=(
-            "Name under <clone>/modulefiles loaded after `module purge` (the "
-            "MODULEFILE setting); null means no module environment"
+            "Module loaded after the platform's `module purge` / `module reset` "
+            "(the MODULEFILE setting), found through modulepath; null means no "
+            "module environment"
+        ),
+    )
+    modulepath: list[Path] = Field(
+        default_factory=list,
+        description=(
+            "Directories `module use`d before the load, in order (the MODULEPATH "
+            "setting): a relative entry is under the harness checkout (`modulefiles` "
+            "is the harness's own UFS modulefiles), an absolute one is used as "
+            "written (a spack-stack environment's modules/Core); empty means "
+            "<clone>/modulefiles"
+        ),
+    )
+    module_env: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Variables exported before `module load` (the MODULE_ENV setting) — "
+            "what the modulefile reads: version pins (kokkos_ver), an environment "
+            "root (ASSAY_SPACK_ENV_ROOT). Names are shell identifiers; numbers are "
+            "exported as strings"
+        ),
+    )
+    toolchain_tools: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Commands the build stage locates with `which` after the load, so the "
+            "log names the compilers the configure will see (mpiicx, cmake, ...); "
+            "empty keeps the adapter's default probe. Build stage only"
+        ),
+    )
+    configure_gates: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Extended regular expressions (grep -E) the configure log must match, "
+            "checked after the adapter's own gates and before the build: the "
+            "environment's claims ('Using system Kokkos'). Build stage only"
         ),
     )
     docker_image: str | None = Field(
@@ -186,6 +274,24 @@ class ApplicationRunSection(StrictModel):
         default=None,
         description="The DRIVER_PATH setting; null keeps the adapter's default",
     )
+
+    @field_validator("module_env", mode="before")
+    @classmethod
+    def _module_env_as_exports(cls, value: object) -> object:
+        # Rendered as `export NAME=value`: the names must be identifiers, and
+        # a YAML number (kokkos_ver: 4.5) is as good a value as a string.
+        if not isinstance(value, dict):
+            return value
+        exports: dict[object, object] = {}
+        for name, item in value.items():
+            if not isinstance(name, str) or not _SHELL_NAME.fullmatch(name):
+                raise ValueError(
+                    f"module_env: {name!r} is not a shell variable name "
+                    "(letters, digits and underscores, not starting with a digit)"
+                )
+            is_number = isinstance(item, int | float) and not isinstance(item, bool)
+            exports[name] = str(item) if is_number else item
+        return exports
 
 
 class Application(ABC):

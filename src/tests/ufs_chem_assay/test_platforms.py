@@ -7,7 +7,17 @@ import yaml
 
 from applications.registry import load_suite
 from models.suite_config import RunManifest
-from platforms import ACCOUNTING, Accounting, Platform, Runtime, detect_platform
+from platforms import (
+    ACCOUNTING,
+    MODULE_INIT,
+    Accounting,
+    ModuleInit,
+    Platform,
+    Runtime,
+    default_runtime,
+    detect_platform,
+    module_init,
+)
 from settings import Settings
 
 
@@ -25,6 +35,18 @@ def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> pytest.MonkeyP
     [
         ("ufe01", Platform.URSA),
         ("ufe03.rdhpcs.noaa.gov", Platform.URSA),
+        # Gaea login nodes are gaea<cluster digit><node digit>: C6 is gaea61-68.
+        ("gaea61", Platform.GAEA_C6),
+        ("gaea68", Platform.GAEA_C6),
+        ("gaea63.ncrc.gov", Platform.GAEA_C6),
+        ("gaea71", Platform.GAEA_C7),  # by analogy; confirmed on first login
+        ("gaea78.ncrc.gov", Platform.GAEA_C7),
+        ("gaea", Platform.LOCAL),  # no cluster named: not guessed
+        ("gaea51", Platform.LOCAL),  # C5: a cluster the harness does not know
+        ("gaea6", Platform.LOCAL),  # the cluster digit alone is not a node
+        ("gaea61x", Platform.LOCAL),  # fullmatch: digits, then at most a domain
+        ("gaeac6", Platform.LOCAL),  # not a hostname form Gaea uses
+        ("xgaea61", Platform.LOCAL),
         ("my-laptop.local", Platform.LOCAL),
         ("", Platform.LOCAL),
     ],
@@ -127,3 +149,36 @@ def test_accounting_is_known_per_platform() -> None:
     assert ACCOUNTING[Platform.URSA] is Accounting.SACCT
     assert Platform.LOCAL not in ACCOUNTING
     assert set(ACCOUNTING) <= set(Platform)
+
+
+def test_gaea_platforms_are_known_and_run_under_slurm() -> None:
+    assert Platform("gaea-c6") is Platform.GAEA_C6
+    assert Platform("gaea-c7") is Platform.GAEA_C7
+    for platform in (Platform.GAEA_C6, Platform.GAEA_C7):
+        assert default_runtime(platform) is Runtime.SLURM
+        assert Settings(platform=platform).runtime is Runtime.SLURM
+        # Accounting joins once sacct is confirmed on the machine; until then
+        # a Gaea run records the harness's own clock.
+        assert platform not in ACCOUNTING
+
+
+def test_module_init_is_a_platform_fact() -> None:
+    # `module purge` strips Cray's craype/PrgEnv machinery on Gaea: reset
+    # there, purge everywhere else (a platform without an entry purges).
+    assert MODULE_INIT == {
+        Platform.URSA: ModuleInit.PURGE,
+        Platform.GAEA_C6: ModuleInit.RESET,
+        Platform.GAEA_C7: ModuleInit.RESET,
+    }
+    assert module_init(Platform.URSA) is ModuleInit.PURGE
+    assert module_init(Platform.GAEA_C7) is ModuleInit.RESET
+    assert module_init(Platform.LOCAL) is ModuleInit.PURGE
+    assert [init.value for init in ModuleInit] == ["purge", "reset"]
+
+
+@pytest.mark.usefixtures("clean_env")
+def test_settings_detects_gaea_from_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("platforms.socket.gethostname", lambda: "gaea71")
+    settings = Settings()
+    assert settings.platform is Platform.GAEA_C7
+    assert settings.runtime is Runtime.SLURM

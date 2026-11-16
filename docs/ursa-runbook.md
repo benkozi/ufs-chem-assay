@@ -79,7 +79,7 @@ git clone --branch "$HARNESS_REF" git@github.com:benkozi/ufs-chem-assay.git $ROO
 cd $ROOT/ufs-chem-assay
 UV_PYTHON=3.13 uv sync --frozen        # downloads CPython 3.13 + wheels
 uv run pytest src/tests/ufs_chem_assay # harness suite: hermetic, login-node safe
-uv run pytest src/tests/test_driver_combos.py --dry-run   # no CECE needed
+uv run pytest src/tests/test_driver_combos.py --dry-run --application=cece   # no CECE needed
 ```
 
 Both commands run before CECE exists, and neither needs a checkout: the

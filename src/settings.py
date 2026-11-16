@@ -24,7 +24,21 @@ from models.conventions import CONVENTIONS, Conventions
 from platforms import Platform, Runtime, default_runtime, detect_platform
 from s3_sync import S3_URI_PATTERN
 
-__all__ = ["CONVENTIONS", "Conventions", "Settings"]
+__all__ = ["CONVENTIONS", "Conventions", "Settings", "parse_env_pairs"]
+
+
+def parse_env_pairs(text: str, *, variable: str) -> dict[str, str]:
+    """`NAME=VALUE` pairs, whitespace-separated and word-split like a shell
+    (a quoted value may hold spaces), as a mapping in the order written.
+    `variable` names the setting in the error an entry without a name or an
+    `=` raises."""
+    pairs: dict[str, str] = {}
+    for token in shlex.split(text):
+        name, sep, value = token.partition("=")
+        if not sep or not name:
+            raise ValueError(f"{variable} entries must be NAME=VALUE, got {token!r}")
+        pairs[name] = value
+    return pairs
 
 
 class Settings(BaseSettings):
@@ -211,15 +225,7 @@ class Settings(BaseSettings):
 
     @property
     def job_env_pairs(self) -> dict[str, str]:
-        pairs: dict[str, str] = {}
-        for token in shlex.split(self.job_env):
-            name, sep, value = token.partition("=")
-            if not sep or not name:
-                raise ValueError(
-                    f"{CONVENTIONS.env_var('job_env')} entries must be NAME=VALUE, got {token!r}"
-                )
-            pairs[name] = value
-        return pairs
+        return parse_env_pairs(self.job_env, variable=CONVENTIONS.env_var("job_env"))
 
     @field_validator("baseline_store", "output_store", mode="after")
     @classmethod
