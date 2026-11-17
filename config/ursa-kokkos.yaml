@@ -61,8 +61,8 @@ toolchains:
       - 'AXIS: ArborX .* found via find_package'
 applications:  # one section per application in the run, keyed by adapter name
   cece:
-    git_url: git@github.com:benkozi/CECE.git  # the branch that prefers the environment's packages (find_package)
-    ref: feat/prefer-find-package
+    git_url: git@github.com:ufs-community/CECE.git  # develop prefers the environment's packages (find_package)
+    ref: develop
     update_source: false  # true: fetch, checkout ref, pull --ff-only, submodule update --init --recursive
     cmake_args:  # CECE's unit tests are built against a Debug build with ESMF: tests.enabled requires both
       - -DCMAKE_BUILD_TYPE=Debug
