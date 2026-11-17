@@ -120,6 +120,7 @@ applications:  # one section per application in the run, keyed by adapter name
       env: {}
 data:  # only the opt-in driver session uses the data stage
   warm_cartopy: true
+  cartopy_dir:  # default <root_dir>/cartopy
   input_search_path: []
 baselines:
   root_dir:

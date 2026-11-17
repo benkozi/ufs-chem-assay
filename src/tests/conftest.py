@@ -48,7 +48,7 @@ from models.suite_config import (
 )
 from outputs import upload_output
 from platforms import ACCOUNTING, Accounting, Runtime
-from plotting import render_all_bias_plots, render_all_plots
+from plotting import render_all_bias_plots, render_all_plots, use_cartopy_data_dir
 from report import TestReportRow, worst_result, write_test_report_csv
 from resolution import resolve_output_roots
 from runner import (
@@ -292,6 +292,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     except ValidationError as exc:
         raise pytest.UsageError(str(exc)) from exc
     configure_logging(settings.log_level)
+    use_cartopy_data_dir(settings.cartopy_data_dir)  # before any map is drawn
     config.stash[_SETTINGS] = settings
     submit_only = bool(config.getoption("--submit-only"))
     resume = bool(config.getoption("--resume"))

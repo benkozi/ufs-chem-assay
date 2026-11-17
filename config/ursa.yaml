@@ -44,7 +44,8 @@ applications:  # one section per application in the run, keyed by adapter name
       minutes: 5  # the test job's time limit
       env: {}  # exported inside the test job before ctest, e.g. I_MPI_HYDRA_BOOTSTRAP: fork
 data:  # the data stage runs `ufs-chem-assay fetch` for the selected suites' inputs, then:
-  warm_cartopy: true  # fetch Natural Earth coastlines on the login node
+  warm_cartopy: true  # fetch the plots' Natural Earth coastlines and borders on the login node
+  cartopy_dir:  # ASSAY_CARTOPY_DATA_DIR: where cartopy keeps that data; default <root_dir>/cartopy
   input_search_path: []  # ASSAY_INPUT_SEARCH_PATH: dirs fetch links url-null inputs from, by basename
 baselines:
   root_dir:  # ASSAY_BASELINE_ROOT_DIR

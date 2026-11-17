@@ -74,6 +74,7 @@ SETTINGS_NOT_MIRRORED = frozenset(
         "job_env",  # harness.env under the slurm runtime
         "input_search_path",  # data.input_search_path
         "output_store",  # outputs.store
+        "cartopy_data_dir",  # data.cartopy_dir
     }
 )
 
@@ -446,6 +447,9 @@ def _exports(
                 q(search_path_value(config.data.input_search_path)),
             )
         )
+    exports.append(
+        (CONVENTIONS.env_var("CARTOPY_DATA_DIR"), q(config.cartopy_data_dir))
+    )
     exports.append(("PATH", '"$HOME/.local/bin:$PATH"'))
     exports.append(("UV_CACHE_DIR", q(config.uv_cache_dir)))
     if runtime is not Runtime.SLURM:
@@ -537,11 +541,9 @@ def _data(
         ]
     lines += app.stage_lines(Stage.DATA, config, section)
     if shared and config.data.warm_cartopy:
-        snippet = (
-            "import cartopy.io.shapereader as s; "
-            "[s.natural_earth(resolution=r, category='physical', name='coastline') "
-            "for r in ('110m', '50m')]"
-        )
+        # The harness's own warm-up, so that it downloads into the directory
+        # the session exports name (ASSAY_CARTOPY_DATA_DIR, above).
+        snippet = "from plotting import warm_natural_earth; warm_natural_earth()"
         lines.append(f"uv run --no-sync python -c {q(snippet)}")
     return lines
 

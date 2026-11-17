@@ -560,7 +560,8 @@ checkout), `build` (modules + cmake, or the application's container build
 script locally), `test` (the application's own test suite against that
 build, for applications with `tests.enabled`; below), `data`
 (`ufs-chem-assay fetch` for the inputs each session's `suite_config`
-selects, under that session's exports, plus the cartopy cache), `harness`
+selects, under that session's exports, plus the plots' map data, downloaded
+into `data.cartopy_dir` — `<root_dir>/cartopy` unless named), `harness`
 (the pytest session), and `resume` (the second half of a submit-only
 session, below; rendered by default, executed only when named). Each
 renders to `<root_dir>/scripts/<NN>-<stage>-<application>.sh` —
@@ -1075,9 +1076,14 @@ symlog` keeps zeros on the colorbar inside a linear core of that floor;
 `linear` is the plain exact min/max. The title carries `[log]`/`[symlog]`.
 Bias maps are symmetric at the exact max |difference|, linear by default;
 `plotting.bias_scale: symlog` (with `bias_decades`) shows ULP-level
-structure beside gross differences. First-time boundary rendering
-downloads Natural Earth coastline/border data; offline, plots degrade to
-data-only maps with a warning.
+structure beside gross differences. Boundary rendering needs Natural
+Earth coastline/border data. Under `ufs-chem-assay run` it lives in
+`data.cartopy_dir` (`<root_dir>/cartopy` by default, exported to the
+session as `ASSAY_CARTOPY_DATA_DIR`), and the data stage downloads it
+there (`data.warm_cartopy`); a bare `pytest` run leaves cartopy its own
+directory (`$XDG_DATA_HOME/cartopy`, else `~/.local/share/cartopy`) and
+downloads on first use. Offline, or when the directory cannot be written,
+plots degrade to data-only maps with a warning.
 
 Stats CSV columns: `run_id`, `application`, `suite` (the suite's unique
 `name` from its yaml, e.g. `simple-maccity`), identity (`combo_id`, `combo`, `file`,
@@ -1215,6 +1221,7 @@ Harness-wide:
 | `ASSAY_BASELINE_ATOL`           | absolute data tolerance over every comparison's own `atol` (`--baseline-atol` wins) | unset → the entries' values |
 | `ASSAY_BASELINE_RTOL`           | relative data tolerance (× \|baseline\|) over every comparison's own `rtol` (`--baseline-rtol` wins) | unset → the entries' values |
 | `ASSAY_INPUT_SEARCH_PATH`       | colon-separated dirs `fetch` searches recursively, by basename, to link source-less (`url: null`) inputs into the data directory | unset → absent ones fail |
+| `ASSAY_CARTOPY_DATA_DIR`        | where cartopy downloads the plots' Natural Earth coastlines and borders (the run config's `data.cartopy_dir`, `<root_dir>/cartopy` by default) | unset → cartopy's own (`$XDG_DATA_HOME/cartopy`, else `~/.local/share/cartopy`) |
 | `ASSAY_CONFIG_SEARCH_PATH`      | prepended to relative `config_path` values     | unset                            |
 | `ASSAY_SUITE_CONFIG_SEARCH_PATH` | colon-separated dirs searched recursively for `--suite-config` selection | unset → built-in suite dir only |
 

@@ -25,6 +25,7 @@ _SCRUBBED = (
     "SRUN_ARGS",
     "INPUT_SEARCH_PATH",
     "OUTPUT_STORE",
+    "CARTOPY_DATA_DIR",
 )
 
 
@@ -35,6 +36,16 @@ def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> pytest.MonkeyP
     monkeypatch.delenv("CECE_ROOT_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     return monkeypatch
+
+
+def test_cartopy_data_dir_is_cartopys_own_unless_set(
+    clean_env: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Unset, cartopy keeps its default (under the home directory); set, the
+    # maps' Natural Earth data is downloaded there instead.
+    assert Settings().cartopy_data_dir is None
+    clean_env.setenv("ASSAY_CARTOPY_DATA_DIR", str(tmp_path / "cartopy"))
+    assert Settings().cartopy_data_dir == tmp_path / "cartopy"
 
 
 def test_prefixes() -> None:
@@ -236,6 +247,12 @@ def test_baseline_store_accepts_a_directory(
     assert Settings(baseline_store="relative/store").baseline_store == str(
         Path("relative/store").resolve()
     )
+    # `~` is the home directory with its symlinks resolved (on Gaea
+    # /ncrc/home2/<user> is a link into /autofs): one name for one place.
+    real_home = tmp_path / "real-home"
+    real_home.mkdir()
+    (tmp_path / "home").symlink_to(real_home)
+    clean_env.setenv("HOME", str(tmp_path / "home"))
     assert Settings(baseline_store="~/baselines").baseline_store == str(
-        Path("~/baselines").expanduser()
+        real_home / "baselines"
     )

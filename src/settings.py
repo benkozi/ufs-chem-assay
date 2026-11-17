@@ -196,6 +196,14 @@ class Settings(BaseSettings):
             "directory is always searched last"
         ),
     )
+    cartopy_data_dir: Path | None = Field(
+        None,
+        description=(
+            "Directory cartopy downloads the plots' Natural Earth map data "
+            "into; None keeps cartopy's own ($XDG_DATA_HOME/cartopy, else "
+            "~/.local/share/cartopy)"
+        ),
+    )
     input_search_path: Annotated[list[Path], NoDecode] = Field(
         default_factory=list,
         description=(

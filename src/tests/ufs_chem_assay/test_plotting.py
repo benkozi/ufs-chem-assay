@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 
+import cartopy
 import matplotlib
 import matplotlib.axes
 import matplotlib.colors
@@ -30,9 +31,22 @@ from plotting import (
     render_combo_bias_plots,
     render_combo_plots,
     render_spatial_plot,
+    use_cartopy_data_dir,
+    warm_natural_earth,
 )
 
 _LINEAR = Plotting(scale=ColorScale.linear)
+
+
+@pytest.fixture(autouse=True)
+def no_natural_earth(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every map in this module is drawn with no boundary geometry, so no
+    test reads cartopy's data cache under the home directory or downloads
+    Natural Earth data: the tests pass offline and whatever state that cache
+    is in."""
+    monkeypatch.setattr(
+        "cartopy.feature.NaturalEarthFeature.geometries", lambda _self: iter(())
+    )
 
 
 def _write_nc(path: Path, values: np.ndarray, hour: int) -> None:
@@ -439,6 +453,41 @@ def test_render_combo_plots_skips_bounds_variables(
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
+# ── where cartopy keeps the Natural Earth data ───────────────────────────────
+
+
+def test_use_cartopy_data_dir_points_cartopy_at_the_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(cartopy.config, "data_dir", Path("/cartopys/own"))
+    use_cartopy_data_dir(None)  # unset: cartopy's own default stays
+    assert cartopy.config["data_dir"] == Path("/cartopys/own")
+    use_cartopy_data_dir(tmp_path / "natural-earth")
+    assert cartopy.config["data_dir"] == tmp_path / "natural-earth"
+
+
+def test_warm_natural_earth_downloads_what_the_maps_draw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    # The data stage's warm-up: coastlines and borders, at the two
+    # resolutions a global map can ask for, into the configured directory.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setitem(cartopy.config, "data_dir", Path("/cartopys/own"))
+    monkeypatch.setenv("ASSAY_CARTOPY_DATA_DIR", str(tmp_path / "natural-earth"))
+    fetched = mocker.patch("cartopy.io.shapereader.natural_earth")
+    warm_natural_earth()
+    assert cartopy.config["data_dir"] == tmp_path / "natural-earth"
+    assert sorted(
+        (call.kwargs["category"], call.kwargs["name"], call.kwargs["resolution"])
+        for call in fetched.call_args_list
+    ) == [
+        ("cultural", "admin_0_boundary_lines_land", "110m"),
+        ("cultural", "admin_0_boundary_lines_land", "50m"),
+        ("physical", "coastline", "110m"),
+        ("physical", "coastline", "50m"),
+    ]
+
+
 # ── the fallbacks: offline boundaries, missing scales, render failures ────────
 
 
@@ -487,6 +536,68 @@ def test_spatial_plot_takes_the_first_level(tmp_path: Path) -> None:
         tmp_path / "lev.png",
     )
     assert (tmp_path / "lev.png").is_file()
+
+
+def test_spatial_plot_survives_natural_earth_failing_at_draw_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # cartopy reads (or downloads) the boundary data when the figure is
+    # drawn, not when coastlines() is called: a machine without network, or
+    # with an unusable cache directory, fails inside savefig. The map is
+    # written anyway, without boundaries.
+    monkeypatch.setattr("cartopy.feature.NaturalEarthFeature.geometries", _raise)
+    values = np.random.default_rng(1).random((1, 4, 5))
+    _write_nc(tmp_path / "a.nc", values, hour=1)
+    with caplog.at_level(logging.WARNING):
+        render_spatial_plot(
+            tmp_path / "a.nc",
+            "co",
+            VariableScale(variable="co", vmin=0.0, vmax=1.0),
+            tmp_path / "a.png",
+        )
+    assert (tmp_path / "a.png").is_file()
+    assert Image.open(tmp_path / "a.png").size == (1200, 600)
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("a.png without map boundaries (boom)" in m for m in messages)
+
+
+def test_bias_plot_survives_natural_earth_failing_at_draw_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr("cartopy.feature.NaturalEarthFeature.geometries", _raise)
+    realization, baseline = tmp_path / "r", tmp_path / "b"
+    realization.mkdir()
+    baseline.mkdir()
+    _write_pair(realization, baseline, 0.5, hour=1)
+    with caplog.at_level(logging.WARNING):
+        render_bias_plot(
+            realization / "cece_20100101_010000.nc",
+            baseline / "cece_20100101_010000.nc",
+            "co",
+            VariableScale(variable="co", vmin=-1.0, vmax=1.0),
+            tmp_path / "bias.png",
+        )
+    assert (tmp_path / "bias.png").is_file()
+    assert any("without map boundaries" in r.getMessage() for r in caplog.records)
+
+
+def test_a_save_failure_that_is_not_the_boundaries_is_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No boundaries were added, so there is nothing to retry without: the
+    # error (a full disk, an unwritable directory) is the caller's to log.
+    monkeypatch.setattr(GeoAxes, "coastlines", _raise)
+    monkeypatch.setattr(GeoAxes, "add_feature", _raise)
+    monkeypatch.setattr("matplotlib.figure.Figure.savefig", _raise)
+    values = np.random.default_rng(1).random((1, 4, 5))
+    _write_nc(tmp_path / "a.nc", values, hour=1)
+    with pytest.raises(RuntimeError, match="boom"):
+        render_spatial_plot(
+            tmp_path / "a.nc",
+            "co",
+            VariableScale(variable="co", vmin=0.0, vmax=1.0),
+            tmp_path / "a.png",
+        )
 
 
 def test_bias_plot_survives_missing_natural_earth(

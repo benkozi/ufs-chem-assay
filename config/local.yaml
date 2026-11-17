@@ -64,6 +64,7 @@ applications:  # one section per application in the run, keyed by adapter name
       env: {}  # passed to ctest in the container
 data:
   warm_cartopy: false
+  cartopy_dir:  # ASSAY_CARTOPY_DATA_DIR: where cartopy keeps the plots' map data; default <root_dir>/cartopy
   input_search_path: []  # ASSAY_INPUT_SEARCH_PATH: dirs fetch links url-null inputs from, by basename
 baselines:
   root_dir:  # ASSAY_BASELINE_ROOT_DIR

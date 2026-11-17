@@ -164,6 +164,14 @@ def test_data_stage_exports_settings_and_fetches_the_selected_suites_inputs(
     assert f"export CECE_ROOT_DIR={ursa.checkout_dir(_CECE)}" in lines
     assert "export ASSAY_PLATFORM=ursa" in lines
     assert f"export UV_CACHE_DIR={ursa.root_dir}/uv-cache" in lines
+    # cartopy's Natural Earth data goes under the run root, and the warm-up
+    # — the harness's own, so it honours that directory — runs after it.
+    cartopy_dir = f"export ASSAY_CARTOPY_DATA_DIR={ursa.root_dir}/cartopy"
+    warm_up = (
+        "uv run --no-sync python -c "
+        "'from plotting import warm_natural_earth; warm_natural_earth()'"
+    )
+    assert lines.index(cartopy_dir) < lines.index(warm_up)
     assert lines.index(f"cd {HARNESS_ROOT}") < lines.index(fetch)
     assert lines.index(fetch) < lines.index(
         next(line for line in lines if "natural_earth" in line)
@@ -274,6 +282,7 @@ def test_harness_stage_exports_every_setting_and_runs_pytest(ursa: RunConfig) ->
         "export ASSAY_SLURM_QUEUE_WAIT_S=3600",
         "export ASSAY_SLURM_POLL_S=30",  # the asynchronous wait's cadence
         "export ASSAY_DASK_NWORKERS=2",
+        f"export ASSAY_CARTOPY_DATA_DIR={ursa.root_dir}/cartopy",  # the plots' map data
         f"export UV_CACHE_DIR={ursa.root_dir}/uv-cache",
         f"cd {HARNESS_ROOT}",
         (

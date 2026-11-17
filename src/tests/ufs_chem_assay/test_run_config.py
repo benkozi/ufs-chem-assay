@@ -20,6 +20,7 @@ from applications.registry import REGISTRY, get_application
 from cli.run_config import (
     HARNESS_ROOT,
     BaselinesSection,
+    DataSection,
     HarnessSection,
     ResolvedSession,
     RunConfig,
@@ -53,6 +54,7 @@ def test_ursa_template_loads() -> None:
     assert config.harness.launcher == ""  # ignored under slurm; not set by the template
     assert config.harness.dask_nworkers == 2  # analysis runs on the login node
     assert config.uv_cache_dir == config.root_dir / "uv-cache"
+    assert config.cartopy_data_dir == config.root_dir / "cartopy"
 
 
 def test_local_template_loads_and_runs_directly() -> None:
@@ -64,12 +66,23 @@ def test_local_template_loads_and_runs_directly() -> None:
     assert config.root_dir.is_absolute()  # ~ expanded
 
 
+def test_cartopy_dir_is_under_the_run_root_unless_named(tmp_path: Path) -> None:
+    # Like the uv cache: everything a run generates is under its root.
+    default = load_run_config(run_config_file(tmp_path))
+    assert default.cartopy_data_dir == default.root_dir / "cartopy"
+    named = load_run_config(
+        run_config_file(tmp_path, overrides={"data.cartopy_dir": "/shared/cartopy"})
+    )
+    assert named.cartopy_data_dir == Path("/shared/cartopy")
+
+
 def test_templates_list_every_accepted_key() -> None:
     # The template is the documentation of the surface: every key of every
     # section appears, null where the default applies.
     for name in ("ursa.yaml", "local.yaml"):
         raw = yaml.safe_load(uncommented_sessions(TEMPLATES_DIR / name))
         assert set(raw["harness"]) == set(HarnessSection.model_fields), name
+        assert set(raw["data"]) == set(DataSection.model_fields), name
         assert set(raw["applications"]["cece"]) == set(CeceRunSection.model_fields), (
             name
         )
@@ -658,6 +671,7 @@ def test_harness_section_mirrors_every_setting() -> None:
         "job_env",
         "input_search_path",  # data.input_search_path
         "output_store",  # outputs.store
+        "cartopy_data_dir",  # data.cartopy_dir
     } == SETTINGS_NOT_MIRRORED
 
 

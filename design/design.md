@@ -1252,6 +1252,35 @@ at the exact max |diff| by default, with `bias_scale: symlog` and
 `bias_decades` offered. The session passes each suite's `plotting` to
 `render_all_plots`/`render_all_bias_plots`.
 
+**Map boundaries degrade in two places** (2026-11-17). Coastlines and
+borders are added by `plotting._add_boundaries`, which survives cartopy
+refusing the request. But cartopy reads the Natural Earth data — and
+downloads it on first use, into `~/.local/share/cartopy` — only when the
+figure is drawn, so a machine without network or with an unusable data
+directory fails inside `savefig`, past that guard. `plotting._save`
+therefore retries a failed save once with the boundary artists removed
+(a data-only map and a warning naming the cause) and raises when there
+were no boundaries to remove. Found on the first Gaea C7 login, where the
+shared home directory's `cartopy/shapefiles` entry was not a usable
+directory and every plot failed. The plotting unit tests draw with no
+boundary geometry (the module's autouse `no_natural_earth` fixture), so
+they read no cache and need no network.
+
+**Where the map data lives** (2026-11-17). cartopy downloads into
+`$XDG_DATA_HOME/cartopy`, else `~/.local/share/cartopy` — a home
+directory, which a run should not depend on. `Settings.cartopy_data_dir`
+(`ASSAY_CARTOPY_DATA_DIR`; None keeps cartopy's own) is applied by
+`plotting.use_cartopy_data_dir`, which sets `cartopy.config["data_dir"]`:
+once in `pytest_configure`, before any map is drawn. The run config's
+`data.cartopy_dir` (null → `<root_dir>/cartopy`, `RunConfig.cartopy_data_dir`,
+beside `uv-cache`) is exported with every session's settings, so the data,
+harness and resume scripts agree. The data stage's warm-up is now the
+harness's own function, `plotting.warm_natural_earth` — it honours that
+directory, and fetches the borders as well as the coastlines, at 110m and
+50m — in place of an inline cartopy snippet that could only write to the
+home directory. The setting is not mirrored under `harness:` (it is
+`data.cartopy_dir`: `SETTINGS_NOT_MIRRORED`).
+
 ## Type checking
 
 mypy runs over everything under `src/` (config in `pyproject.toml`

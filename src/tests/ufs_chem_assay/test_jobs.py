@@ -377,7 +377,7 @@ def test_cancel_jobs_cancels_each_cluster_with_its_own_jobs(
         ],
     )
 
-    def queued(ids: list[str], clusters: str | None = None) -> dict[str, str]:
+    def queued(ids: list[str], **_on: str | None) -> dict[str, str]:
         return {job_id: "PENDING" for job_id in ids if job_id != "2"}
 
     states = mocker.patch("jobs.queue_states", side_effect=queued)

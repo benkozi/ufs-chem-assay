@@ -20,6 +20,13 @@ class DataSection(StrictModel):
         default=True,
         description="Fetch Natural Earth coastlines into cartopy's cache (login node)",
     )
+    cartopy_dir: Path | None = Field(
+        default=None,
+        description=(
+            "ASSAY_CARTOPY_DATA_DIR: where cartopy downloads the plots' Natural "
+            "Earth map data; null means <root_dir>/cartopy"
+        ),
+    )
     input_search_path: list[Path] = Field(
         default_factory=list,
         description=(

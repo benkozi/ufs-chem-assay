@@ -321,6 +321,12 @@ class RunConfig(StrictModel):
         return self.uv.cache_dir or self.root_dir / "uv-cache"
 
     @property
+    def cartopy_data_dir(self) -> Path:
+        """Where the plots' Natural Earth data is downloaded: under the run
+        root, like everything else a run generates, unless named."""
+        return self.data.cartopy_dir or self.root_dir / "cartopy"
+
+    @property
     def application_names(self) -> list[str]:
         return list(self.applications)
 
