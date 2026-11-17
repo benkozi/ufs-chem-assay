@@ -20,7 +20,7 @@
 # session
 
 - **Session ID**: `<session-id>`
-- **Resume Command**: `agy --resume <session-id>`
+- **Resume Command**: `<resume command> <session-id>`
 
 ## testing
 
