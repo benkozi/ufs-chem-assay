@@ -225,6 +225,46 @@ git -C $ROOT/ufs-chem-assay diff -- src/tests/config/cece/tests-benchmarks.csv
 The rows are appended to the committed per-application file; review the
 diff and commit it.
 
+## 8. Gaea C7
+
+`config/gaea-c7.yaml` is the same run on Gaea C7, for CECE and one
+toolchain (`oneapi`: Intel's compilers with cray-mpich), from a C7 login
+node. Sections 1 to 5 and 7 apply with these differences:
+
+- **The environment has no Kokkos, kokkos-kernels or ArborX yet.** CECE
+  then fetches and builds its own Kokkos at configure time, which needs
+  the network, so the whole build runs on the login node
+  (`build_node: login`: no `srun` steps, one configure, the test stack
+  included) and the gate is `CECE dependency Kokkos: FetchContent`.
+  CATChem and the Kokkos smoke project need the environment's Kokkos and
+  are not in the template. The lines that change once the packages are
+  installed are marked `TODO(gaea-c7)` in the template and in
+  `modulefiles/ufs_gaeac7.oneapi.lua`.
+- **The module block starts with `module reset`**, never a purge, and the
+  modulefile swaps the site's default oneAPI and cray-mpich for the ones
+  the environment was built with. `module_env` pins `esmf_ver` and
+  `mapl_ver`: the environment's default ESMF is a later beta than the one
+  its MAPL is built against.
+- **Every job names its cluster**: `slurm.extra_args: --clusters=c7`. The
+  scheduler moves single-node jobs to the `batch-shared` partition and
+  says so when the test job is submitted; that message is expected.
+- **MPI tests launch through `srun`** with no extra flags, and compute
+  nodes have no network: the test job exports `PIP_NO_INDEX=1` so the pip
+  steps of CECE's Python tests return at once.
+
+```bash
+cd $ROOT/ufs-chem-assay
+C7=(--config-file=config/gaea-c7.yaml --application cece)
+uv run ufs-chem-assay run "${C7[@]}" --stage source --stage build --stage test --dry-run
+uv run ufs-chem-assay run "${C7[@]}" --stage source --stage build --stage test
+uv run ufs-chem-assay watch --only tests
+uv run ufs-chem-assay report --only tests
+```
+
+To pull a newer commit of the CECE ref into the existing clone and
+rebuild only what changed, add
+`--override applications:cece:update_source=true` to the `run` command.
+
 ## What to record after the first run
 
 - What `module avail kokkos kokkos-kernels arborx` shows in each

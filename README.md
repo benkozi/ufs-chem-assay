@@ -432,7 +432,9 @@ list every key and run as-is from a checkout laid out like the runbook.
 A third, `config/ursa-kokkos.yaml`, builds and tests CECE, CATChem and
 the Kokkos smoke project against a spack-stack environment with two
 toolchains (below; its runbook is
-[docs/kokkos-runbook.md](docs/kokkos-runbook.md)):
+[docs/kokkos-runbook.md](docs/kokkos-runbook.md)). A fourth,
+`config/gaea-c7.yaml`, builds and tests CECE on Gaea C7 the same way,
+with one toolchain (also below):
 
 ```yaml
 platform: ursa
@@ -485,7 +487,8 @@ claims of the environment, such as `Using system Kokkos`).
 
 The harness ships UFS platform modulefiles of its own under
 `modulefiles/` (`modulefiles/ufs_ursa.oneapi.lua`, `ufs_ursa.gnu.lua`,
-`ufs_gaeac6.oneapi.lua`, and the `ufs_common.lua` they load): copies of
+`ufs_gaeac6.oneapi.lua`, `ufs_gaeac7.oneapi.lua`, and the `ufs_common.lua`
+they load): copies of
 the ufs-weather-model files plus the Kokkos packages, for building an
 application against a spack-stack environment the way the UFS does.
 They carry no environment of their own — name it in the run config:
@@ -734,6 +737,29 @@ build, the module keys on the application section, today's paths.
 `oneapi` and `gnu` toolchains on Ursa, the three applications built as
 the offline compile probe and tested, the driver sessions left to be
 asked for.
+
+`config/gaea-c7.yaml` is the same idea on Gaea C7, for what has been
+built and tested there: one toolchain (`oneapi`: Intel's `icx` / `icpx` /
+`ifx` with cray-mpich, `mpi_launcher: srun`) and CECE, against the
+spack-stack 2.2.0 environment through `modulefiles/ufs_gaeac7.oneapi.lua`.
+Three things in it are particular to the machine. `module_env` pins
+`esmf_ver` and `mapl_ver`, because the environment's default ESMF is a
+later beta than the one its MAPL is built against. `slurm.extra_args` is
+`--clusters=c7`. And the environment carries no Kokkos, kokkos-kernels or
+ArborX yet, so CECE fetches and builds its own Kokkos: that needs the
+network, which only the login node has, so the template says
+`build_node: login`, gates on `CECE dependency Kokkos: FetchContent` and
+leaves CATChem and the Kokkos smoke project out. Each of those lines is
+marked `TODO(gaea-c7)` with what it becomes once the packages are
+installed. The test job exports `PIP_NO_INDEX=1`, which stops the pip
+fixtures of CECE's Python tests from retrying an index a compute node
+cannot reach.
+
+```bash
+ufs-chem-assay run --config-file=config/gaea-c7.yaml --application cece \
+  --stage source --stage build --stage test
+ufs-chem-assay watch --only tests
+```
 
 **Sessions.** `sessions:` is a map of session name → an overlay on the
 file's `harness:`, `slurm:` and `baselines:` sections, one level deep: an
@@ -1147,7 +1173,7 @@ around the driver call; slurm, submission to end as `sacct` reports it,
 queue included; `wall_s`: the job's own `tic`→`toc`
 lines, empty when the job was killed; `queue_s`, `elapsed_s`,
 `max_rss_kb`, `slurm_job_id`, `slurm_state`: Slurm accounting via `sacct`,
-on platforms that have it — Ursa today — and empty elsewhere), outcome
+on platforms that have it — Ursa and Gaea C7 today — and empty elsewhere), outcome
 (`driver_result`: passed/failed/timeout, `exit_code`, `nc_files`,
 `output_bytes`), and the baseline links (`baseline_ulid`,
 `baseline_state`, `comparison_result`). Whether a combination later became

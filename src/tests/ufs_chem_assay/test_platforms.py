@@ -39,7 +39,8 @@ def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> pytest.MonkeyP
         ("gaea61", Platform.GAEA_C6),
         ("gaea68", Platform.GAEA_C6),
         ("gaea63.ncrc.gov", Platform.GAEA_C6),
-        ("gaea71", Platform.GAEA_C7),  # by analogy; confirmed on first login
+        ("gaea71", Platform.GAEA_C7),  # the same scheme
+        ("gaea75.ncrc.gov", Platform.GAEA_C7),  # seen on the first C7 login
         ("gaea78.ncrc.gov", Platform.GAEA_C7),
         ("gaea", Platform.LOCAL),  # no cluster named: not guessed
         ("gaea51", Platform.LOCAL),  # C5: a cluster the harness does not know
@@ -145,8 +146,10 @@ def test_explicit_local_platform_beats_an_ursa_hostname(
 
 def test_accounting_is_known_per_platform() -> None:
     # Memory and queue numbers are recorded only where the harness knows how
-    # to ask: Ursa through sacct; a laptop records nothing of the kind.
+    # to ask: Ursa and Gaea C7 through sacct; a laptop records nothing of the
+    # kind.
     assert ACCOUNTING[Platform.URSA] is Accounting.SACCT
+    assert ACCOUNTING[Platform.GAEA_C7] is Accounting.SACCT
     assert Platform.LOCAL not in ACCOUNTING
     assert set(ACCOUNTING) <= set(Platform)
 
@@ -157,9 +160,11 @@ def test_gaea_platforms_are_known_and_run_under_slurm() -> None:
     for platform in (Platform.GAEA_C6, Platform.GAEA_C7):
         assert default_runtime(platform) is Runtime.SLURM
         assert Settings(platform=platform).runtime is Runtime.SLURM
-        # Accounting joins once sacct is confirmed on the machine; until then
-        # a Gaea run records the harness's own clock.
-        assert platform not in ACCOUNTING
+    # Accounting joins once sacct is confirmed on the machine: C7's answered
+    # every column for the first test job there; until C6's has, a run there
+    # records the harness's own clock.
+    assert Platform.GAEA_C7 in ACCOUNTING
+    assert Platform.GAEA_C6 not in ACCOUNTING
 
 
 def test_module_init_is_a_platform_fact() -> None:

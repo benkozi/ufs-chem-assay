@@ -42,10 +42,12 @@ class Accounting(StrEnum):
 
 # Platforms whose accounting the harness knows how to ask for; a platform
 # absent here (local) records the harness's own clock and null accounting
-# columns. Gaea C6/C7 join once their sacct is confirmed to answer the same
-# columns (one entry here).
+# columns. Gaea C7's sacct answered every column for the first test job there
+# (asked with the job's cluster, `-M c7`); Gaea C6 joins once its sacct is
+# confirmed the same way (one entry here).
 ACCOUNTING: dict[Platform, Accounting] = {
     Platform.URSA: Accounting.SACCT,
+    Platform.GAEA_C7: Accounting.SACCT,
 }
 
 
@@ -77,7 +79,7 @@ def module_init(platform: Platform) -> ModuleInit:
 # Hostname patterns (fullmatch) per platform. Ursa login nodes are ufe01-04;
 # the compute-node form is a first-run item recorded in the design doc. Gaea
 # login nodes are gaea<cluster digit><node digits>: C6 is gaea61-68; C7 is
-# gaea7N by the same scheme, to be confirmed on a first login there. A
+# gaea7N by the same scheme (gaea75.ncrc.gov on the first login there). A
 # hostname that matches nothing is LOCAL, and every Gaea run config names its
 # platform explicitly, so a wrong pattern costs nothing but the convenience.
 _HOSTNAME_PATTERNS: dict[Platform, re.Pattern[str]] = {

@@ -597,10 +597,12 @@ hostname (`ASSAY_PLATFORM` overrides; `local` when nothing matches) and
 `run.yaml` records `platform`, `runtime`, and `modulefile`. `gaea-c6` and
 `gaea-c7` are platforms too (2026-11-16): slurm by default, detected from
 the login-node hostnames (`gaea6\d+` — C6 is `gaea61`–`gaea68` — and
-`gaea7\d+` for C7 by the same scheme, to be confirmed on a first login;
-the run configs name the platform anyway), and without an `ACCOUNTING`
-entry until their `sacct` is confirmed — a Gaea run records the harness's
-own clock.
+`gaea7\d+` for C7 by the same scheme: `gaea75.ncrc.gov` on the first
+login there, 2026-11-17; the run configs name the platform anyway). C7
+has an `ACCOUNTING` entry since 2026-11-18: its `sacct`, asked with the
+job's cluster (`-M c7`), answered every column for the first test job
+there. C6 has none until its `sacct` is confirmed the same way — a run
+there records the harness's own clock.
 
 **The module block** (2026-11-16) is one rendering, `lmod.module_lines`,
 for the build stage (`cli/stages.py:module_block`, from the run config's
@@ -760,7 +762,30 @@ touch (`record_benchmarks` and baselines are off: the build is Debug).
 Unlike `local.yaml` and `ursa.yaml` it lists the keys that matter to it
 rather than every key. `docs/kokkos-runbook.md` is its runbook; the
 template's two tests (in `test_toolchains.py`) load it and render every
-toolchain's scripts. The path model is one
+toolchain's scripts.
+
+**The Gaea C7 template** (2026-11-18) is `config/gaea-c7.yaml`: one
+toolchain, `oneapi` (`modulefiles/ufs_gaeac7.oneapi.lua` — the weather
+model's C7 file, with the oneAPI swap made part of the file — over the
+spack-stack 2.2.0 environment's `modules/Core`; `esmf_ver` and `mapl_ver`
+pinned in `module_env`; `mpi_launcher: srun` with no preflags and an
+empty `tests_env`), and one application, `cece`. It is what the first C7
+runs established, and it is interim in one respect: that environment
+carries no Kokkos, kokkos-kernels or ArborX, so CECE fetches its own
+Kokkos, the build is the login node's (`build_node: login`), the gate is
+`CECE dependency Kokkos: FetchContent`, there is no ArborX gate, the
+modulefile takes the three packages with `try_load`, and `catchem` and
+`kokkos-smoke` (which need the environment's Kokkos) are left out. Every
+such line carries `TODO(gaea-c7)` and what it becomes. The CECE ref is a
+fork branch for the same reason a template may name one at all: it is
+the only ref that builds there — ESMF 9's own CMake package passes the
+Fortran driver's `-cxxlib` to `icpx`, and the fix to CECE's
+`cmake/FindESMF.cmake` is not upstream yet. Nothing in the harness is
+C7-specific beyond the two platform facts (`module reset`, the
+`ACCOUNTING` entry): the cluster reaches `sbatch` through
+`slurm.extra_args: --clusters=c7` and comes back from `--parsable`. Two
+tests in `test_toolchains.py` load the template and render its three
+stages. The path model is one
 abstraction: `ComboRoots.driver` is the output root *as the driver sees
 it* — a container path under docker, the host path natively — and
 generated configs carry it in `output.directory` and `driver.log_file`.
@@ -1190,7 +1215,7 @@ Persistent benchmarking (2026-10-23, `src/benchmarks.py`; full design in
   job template in the batch script; empty when the job was killed),
   Slurm accounting (`queue_s`, `elapsed_s`, `max_rss_kb`, `slurm_job_id`,
   `slurm_state` from one `sacct -P -n` query per job, retried once, on
-  platforms whose `platforms.ACCOUNTING` entry says so — Ursa; null
+  platforms whose `platforms.ACCOUNTING` entry says so — Ursa and Gaea C7; null
   elsewhere, never a failure), outcome (`driver_result`
   passed/failed/timeout — timeout from the harness's `TimeoutExpired` or
   Slurm's `TIMEOUT`; `exit_code`; `nc_files`; `output_bytes`), and the
@@ -1389,9 +1414,12 @@ All code under `src/`; the project is `uv`-managed with its own
   config/                 # run-config templates: local.yaml (docker), ursa.yaml (native + slurm;
                           #   sessions: simple-maccity, gcafs-anthro, a commented exhaustive-maccity),
                           #   ursa-kokkos.yaml (toolchains oneapi + gnu; cece, catchem and
-                          #   kokkos-smoke built as the offline probe and tested; sessions opt-in)
+                          #   kokkos-smoke built as the offline probe and tested; sessions opt-in),
+                          #   gaea-c7.yaml (toolchain oneapi; cece built on the login node and
+                          #   tested; interim until the environment carries Kokkos)
   modulefiles/            # harness-owned UFS platform modulefiles (ufs_common, ufs_ursa.oneapi,
-                          #   ufs_ursa.gnu, ufs_gaeac6.oneapi): no environment root of their own
+                          #   ufs_ursa.gnu, ufs_gaeac6.oneapi, ufs_gaeac7.oneapi): no environment
+                          #   root of their own
   design/design.md
   src/
     applications/

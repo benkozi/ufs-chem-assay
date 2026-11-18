@@ -828,3 +828,138 @@ def test_the_kokkos_template_renders_every_toolchain(
     harness = (scripts / "05-harness-cece-oneapi-simple-maccity.sh").read_text()
     assert f"export CECE_ROOT_DIR={tmp_path}/root/oneapi/CECE" in harness
     assert "export CECE_MODULEFILE=ufs_ursa.oneapi" in harness
+
+
+# ── config/gaea-c7.yaml, as shipped ──────────────────────────────────────────
+
+_GAEA_C7 = TEMPLATES_DIR / "gaea-c7.yaml"
+_C7_ENVIRONMENT = Path(
+    "/ncrc/proj/epic/spack-stack/c7/spack-stack-2.2.0/envs/ue-oneapi-2025.3.1"
+)
+
+
+def test_the_gaea_c7_template_loads_as_shipped() -> None:
+    config = load_run_config(_GAEA_C7)
+    assert config.platform.value == "gaea-c7"
+    assert list(config.toolchains) == ["oneapi"]
+    assert config.application_names == ["cece"]  # what has been built there
+    toolchain = config.toolchains["oneapi"]
+    assert toolchain.mpi_launcher is MpiLauncher.SRUN
+    assert toolchain.mpiexec_preflags is None
+    assert toolchain.tests_env == {}
+    # The environment builds its UFS stack against one ESMF; its default
+    # esmf module is a later beta, which the mapl module does not match.
+    assert toolchain.module_env == {
+        "esmf_ver": "9.0.0b17",
+        "mapl_ver": "2.69.1-esmf-9.0.0b17",
+    }
+    (build,) = toolchain_configs(config, ["all"])
+    cece = build.applications["cece"]
+    assert cece.modulefile == "ufs_gaeac7.oneapi"
+    assert cece.modulepath == [
+        Path("modulefiles"),
+        _C7_ENVIRONMENT / "modules" / "Core",
+    ]
+    assert cece.toolchain_tools == ["icx", "icpx", "ifx", "cmake", "ctest"]
+    assert {"-DCMAKE_BUILD_TYPE=Debug", "-DENABLE_ESMF=ON"} <= set(cece.build_flags())
+    # The ref that builds against the environment's ESMF 9 (a FindESMF fix
+    # not yet upstream); the template says when it goes back to develop.
+    assert (cece.git_url, cece.ref) == (
+        "git@github.com:benkozi/CECE.git",
+        "feature/multi-tile-host-decomp",
+    )
+    # Interim, until the environment carries Kokkos: CECE fetches its own,
+    # which needs the network, so the build is the login node's; and there is
+    # no ArborX to gate on.
+    assert cece.build_node is BuildNode.LOGIN
+    assert cece.configure_gates == ["CECE dependency Kokkos: FetchContent"]
+    assert cece.tests.enabled is True
+    assert (cece.tests.ntasks, cece.tests.cpus, cece.tests.minutes) == (4, 8, 15)
+    assert cece.tests.env == {"PIP_NO_INDEX": "1"}  # no network on a compute node
+    assert config.slurm is not None
+    assert (config.slurm.account, config.slurm.qos, config.slurm.partition) == (
+        "epic",
+        "normal",
+        "batch",
+    )
+    assert config.slurm.extra_args == "--clusters=c7"
+    assert config.sessions == {}  # no driver session has run on C7
+    text = _GAEA_C7.read_text()
+    assert not any(line.startswith("root_dir:") for line in text.splitlines())
+    for needle in (
+        "--config-file=config/gaea-c7.yaml --application cece",
+        "--stage source --stage build --stage test",
+        "ufs-chem-assay watch --only tests",
+        "ufs-chem-assay report --only tests",
+        "TODO(gaea-c7)",
+        "CECE dependency Kokkos: system",  # what the gate becomes
+        "build_node: compute",  # and where the build goes
+    ):
+        assert needle in text, needle
+
+
+def test_the_gaea_c7_template_renders_the_build_and_test_stages(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    run_bash = mocker.patch("cli.commands.run.run_bash")
+    root = tmp_path / "root"
+    assert (
+        main(
+            [
+                "run",
+                f"--config-file={_GAEA_C7}",
+                f"--root-dir={root}",
+                "--application=cece",
+                "--stage=source",
+                "--stage=build",
+                "--stage=test",
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    run_bash.assert_not_called()
+    scripts = root / "scripts"
+    assert sorted(p.name for p in scripts.glob("*.sh")) == [
+        "01-source-cece-oneapi.sh",
+        "02-build-cece-oneapi.sh",
+        "04-test-cece-oneapi.sh",
+    ]
+    build = (scripts / "02-build-cece-oneapi.sh").read_text().splitlines()
+    module_lines = [
+        line for line in build if line.startswith(("module ", "export ", "which "))
+    ]
+    assert module_lines == [
+        "module reset",  # never purge on Gaea
+        "export esmf_ver=9.0.0b17",
+        "export mapl_ver=2.69.1-esmf-9.0.0b17",
+        f"module use {HARNESS_ROOT / 'modulefiles'}",
+        f"module use {_C7_ENVIRONMENT}/modules/Core",
+        "module load ufs_gaeac7.oneapi",
+        "module list",
+        "which icx icpx ifx cmake ctest",
+    ]
+    assert "echo 'build node: login'" in build
+    (configure,) = [line for line in build if line.startswith("cmake -S ")]
+    assert '-DMPIEXEC_EXECUTABLE="$(command -v srun)"' in configure
+    assert "-DCECE_BUILD_TESTING=OFF" not in configure  # one build, with the tests
+    assert not any(line.startswith("srun ") for line in build)
+    gates = [line for line in build if line.startswith("grep -Eq ")]
+    assert [gate.split("'")[1] for gate in gates] == [
+        "CECE dependency ESMF: system",
+        "CECE dependency Kokkos: FetchContent",
+    ]
+    job = (scripts / "04-test-cece-oneapi.sbatch").read_text().splitlines()
+    for directive in (
+        "#SBATCH -A epic",
+        "#SBATCH -q normal",
+        "#SBATCH -p batch",
+        "#SBATCH -n 4",
+        "#SBATCH -c 8",
+        "#SBATCH --time=15",
+        "#SBATCH --clusters=c7",
+    ):
+        assert directive in job, directive
+    assert "module reset" in job
+    assert "module load ufs_gaeac7.oneapi" in job
+    assert "export PIP_NO_INDEX=1" in job

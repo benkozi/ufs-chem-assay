@@ -25,6 +25,7 @@ def _user_facing_files() -> list[Path]:
 def test_templates_live_in_config() -> None:
     assert TEMPLATES_DIR == _REPO_ROOT / "config"
     assert sorted(p.name for p in TEMPLATES_DIR.glob("*.yaml")) == [
+        "gaea-c7.yaml",
         "local.yaml",
         "ursa-kokkos.yaml",
         "ursa.yaml",
@@ -45,7 +46,8 @@ def test_templates_carry_the_applications_map(name: str) -> None:
 
 def test_modulefiles_are_user_facing() -> None:
     names = {path.name for path in _user_facing_files()}
-    assert {"ufs_common.lua", "ufs_ursa.oneapi.lua"} <= names
+    assert {"ufs_common.lua", "ufs_ursa.oneapi.lua", "ufs_gaeac7.oneapi.lua"} <= names
+    assert "gaea-c7.yaml" in names
 
 
 @pytest.mark.parametrize("path", _user_facing_files(), ids=lambda p: p.name)
