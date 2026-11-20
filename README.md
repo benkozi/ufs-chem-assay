@@ -733,10 +733,14 @@ output roots gain a `/<toolchain>` segment, so two toolchains never
 share anything but the harness checkout, `scripts/`, `logs/` and the uv
 cache. With several selected, the run is toolchain-major — every script
 of every toolchain is rendered first, then the whole stage list runs for
-one toolchain, then for the next; a failed stage ends its own
-toolchain's sequence only, the others still run whole, and the run exits
-with the first failure's status after one line per toolchain (`oneapi:
-failed at 02-build-cece-oneapi.sh (exit 2)`, `gnu: ok`):
+one toolchain, then for the next. A failed stage stops only what
+depends on it: a failed source stage skips the rest of that
+application, any other failed stage skips the later stages of the same
+application and build variant (a failed build its tests), and every
+other application, variant and toolchain runs on, each skipped script
+logged with the failure that skipped it. The run exits with the first
+failure's status after one line per toolchain (`oneapi: failed at
+02-build-cece-oneapi.sh (exit 2)`, `gnu: ok`):
 
 ```sh
 uv run ufs-chem-assay run --config-file=<config> --application all --toolchain all \

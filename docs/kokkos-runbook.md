@@ -79,8 +79,10 @@ uv run ufs-chem-assay report --only tests
 ```
 
 `run` goes one toolchain at a time: the whole stage list for `oneapi`,
-then for `gnu`. A failed stage ends that toolchain's sequence only; the
-other still runs whole, and `run` ends with one line per toolchain
+then for `gnu`. A failed stage stops only what depends on it — a failed
+build skips its own tests, a failed clone the rest of that application —
+and everything else still runs, so the test jobs of the builds that
+succeeded are submitted; `run` ends with one line per toolchain
 (`oneapi: ok`, `gnu: failed at 02-build-catchem-gnu.sh (exit 1)`) and
 the first failure's exit status. `--toolchain gnu` runs one of them;
 `--application cece` one application; `--stage test` one stage, against

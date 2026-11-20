@@ -760,8 +760,12 @@ the requested names or `all`; else the selection the last `run` recorded
 (`selected_toolchains` in the effective config), else the map's only
 entry — several unrecorded ones are an error. `run` renders every
 selected toolchain's scripts before executing anything, then runs
-toolchain-major, continuing past a failed toolchain and exiting with the
-first failure's status after one outcome line each; `watch` and `report`
+toolchain-major, and a failure stops only what depends on it (2026-11-20,
+`run._execute`: each script carries its lane — application, build variant,
+stage; a failed source stage blocks the rest of its application, any other
+failed stage the rest of its application and variant, a skipped script is
+a WARNING naming the failure), exiting with the first failure's status
+after one outcome line per toolchain that lists every failure; `watch` and `report`
 collect the sessions and test runs of every selected toolchain (labels
 `<toolchain>/<session>`, `tests <application>/<toolchain>`; the session
 log lookup includes the toolchain); `submit-tests` and `evaluate-tests`
@@ -800,11 +804,9 @@ selects (the recorded `selected_builds`, empty for all, else every one),
 renders `Stage.BUILD` and `Stage.TEST` once per selected variant
 (`_PER_BUILD`), the source stage once, and refuses the data, harness and
 resume stages for an application with variants (a driver session runs
-against one build; a run config cannot name which yet). Inside one
-toolchain a failed stage still ends that toolchain's sequence, variants
-included — the design asked for a failed variant to leave the next one
-running, which needs per-application failure tracking in `run` and is
-not done. Without `builds:` every name, path and script is what it was
+against one build; a run config cannot name which yet). A failed variant
+stops only its own later stages, never another variant's or another
+application's (`run._execute`, above). Without `builds:` every name, path and script is what it was
 (`test_builds.py` renders each shipped template with and without an
 empty map and compares the scripts).
 

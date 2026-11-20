@@ -142,6 +142,11 @@ def register(subparsers: Subparsers, name: str) -> None:
 # per application from the section as written.
 _PER_BUILD = frozenset({Stage.BUILD, Stage.TEST})
 
+# One script to execute: its path, then its lane — the application, the build
+# variant (None for the unnamed build and for the stages a variant has no
+# script of) and the stage. A failure stops only its lane (_execute).
+_Step = tuple[Path, str, str | None, Stage]
+
 
 def _render(
     config: RunConfig,
@@ -151,7 +156,7 @@ def _render(
     render: list[Stage],
     builds: list[str] | None,
     scripts_dir: Path,
-) -> list[Path]:
+) -> list[_Step]:
     """Render and write one build's scripts — the config as loaded, or as
     one toolchain builds it — and return the ones to execute, in order.
     Stage-major: every application's source, then every build, ... so build
@@ -167,7 +172,7 @@ def _render(
     shared_data_app = next(
         (app.name for app in applications if Stage.DATA in app.stages), None
     )
-    to_run: list[Path] = []
+    to_run: list[_Step] = []
     for stage in render:
         for app in applications:
             if stage not in app.stages:
@@ -186,7 +191,8 @@ def _render(
                         render_stage(stage, variant, app), scripts_dir, _INDEX[stage]
                     )
                     logger.info("wrote %s", path)
-                    to_run.append(path)
+                    build = variant.applications[app.name].build_name
+                    to_run.append((path, app.name, build, stage))
                 continue
             if stage in PER_SESSION:
                 for session in sessions:
@@ -199,7 +205,7 @@ def _render(
                     )
                     logger.info("wrote %s", path)
                     if stage in stages:
-                        to_run.append(path)
+                        to_run.append((path, app.name, None, stage))
             else:
                 path = write_script(
                     render_stage(
@@ -213,8 +219,38 @@ def _render(
                     _INDEX[stage],
                 )
                 logger.info("wrote %s", path)
-                to_run.append(path)
+                to_run.append((path, app.name, None, stage))
     return to_run
+
+
+def _execute(to_run: list[_Step], logs_dir: Path) -> list[tuple[Path, int]]:
+    """Run one toolchain's scripts in order and return its failures (script,
+    exit code), in order. A failure stops only what depends on it: a failed
+    source stage every later script of that application; any other failed
+    stage the later scripts of the same application and build variant (a
+    failed build its tests, a failed data stage its sessions). Every other
+    application and variant runs on, so one broken build cannot keep the
+    others' test jobs from being submitted."""
+    failures: list[tuple[Path, int]] = []
+    sources: dict[str, tuple[Path, int]] = {}
+    lanes: dict[tuple[str, str | None], tuple[Path, int]] = {}
+    for path, app, build, stage in to_run:
+        cause = sources.get(app) or lanes.get((app, build))
+        if cause is not None:
+            logger.warning(
+                "skipped %s: %s failed (exit %s)", path.name, cause[0].name, cause[1]
+            )
+            continue
+        code = run_bash(path, logs_dir)
+        if code == 0:
+            continue
+        logger.error("stage %s failed with exit %s", path.stem, code)
+        failures.append((path, code))
+        if stage is Stage.SOURCE:
+            sources[app] = (path, code)
+        else:
+            lanes[(app, build)] = (path, code)
+    return failures
 
 
 def _refuse_driver_stages_with_builds(
@@ -329,25 +365,24 @@ def handler(args: argparse.Namespace) -> int:
         logger.info("dry run: nothing executed")
         return 0
     # Toolchain-major: the whole stage list for one toolchain, then for the
-    # next. A failed stage ends its own toolchain's sequence only — the
-    # others still run whole — and the run's status is the first failure's.
+    # next. A failure stops only what depends on it (_execute), inside its
+    # toolchain and never across toolchains; the run's status is the first
+    # failure's.
     status = 0
-    outcomes: list[tuple[str, Path | None, int]] = []
+    outcomes: list[tuple[str, list[tuple[Path, int]]]] = []
     for toolchain, to_run in plans:
-        failed, code = None, 0
-        for path in to_run:
-            code = run_bash(path, logs_dir)
-            if code != 0:
-                logger.error("stage %s failed with exit %s", path.stem, code)
-                failed = path
-                break
-        if toolchain is None:
-            return code
-        outcomes.append((toolchain, failed, code))
-        status = status or code
-    for toolchain, failed, code in outcomes:
-        if failed is None:
+        failures = _execute(to_run, logs_dir)
+        if failures and not status:
+            status = failures[0][1]
+        if toolchain is not None:
+            outcomes.append((toolchain, failures))
+    for toolchain, failures in outcomes:
+        if not failures:
             logger.info("%s: ok", toolchain)
         else:
-            logger.error("%s: failed at %s (exit %s)", toolchain, failed.name, code)
+            logger.error(
+                "%s: failed at %s",
+                toolchain,
+                ", ".join(f"{path.name} (exit {code})" for path, code in failures),
+            )
     return status

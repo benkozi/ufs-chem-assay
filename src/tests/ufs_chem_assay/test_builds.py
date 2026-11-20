@@ -557,3 +557,105 @@ def test_evaluate_tests_records_the_variant_of_a_run_in_place(
     assert main([*args, "--build=compute", "--exit-status=0"]) == 0
     assert record.call_args.args[0] == root / "oneapi" / "tests" / "catchem" / "compute"
     assert record.call_args.kwargs["build"] == "compute"
+
+
+# ── a failure stops only what depends on it ──────────────────────────────
+
+
+def _run_lanes(
+    tmp_path: Path,
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
+    failing: dict[str, int],
+    *stages: str,
+) -> tuple[int, list[str]]:
+    """Run the Ursa template's oneapi toolchain with the named scripts
+    failing (name -> exit code); the scripts that ran, and the status."""
+    ran: list[str] = []
+
+    def bash(path: Path, _logs: Path) -> int:
+        ran.append(path.name)
+        return failing.get(path.name, 0)
+
+    mocker.patch("cli.commands.run.run_bash", side_effect=bash)
+    path = _kokkos_file(tmp_path)
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(
+            [
+                "run",
+                f"--config-file={path}",
+                f"--root-dir={tmp_path / 'root'}",
+                "--application=all",
+                "--toolchain=oneapi",
+                *(f"--stage={stage}" for stage in stages),
+            ]
+        )
+    return code, ran
+
+
+def test_a_failed_build_skips_only_its_own_tests(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The MUSICA build fails: CECE's, CATChem's compute and the smoke
+    # project's tests are still submitted; only the musica tests are not.
+    code, ran = _run_lanes(
+        tmp_path,
+        mocker,
+        caplog,
+        {"02-build-catchem-oneapi-musica.sh": 2},
+        "build",
+        "test",
+    )
+    assert code == 2
+    assert ran == [
+        "02-build-cece-oneapi.sh",
+        "02-build-catchem-oneapi-compute.sh",
+        "02-build-catchem-oneapi-musica.sh",  # exit 2
+        "02-build-kokkos-smoke-oneapi.sh",
+        "04-test-cece-oneapi.sh",
+        "04-test-catchem-oneapi-compute.sh",
+        "04-test-kokkos-smoke-oneapi.sh",
+    ]
+    assert (
+        "skipped 04-test-catchem-oneapi-musica.sh: "
+        "02-build-catchem-oneapi-musica.sh failed (exit 2)"
+    ) in caplog.text
+    assert "oneapi: failed at 02-build-catchem-oneapi-musica.sh (exit 2)" in caplog.text
+
+
+def test_a_failed_clone_skips_every_build_of_that_application(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    code, ran = _run_lanes(
+        tmp_path,
+        mocker,
+        caplog,
+        {"01-source-catchem-oneapi.sh": 128},
+        "source",
+        "build",
+        "test",
+    )
+    assert code == 128
+    assert not [name for name in ran if "catchem" in name and "source" not in name]
+    assert "04-test-cece-oneapi.sh" in ran
+    assert "04-test-kokkos-smoke-oneapi.sh" in ran
+
+
+def test_every_failure_is_reported_and_the_first_is_the_status(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    code, ran = _run_lanes(
+        tmp_path,
+        mocker,
+        caplog,
+        {"02-build-cece-oneapi.sh": 3, "04-test-catchem-oneapi-compute.sh": 1},
+        "build",
+        "test",
+    )
+    assert code == 3
+    assert "04-test-cece-oneapi.sh" not in ran
+    assert "04-test-catchem-oneapi-musica.sh" in ran
+    assert (
+        "oneapi: failed at 02-build-cece-oneapi.sh (exit 3), "
+        "04-test-catchem-oneapi-compute.sh (exit 1)"
+    ) in caplog.text
