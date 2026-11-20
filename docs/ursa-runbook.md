@@ -42,6 +42,12 @@ No root, no conda, no `rdhpcs-python` module needed. Put the three
 `export`s in your shell profile (or a small `source`-able file under
 `$ROOT`) so batch scripts and later logins see them.
 
+The harness runs on a Python that uv installs itself, under
+`UV_PYTHON_INSTALL_DIR`: the checkout's `.python-version` pins 3.14,
+which neither the system Python nor a module stack's Python (spack-stack's
+`python` module) provides. A harness venv built on a module's Python
+would break as soon as that module is unloaded.
+
 ### AWS CLI (once, for S3 data sync)
 
 The harness syncs data with `aws s3 sync` (today: the `data_integration`
@@ -77,7 +83,7 @@ uv run pytest -m data_integration src/tests/ufs_chem_assay/test_s3_sync.py -v
 ```bash
 git clone --branch "$HARNESS_REF" git@github.com:benkozi/ufs-chem-assay.git $ROOT/ufs-chem-assay
 cd $ROOT/ufs-chem-assay
-UV_PYTHON=3.13 uv sync --frozen        # downloads CPython 3.13 + wheels
+uv sync --frozen                      # downloads CPython 3.14 (.python-version) + wheels
 uv run pytest src/tests/ufs_chem_assay # harness suite: hermetic, login-node safe
 uv run pytest src/tests/test_driver_combos.py --dry-run --application=cece   # no CECE needed
 ```

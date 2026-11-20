@@ -57,6 +57,11 @@ class PendingState(StrEnum):
     UNKNOWN = QUEUED_UNKNOWN
 
 
+# The same states as a set, for testing a plain squeue value: `state in
+# PendingState` raises TypeError for a str before Python 3.12.
+PENDING_STATES = frozenset(PendingState)
+
+
 @unique
 class SessionState(StrEnum):
     """What one tick knows about one session."""
@@ -205,7 +210,7 @@ def tick(
             state = states.get(job.job_id)
             if state is None:
                 done += 1
-            elif state in PendingState:
+            elif state in PENDING_STATES:
                 queued += 1
             else:
                 running += 1
@@ -296,7 +301,7 @@ class TestsReport(StrictModel):
         if self.state is TestsState.FAILED:
             return f"evaluation failed ({self.detail})"
         if self.state is TestsState.WAITING:
-            how = "queued" if self.queue_state in PendingState else "running"
+            how = "queued" if self.queue_state in PENDING_STATES else "running"
             return f"job {self.job_id} {how} ({self.queue_state}); not evaluated"
         done = "done" if self.job_id is not None else "run in place"
         return f"job {self.job_id} {done}; not evaluated"

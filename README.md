@@ -51,7 +51,8 @@ NetCDF files). Design rationale lives in [design/design.md](design/design.md).
 
 ```sh
 uv sync                       # includes dev tools (mypy, pre-commit, stubs) and
-                              #   installs the `ufs-chem-assay` command (editable)
+                              #   installs the `ufs-chem-assay` command (editable);
+                              #   Python 3.14, the .python-version pin
 uv run pre-commit install     # ruff check/format, mypy, vulture, codespell, the lock check
                               #   on every commit, plus
                               #   the conventional-commit message gate (the
@@ -749,7 +750,8 @@ later beta than the one its MAPL is built against. `slurm.extra_args` is
 (`build_node: login`), where every C7 build so far has run: the
 environment provides Kokkos, kokkos-kernels and ArborX, and the gates
 require CECE to take them (`CECE dependency Kokkos: system`, the ArborX
-line), but the compute-node build has not been tried there yet. To try
+line); CECE also takes the environment's yaml-cpp (the modulefile loads
+`yaml-cpp`, and `CECE dependency yaml-cpp: system` is a gate), but the compute-node build has not been tried there yet. To try
 it, add `--override applications:cece:build_node=compute`; the line is
 marked `TODO(gaea-c7)`. CATChem and the Kokkos smoke project are not in
 the template yet. The test job exports `PIP_NO_INDEX=1`, which stops the pip

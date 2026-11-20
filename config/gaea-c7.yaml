@@ -60,6 +60,7 @@ applications:  # one section per application in the run, keyed by adapter name
       - all
     configure_gates:  # with ESMF on, the adapter already requires `CECE dependency ESMF: system`
       - 'CECE dependency Kokkos: system'  # the environment's Kokkos, not a fetched one
+      - 'CECE dependency yaml-cpp: system'  # the environment's yaml-cpp, not the extern/yaml-cpp submodule
     build_node: login  # TODO(gaea-c7): compute, once a compute-node build has run here (see the header)
     build_minutes: 10  # each compile step's time limit under build_node: compute
     tests:  # ctest, one Slurm job: ctest on the node, each MPI test launching its own ranks

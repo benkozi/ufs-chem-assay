@@ -234,7 +234,9 @@ node. Sections 1 to 5 and 7 apply with these differences:
 - **The build runs on the login node** (`build_node: login`: no `srun`
   steps, one configure, the test stack included). The environment
   provides Kokkos, kokkos-kernels and ArborX, and the gates are the same
-  as on Ursa (`CECE dependency Kokkos: system`, the ArborX line), but the
+  as on Ursa (`CECE dependency Kokkos: system`, the ArborX line) plus
+  `CECE dependency yaml-cpp: system`: the C7 modulefile also loads the
+  environment's `yaml-cpp`, which CECE then takes over its submodule. But the
   compute-node build of section 3 has not been tried on C7 yet. To try
   it, add `--override applications:cece:build_node=compute` to the `run`
   command (the line is marked `TODO(gaea-c7)` in the template). CATChem

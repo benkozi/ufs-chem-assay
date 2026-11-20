@@ -774,7 +774,10 @@ runs established. Since 2026-11-20 the environment carries Kokkos,
 kokkos-kernels and ArborX (`kokkos/5.1.1`, `kokkos-kernels/5.1.1`,
 `arborx/2.1`), so the modulefile loads the first two as the Ursa and C6
 files do and the gates are Ursa's (`CECE dependency Kokkos: system`, the
-ArborX line). Before that, CECE fetched its own Kokkos and gated on
+ArborX line). The modulefile also loads the environment's `yaml-cpp/0.8.0`
+(a local addition: the weather model does not), and the CECE gate
+`CECE dependency yaml-cpp: system` holds the build to it rather than the
+`extern/yaml-cpp` submodule (2026-11-20). Before that, CECE fetched its own Kokkos and gated on
 `CECE dependency Kokkos: FetchContent`. Two things are still interim:
 the build is the login node's (`build_node: login`, marked
 `TODO(gaea-c7)`: the compute-node build has not run on C7), and `catchem`
@@ -1409,6 +1412,9 @@ All code under `src/`; the project is `uv`-managed with its own
 ```
 <repo root>/
   pyproject.toml          # uv project: pytest, pytest-mock, pydantic>=2, pydantic-settings, pyyaml
+  .python-version         # uv's interpreter for the harness venv: 3.14, as in CI; on an HPC machine no
+                          #   system or module-stack Python satisfies it, so uv installs its own
+                          #   (requires-python stays >=3.11: test_python_compat.py keeps the source 3.11-safe)
   README.md               # user-facing setup + run instructions
   docs/ursa-runbook.md    # manual native run on Ursa (what the CLI automates)
   docs/gcafs-anthro-runbook.md  # the global anthropogenic use case on top of it

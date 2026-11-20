@@ -871,7 +871,11 @@ def test_the_gaea_c7_template_loads_as_shipped() -> None:
     )
     # The environment's Kokkos, never a fetched one. The build stays on the
     # login node until a compute-node build has run on C7.
-    assert cece.configure_gates == ["CECE dependency Kokkos: system", _ARBORX]
+    assert cece.configure_gates == [
+        "CECE dependency Kokkos: system",
+        "CECE dependency yaml-cpp: system",  # the environment's, not the submodule
+        _ARBORX,
+    ]
     assert cece.build_node is BuildNode.LOGIN
     assert cece.tests.enabled is True
     assert (cece.tests.ntasks, cece.tests.cpus, cece.tests.minutes) == (4, 8, 15)
@@ -947,6 +951,7 @@ def test_the_gaea_c7_template_renders_the_build_and_test_stages(
     assert [gate.split("'")[1] for gate in gates] == [
         "CECE dependency ESMF: system",
         "CECE dependency Kokkos: system",
+        "CECE dependency yaml-cpp: system",
         _ARBORX,
     ]
     job = (scripts / "04-test-cece-oneapi.sbatch").read_text().splitlines()

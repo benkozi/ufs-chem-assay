@@ -114,3 +114,16 @@ def test_the_gaea_c7_file_is_the_weather_models_recipe() -> None:
         assert f'setenv("{variable}","{compiler}")' in text
     assert 'setenv("CMAKE_Platform","gaeac7.oneapi")' in text
     assert '"ftn"' not in text
+
+
+def test_the_gaea_c7_file_loads_the_environments_yaml_cpp() -> None:
+    # CECE prefers an installed yaml-cpp over its submodule; the environment
+    # has one (yaml-cpp/0.8.0), and loading its module is what lets
+    # find_package see it. Pinnable like every other load.
+    text = (_MODULEFILES / _GAEA_C7).read_text()
+    assert 'yaml_cpp_ver=os.getenv("yaml_cpp_ver")' in text
+    assert _loads(text, 'load(pathJoin("yaml-cpp", yaml_cpp_ver))')
+    assert _loads(text, 'load("yaml-cpp")')
+    assert text.index('load("yaml-cpp")') > text.index(
+        'load(pathJoin("stack-cray-mpich"'
+    )

@@ -24,6 +24,10 @@
 --      since 2026-11-20 (kokkos/5.1.1, kokkos-kernels/5.1.1) — then arborx
 --      tolerantly (pin via arborx_ver, else try_load), as in the Ursa and
 --      C6 files.
+--   5. yaml-cpp loaded (pin via yaml_cpp_ver): CECE takes an installed
+--      yaml-cpp over its bundled submodule when find_package sees one, and
+--      the environment has yaml-cpp/0.8.0. The weather model does not load
+--      it.
 -- Everything else is verbatim: the cray-mpich unload, the stack pins (the
 -- toolchain under test) and the compilers, which are Intel's own icx / icpx
 -- / ifx (C7 has no Cray cc / CC / ftn wrappers). Load it after
@@ -100,6 +104,14 @@ if kokkos_kernels_ver then
   load(pathJoin("kokkos-kernels", kokkos_kernels_ver))
 else
   load("kokkos-kernels")
+end
+
+-- Local addition (see header): the environment's yaml-cpp, for CECE.
+yaml_cpp_ver=os.getenv("yaml_cpp_ver")
+if yaml_cpp_ver then
+  load(pathJoin("yaml-cpp", yaml_cpp_ver))
+else
+  load("yaml-cpp")
 end
 
 -- Local addition (see header): arborx, tolerantly (arborx/2.1 in the C7
