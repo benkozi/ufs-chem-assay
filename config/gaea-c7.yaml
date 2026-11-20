@@ -7,14 +7,14 @@
 #   ufs-chem-assay report --only tests
 # The build is under <root_dir>/oneapi/ (checkout, build directory, tests root); its scripts are
 # <root_dir>/scripts/<NN>-<stage>-cece-oneapi.sh. Single-node jobs are moved to the batch-shared partition by the
-# scheduler ("Single node Jobs are redirected"): the test job is one node, so that message is expected.
-# The environment provides Kokkos, kokkos-kernels and ArborX (kokkos/5.1.1, kokkos-kernels/5.1.1, arborx/2.1), and
-# the gates require CECE to take them rather than fetch its own. TODO(gaea-c7): the build runs on the login node,
-# where everything has run on C7 so far. The compute-node build (an offline compile probe on a compute node, then
-# a login-node finish with the test stack) has not been tried here; try it with
-#   --override applications:cece:build_node=compute
-# and make it the default once it works. CATChem and the harness's Kokkos smoke project are not in this file yet
-# (config/ursa-kokkos.yaml has them).
+# scheduler ("Single node Jobs are redirected"): the compile steps and the test job are one node each, so that
+# message is expected.
+# The environment provides Kokkos, kokkos-kernels, ArborX and yaml-cpp (kokkos/5.1.1, kokkos-kernels/5.1.1,
+# arborx/2.1, yaml-cpp/0.8.0), and the gates require CECE to take them rather than fetch or bundle its own. The
+# build is the offline compile probe: configure and compile as two srun steps on a compute node with the test
+# stack off (a compute node has no network), then a login-node finish that builds the test stack. To build on the
+# login node alone, add --override applications:cece:build_node=login. CATChem and the harness's Kokkos smoke
+# project are not in this file yet (config/ursa-kokkos.yaml has them).
 # Keys not listed keep their defaults (config/ursa.yaml lists every key); command-line overrides change any of
 # them: --override applications:cece:update_source=true slurm:qos=debug
 platform: gaea-c7  # optional: detected from the hostname (gaea7N) when absent; --platform wins
@@ -61,8 +61,8 @@ applications:  # one section per application in the run, keyed by adapter name
     configure_gates:  # with ESMF on, the adapter already requires `CECE dependency ESMF: system`
       - 'CECE dependency Kokkos: system'  # the environment's Kokkos, not a fetched one
       - 'CECE dependency yaml-cpp: system'  # the environment's yaml-cpp, not the extern/yaml-cpp submodule
-    build_node: login  # TODO(gaea-c7): compute, once a compute-node build has run here (see the header)
-    build_minutes: 10  # each compile step's time limit under build_node: compute
+    build_node: compute  # the offline compile probe (two srun steps), then a login-node finish with the test stack
+    build_minutes: 10  # each compile step's time limit
     tests:  # ctest, one Slurm job: ctest on the node, each MPI test launching its own ranks
       enabled: true
       filter:  # ctest -R regex; null = every test

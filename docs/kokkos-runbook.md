@@ -231,16 +231,15 @@ diff and commit it.
 toolchain (`oneapi`: Intel's compilers with cray-mpich), from a C7 login
 node. Sections 1 to 5 and 7 apply with these differences:
 
-- **The build runs on the login node** (`build_node: login`: no `srun`
-  steps, one configure, the test stack included). The environment
-  provides Kokkos, kokkos-kernels and ArborX, and the gates are the same
-  as on Ursa (`CECE dependency Kokkos: system`, the ArborX line) plus
-  `CECE dependency yaml-cpp: system`: the C7 modulefile also loads the
-  environment's `yaml-cpp`, which CECE then takes over its submodule. But the
-  compute-node build of section 3 has not been tried on C7 yet. To try
-  it, add `--override applications:cece:build_node=compute` to the `run`
-  command (the line is marked `TODO(gaea-c7)` in the template). CATChem
-  and the Kokkos smoke project are not in the C7 template yet.
+- **The build is the compute-node build of section 3**, the same as on
+  Ursa: two `srun` steps on a C7 compute node (they carry
+  `--clusters=c7` from `slurm.extra_args`), then the login-node finish.
+  The gates are Ursa's (`CECE dependency Kokkos: system`, the ArborX
+  line) plus `CECE dependency yaml-cpp: system`: the C7 modulefile also
+  loads the environment's `yaml-cpp`, which CECE then takes over its
+  submodule. To build on the login node alone, add
+  `--override applications:cece:build_node=login`. CATChem and the Kokkos
+  smoke project are not in the C7 template yet.
 - **The module block starts with `module reset`**, never a purge, and the
   modulefile swaps the site's default oneAPI and cray-mpich for the ones
   the environment was built with. `module_env` pins `esmf_ver` and

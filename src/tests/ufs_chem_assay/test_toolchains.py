@@ -869,14 +869,15 @@ def test_the_gaea_c7_template_loads_as_shipped() -> None:
         "git@github.com:benkozi/CECE.git",
         "feature/multi-tile-host-decomp",
     )
-    # The environment's Kokkos, never a fetched one. The build stays on the
-    # login node until a compute-node build has run on C7.
+    # The environment's Kokkos, never a fetched one; built as the offline
+    # compile probe on a compute node, then finished on the login node.
     assert cece.configure_gates == [
         "CECE dependency Kokkos: system",
         "CECE dependency yaml-cpp: system",  # the environment's, not the submodule
         _ARBORX,
     ]
-    assert cece.build_node is BuildNode.LOGIN
+    assert cece.build_node is BuildNode.COMPUTE
+    assert cece.build_minutes == 10
     assert cece.tests.enabled is True
     assert (cece.tests.ntasks, cece.tests.cpus, cece.tests.minutes) == (4, 8, 15)
     assert cece.tests.env == {"PIP_NO_INDEX": "1"}  # no network on a compute node
@@ -896,7 +897,7 @@ def test_the_gaea_c7_template_loads_as_shipped() -> None:
         "ufs-chem-assay watch --only tests",
         "ufs-chem-assay report --only tests",
         "TODO(gaea-c7)",
-        "applications:cece:build_node=compute",  # how to try the compute node
+        "applications:cece:build_node=login",  # the fallback
     ):
         assert needle in text, needle
 
@@ -942,18 +943,30 @@ def test_the_gaea_c7_template_renders_the_build_and_test_stages(
         "module list",
         "which icx icpx ifx cmake ctest",
     ]
-    assert "echo 'build node: login'" in build
-    (configure,) = [line for line in build if line.startswith("cmake -S ")]
-    assert '-DMPIEXEC_EXECUTABLE="$(command -v srun)"' in configure
-    assert "-DCECE_BUILD_TESTING=OFF" not in configure  # one build, with the tests
-    assert not any(line.startswith("srun ") for line in build)
+    # The offline probe: configure and compile as two srun steps on a C7
+    # compute node (the cluster from slurm.extra_args), the test stack off;
+    # then the login node re-configures with it on and builds it.
+    srun = (
+        "srun -A epic -q normal -p batch --clusters=c7 --nodes=1 --ntasks=1 "
+        "--cpus-per-task=8 --time=10 "
+    )
+    probe = [line for line in build if line.startswith(srun)]
+    assert [line.removeprefix(srun).split()[:2] for line in probe] == [
+        ["cmake", "-S"],
+        ["cmake", "--build"],
+    ]
+    assert "-DCECE_BUILD_TESTING=OFF" in probe[0]
+    (finish,) = [line for line in build if line.startswith("cmake -S ")]
+    assert "-DCECE_BUILD_TESTING=ON" in finish
+    for configure in (probe[0], finish):
+        assert '-DMPIEXEC_EXECUTABLE="$(command -v srun)"' in configure
     gates = [line for line in build if line.startswith("grep -Eq ")]
-    assert [gate.split("'")[1] for gate in gates] == [
+    assert [gate.split("'")[1] for gate in gates] == 2 * [
         "CECE dependency ESMF: system",
         "CECE dependency Kokkos: system",
         "CECE dependency yaml-cpp: system",
         _ARBORX,
-    ]
+    ]  # after each configure
     job = (scripts / "04-test-cece-oneapi.sbatch").read_text().splitlines()
     for directive in (
         "#SBATCH -A epic",

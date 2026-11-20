@@ -778,10 +778,11 @@ ArborX line). The modulefile also loads the environment's `yaml-cpp/0.8.0`
 (a local addition: the weather model does not), and the CECE gate
 `CECE dependency yaml-cpp: system` holds the build to it rather than the
 `extern/yaml-cpp` submodule (2026-11-20). Before that, CECE fetched its own Kokkos and gated on
-`CECE dependency Kokkos: FetchContent`. Two things are still interim:
-the build is the login node's (`build_node: login`, marked
-`TODO(gaea-c7)`: the compute-node build has not run on C7), and `catchem`
-and `kokkos-smoke` are left out. The CECE ref is a
+`CECE dependency Kokkos: FetchContent` and built on the login node. The
+build is the compute-node build since its first C7 run passed on
+2026-11-20 (`build_node: compute`: the two `srun` steps carry
+`--clusters=c7` from `slurm.extra_args`). One thing is still interim:
+`catchem` and `kokkos-smoke` are left out. The CECE ref is a
 fork branch for the same reason a template may name one at all: it is
 the only ref that builds there — ESMF 9's own CMake package passes the
 Fortran driver's `-cxxlib` to `icpx`, and the fix to CECE's

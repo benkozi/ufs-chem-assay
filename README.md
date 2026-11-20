@@ -746,15 +746,15 @@ spack-stack 2.2.0 environment through `modulefiles/ufs_gaeac7.oneapi.lua`.
 Three things in it are particular to the machine. `module_env` pins
 `esmf_ver` and `mapl_ver`, because the environment's default ESMF is a
 later beta than the one its MAPL is built against. `slurm.extra_args` is
-`--clusters=c7`. And the build stays on the login node
-(`build_node: login`), where every C7 build so far has run: the
-environment provides Kokkos, kokkos-kernels and ArborX, and the gates
-require CECE to take them (`CECE dependency Kokkos: system`, the ArborX
-line); CECE also takes the environment's yaml-cpp (the modulefile loads
-`yaml-cpp`, and `CECE dependency yaml-cpp: system` is a gate), but the compute-node build has not been tried there yet. To try
-it, add `--override applications:cece:build_node=compute`; the line is
-marked `TODO(gaea-c7)`. CATChem and the Kokkos smoke project are not in
-the template yet. The test job exports `PIP_NO_INDEX=1`, which stops the pip
+`--clusters=c7`, which reaches the build's `srun` steps as well as the
+test job. And CECE takes everything from the environment: Kokkos,
+kokkos-kernels and ArborX, and yaml-cpp (the modulefile loads `yaml-cpp`,
+a local addition), each held by a gate (`CECE dependency Kokkos: system`,
+`CECE dependency yaml-cpp: system`, the ArborX line). So the build is the
+offline compile probe, as on Ursa: `build_node: compute`, with
+`--override applications:cece:build_node=login` to build on the login
+node alone. CATChem and the Kokkos smoke project are not in the template
+yet. The test job exports `PIP_NO_INDEX=1`, which stops the pip
 fixtures of CECE's Python tests from retrying an index a compute node
 cannot reach.
 
