@@ -87,14 +87,14 @@ applications:  # one section per application in the run, keyed by adapter name
     update_source: false
     cmake_args:  # the adapter's defaults, written out: a Debug build (what its tests need) with all three components
       - -DCMAKE_BUILD_TYPE=Debug
-      - -DCATCHEM_ENABLE_KOKKOS=ON  # the adapter then requires `Using system Kokkos` in the configure log
-      - -DCATCHEM_BUILD_MUSICA=ON  # OFF for the compute-node probe (it fetches at configure time), ON for the finish
+      - -DCATCHEM_ENABLE_KOKKOS=ON  # always on; the adapter requires `Using system Kokkos` in the configure log
+      - -DCATCHEM_BUILD_MUSICA=ON  # MUSICA fetches at configure time: login node only
       - -DCATCHEM_BUILD_NUOPC=ON
     build_jobs: 8
     targets:
       - all
     configure_gates: []
-    build_node: compute
+    build_node: login
     build_minutes: 10
     tests:
       enabled: true
@@ -104,6 +104,16 @@ applications:  # one section per application in the run, keyed by adapter name
       cpus: 8  # for its OpenMP Kokkos tests
       minutes: 5
       env: {}
+    builds:  # two builds of the one checkout, each with its own build-<name> directory and test job
+      compute:  # MUSICA off: nothing is fetched, so the whole build, tests included, runs on a compute node
+        cmake_args:
+          - -DCMAKE_BUILD_TYPE=Debug
+          - -DCATCHEM_ENABLE_KOKKOS=ON
+          - -DCATCHEM_BUILD_MUSICA=OFF
+          - -DCATCHEM_BUILD_NUOPC=ON
+        build_node: compute
+      musica:  # the section as written: MUSICA on, on the login node
+        build_node: login
   kokkos-smoke:  # ships with the harness: nothing to clone; built under <root_dir>/<toolchain>/kokkos-smoke/build
     cmake_args:
       - -DCMAKE_BUILD_TYPE=Release

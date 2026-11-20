@@ -11,13 +11,13 @@ from pydantic import Field
 
 from applications.base import (
     ApplicationRunSection,
+    BuildNode,
     RunConfigView,
     Stage,
     TestPlan,
     ToolchainSection,
 )
 from cli.stages import (
-    OfflineBuild,
     cmake_stage,
     ctest_plan,
     gate_lines,
@@ -33,9 +33,21 @@ _DEBUG = "-DCMAKE_BUILD_TYPE=Debug"
 _KOKKOS_ON = "-DCATCHEM_ENABLE_KOKKOS=ON"
 _KOKKOS_GATE = "Using system Kokkos"
 # MUSICA fetches its own dependencies (micm, tuv-x, MechanismConfiguration)
-# at configure time.
+# at configure time: a MUSICA build is the login node's.
 _MUSICA = "-DCATCHEM_BUILD_MUSICA"
 _MUSICA_SUBMODULE = "src/external/musica/CMakeLists.txt"
+# With this on, CATChem's NUOPC build takes an installed yaml-cpp instead of
+# its vendored, namespaced copy. It prints nothing when it finds one, and this
+# one status line when it falls back to the vendored copy.
+_SYSTEM_YAML_CPP = "-DCATCHEM_USE_SYSTEM_YAML_CPP"
+_YAML_CPP_FALLBACK = "yaml-cpp not found on system, using internal version"
+
+
+def _flag_on(cmake_args: list[str], flag: str) -> bool:
+    """Whether `flag` (-DNAME) is ON in `cmake_args`: the last definition is
+    the one CMake keeps."""
+    values = [arg.split("=", 1)[1] for arg in cmake_args if arg.startswith(f"{flag}=")]
+    return bool(values) and values[-1].upper() in {"ON", "TRUE", "YES", "1"}
 
 
 class CatchemRunSection(ApplicationRunSection):
@@ -68,14 +80,27 @@ class CatchemRunSection(ApplicationRunSection):
         }
 
     def runtime_problems(self, runtime: Runtime) -> list[str]:
-        """CATChem's rules: no container build, and its own tests need a
-        Debug build with the test stack (part of `all`)."""
+        """CATChem's rules: no container build; Kokkos always on; MUSICA,
+        which fetches at configure time, on the login node only; and its own
+        tests need a Debug build with the test stack (part of `all`)."""
         problems: list[str] = []
         if runtime is Runtime.DOCKER:
             problems.append(
                 "CATChem builds natively against a module environment (the native "
                 "or slurm runtime), not the docker runtime: there is no container "
                 "build for it"
+            )
+        if not _flag_on(self.cmake_args, _KOKKOS_ON.split("=")[0]):
+            problems.append(
+                f"every CATChem build needs {_KOKKOS_ON} in cmake_args: the "
+                "harness builds it against the environment's Kokkos (and MUSICA "
+                "requires it)"
+            )
+        if _flag_on(self.cmake_args, _MUSICA) and self.build_node is BuildNode.COMPUTE:
+            problems.append(
+                f"{_MUSICA}=ON needs the network at configure time: build it on "
+                "the login node (build_node: login), or turn MUSICA off for a "
+                "compute-node build"
             )
         if self.tests.enabled and _DEBUG not in self.cmake_args:
             problems.append(
@@ -95,14 +120,31 @@ def _as_catchem(section: ApplicationRunSection) -> CatchemRunSection:
     return section
 
 
+def _system_yaml_cpp_lines(log: Path, cache: Path) -> list[str]:
+    """After a configure with the system yaml-cpp asked for: the fallback to
+    the vendored copy must not have happened, and the cache must name the
+    install found (printed, so the log says which)."""
+    fallback = (
+        f"configure fell back to CATChem's vendored yaml-cpp ({_YAML_CPP_FALLBACK})"
+    )
+    missing = "configure found no system yaml-cpp (yaml-cpp_DIR in CMakeCache.txt)"
+    entry = "'^yaml-cpp_DIR:[A-Z]+='"
+    return [
+        f"if grep -q {q(_YAML_CPP_FALLBACK)} {q(log)}; then echo {q(fallback)} >&2; exit 1; fi",
+        (
+            f"grep -Eq {entry} {q(cache)} && ! grep -Eq '^yaml-cpp_DIR:[A-Z]+=.*-NOTFOUND$' "
+            f"{q(cache)} || {{ echo {q(missing)} >&2; exit 1; }}"
+        ),
+        f"grep -E '^yaml-cpp_DIR:' {q(cache)}",
+    ]
+
+
 def _build(
     config: RunConfigView, checkout: Path, section: CatchemRunSection
 ) -> list[str]:
     build = checkout / section.build_dirname
     log = build / "configure.log"
-    offline_args = [
-        arg.replace(f"{_MUSICA}=ON", f"{_MUSICA}=OFF") for arg in section.cmake_args
-    ]
+    system_yaml_cpp = _flag_on(section.cmake_args, _SYSTEM_YAML_CPP)
     return cmake_stage(
         config,
         section,
@@ -114,32 +156,19 @@ def _build(
         build_jobs=section.build_jobs,
         gates=[
             # With Kokkos on, it must be the environment's, never a fetched one.
-            *gate_lines(
-                log, [_KOKKOS_GATE] if _KOKKOS_ON in section.cmake_args else []
-            ),
+            *gate_lines(log, [_KOKKOS_GATE]),
             # The run config's gates: what this module environment claims to supply.
             *gate_lines(log, section.configure_gates),
+            *(
+                _system_yaml_cpp_lines(log, build / "CMakeCache.txt")
+                if system_yaml_cpp
+                else []
+            ),
         ],
         default_probe="which cmake ${CC:-} ${CXX:-} ${FC:-}",
-        # A compute node cannot fetch: MUSICA is off for the probe (the
-        # tests it gates do not exist in that build) and back on — the
-        # cmake_args as written — for the login-node finish.
-        offline=(
-            None
-            if offline_args == section.cmake_args
-            else OfflineBuild(
-                args=offline_args,
-                note=(
-                    f"compute-node configure with {_MUSICA}=OFF: MUSICA fetches its "
-                    "dependencies at configure time and a compute node has no network"
-                ),
-                finish_args=list(section.cmake_args),
-                finish_note=(
-                    f"login-node finish with {_MUSICA}=ON: the cmake_args as "
-                    "written, built into the same build directory"
-                ),
-            )
-        ),
+        # Nothing is fetched once MUSICA is off (a MUSICA build is refused on
+        # a compute node), so a compute-node build is the whole build, its
+        # test stack included: no offline arguments, no login-node finish.
     )
 
 

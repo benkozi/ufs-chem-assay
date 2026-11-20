@@ -224,8 +224,12 @@ def test_an_empty_builds_map_renders_exactly_as_none(
 ) -> None:
     mocker.patch("cli.commands.run.run_bash")
     raw = yaml.safe_load((TEMPLATES_DIR / template).read_text())
+    # An empty map where the template has none; a template's own variants
+    # stay (they are not what this compares).
     explicit: dict[str, object] = {
-        f"applications.{name}.builds": {} for name in raw["applications"]
+        f"applications.{name}.builds": {}
+        for name, section in raw["applications"].items()
+        if not section.get("builds")
     }
     none: dict[str, object] = {}
     rendered: list[dict[str, str]] = []
@@ -490,7 +494,12 @@ def test_the_build_flag_needs_a_name(tmp_path: Path) -> None:
 
 
 def test_a_per_build_command_finds_its_one_variant(tmp_path: Path) -> None:
-    oneapi = _oneapi(_kokkos(tmp_path, **{"applications.catchem.builds": {"only": {}}}))
+    oneapi = _oneapi(
+        _kokkos(
+            tmp_path,
+            **{"applications.catchem.builds": {"only": {"build_node": "login"}}},
+        )
+    )
     # One variant: no name needed.
     only = one_build_config(oneapi, _CATCHEM, None)
     assert only.applications["catchem"].build_name == "only"

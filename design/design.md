@@ -155,10 +155,18 @@ this kind is its name, settings, run section, stages, stage bodies and
 `test_plan`. In normal operation nothing reaches the refusals. Both
 adapters' sections refuse the docker runtime (`runtime_problems`).
 `catchem` builds through the shared `cli/stages.cmake_stage` (as CECE
-now does): the three shapes of `build_node`, an `OfflineBuild` for what
-a compute-node configure must turn off (MUSICA, restored by the
-login-node finish) and the adapter's gate (`Using system Kokkos` with
-Kokkos on); its tests are `cli/stages.ctest_plan`. `kokkos-smoke` ships
+now does): the three shapes of `build_node` and the adapter's gate
+(`Using system Kokkos`); its tests are `cli/stages.ctest_plan`. Since
+2026-11-20 it has no `OfflineBuild`: Kokkos must be on in every build and
+MUSICA, which fetches at configure time, is refused on a compute node
+(`runtime_problems`, reading the last definition of each flag), so a
+compute-node build fetches nothing and is the whole build; a MUSICA build
+and a compute-node build are two build variants of one checkout. With
+`-DCATCHEM_USE_SYSTEM_YAML_CPP=ON` the build checks after each configure
+that the vendored fallback did not happen (its one status line absent)
+and that `yaml-cpp_DIR` in `CMakeCache.txt` was found, printing it:
+CATChem says nothing when it does find a system copy, so the check cannot
+be a configure gate. `kokkos-smoke` ships
 its project in `applications/kokkos_smoke/cmake/` (in the wheel), has no
 source stage and an empty `git_url` / `ref`, builds under
 `<root_dir>/kokkos-smoke/build`, gates on both packages being found, and
@@ -1515,8 +1523,9 @@ All code under `src/`; the project is `uv`-managed with its own
       catchem/
         application.py    # CatchemApplication (stages: source, build, test)
         settings.py       # CatchemSettings (CATCHEM_*)
-        cli.py            # CatchemRunSection, source (MUSICA submodule guard) and build
-                          #   (cmake_stage, the MUSICA offline swap, the Kokkos gate), ctest
+        cli.py            # CatchemRunSection (Kokkos always on, MUSICA on the login node only),
+                          #   source (MUSICA submodule guard) and build (cmake_stage, the
+                          #   Kokkos gate, the system yaml-cpp check), ctest
       kokkos_smoke/
         application.py    # KokkosSmokeApplication (stages: build, test)
         settings.py       # KokkosSmokeSettings (KOKKOS_SMOKE_*; no checkout commit)

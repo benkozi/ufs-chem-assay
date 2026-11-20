@@ -3,6 +3,7 @@ but does not sweep — its stages stop at `test`, and everything a driver
 sweep would ask of it is one shared refusal."""
 
 import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -151,48 +152,128 @@ def test_login_build_configures_gates_on_system_kokkos_and_builds(
     assert "CECE" not in "\n".join(lines)
 
 
-def test_the_kokkos_gate_follows_the_cmake_args(
-    app: Application, tmp_path: Path
-) -> None:
-    config = _config(tmp_path, cmake_args=["-DCMAKE_BUILD_TYPE=Release"])
-    assert "Using system Kokkos" not in "\n".join(_lines(config, Stage.BUILD, app))
+def test_the_kokkos_gate_is_always_there(app: Application, tmp_path: Path) -> None:
+    # Kokkos is always on (a rule below), so its gate is always rendered,
+    # before the run config's own.
     gated = _config(tmp_path, configure_gates=["Found ESMF"])
     text = "\n".join(_lines(gated, Stage.BUILD, app))
     assert text.index("Using system Kokkos") < text.index("Found ESMF")
 
 
-def test_compute_build_swaps_musica_off_and_the_login_finish_restores_it(
-    app: Application, tmp_path: Path
-) -> None:
-    # MUSICA fetches its own dependencies at configure time: off for the
-    # compute-node probe, back on (the cmake_args as written) for the
-    # login-node finish that the tests need.
-    probe_only = _lines(_config(tmp_path, build_node="compute"), Stage.BUILD, app)
+def test_every_build_has_kokkos_on(tmp_path: Path) -> None:
+    with pytest.raises(
+        ValidationError,
+        match=r"applications\.catchem: every CATChem build needs "
+        "-DCATCHEM_ENABLE_KOKKOS=ON",
+    ):
+        _config(tmp_path, cmake_args=["-DCMAKE_BUILD_TYPE=Release"])
+    # The last of two definitions is the one CMake keeps.
+    with pytest.raises(ValidationError, match="needs -DCATCHEM_ENABLE_KOKKOS=ON"):
+        _config(
+            tmp_path,
+            cmake_args=["-DCATCHEM_ENABLE_KOKKOS=ON", "-DCATCHEM_ENABLE_KOKKOS=OFF"],
+        )
+
+
+def test_musica_builds_on_the_login_node_only(tmp_path: Path) -> None:
+    # MUSICA fetches micm, TUV-x and their configuration at configure time,
+    # and a compute node has no network.
+    with pytest.raises(
+        ValidationError,
+        match=r"applications\.catchem: -DCATCHEM_BUILD_MUSICA=ON needs the "
+        "network at configure time: build it on the login node",
+    ):
+        _config(tmp_path, build_node="compute")
+    # A variant is judged as it builds, and named.
+    builds = {"compute": {"build_node": "compute"}}
+    with pytest.raises(
+        ValidationError,
+        match=r"applications\.catchem\.builds\.compute: -DCATCHEM_BUILD_MUSICA=ON",
+    ):
+        _config(tmp_path, builds=builds)
+
+
+def test_a_compute_build_is_the_whole_build(app: Application, tmp_path: Path) -> None:
+    # MUSICA off, nothing is fetched: configure and compile on the compute
+    # node, the test stack included, and no login-node finish.
     offline = _ARGS.replace("-DCATCHEM_BUILD_MUSICA=ON", "-DCATCHEM_BUILD_MUSICA=OFF")
+    config = _config(
+        tmp_path,
+        build_node="compute",
+        cmake_args=offline.split(),
+        tests={"enabled": True},
+    )
+    lines = _lines(config, Stage.BUILD, app)
     log = f"{_CLONE}/build/configure.log"
-    srun = [i for i, line in enumerate(probe_only) if line.startswith("srun ")]
-    assert [probe_only[i] for i in srun] == [
+    srun = [line for line in lines if line.startswith("srun ")]
+    assert srun == [
         f"{_BUILD_SRUN} cmake -S {_CLONE} -B {_CLONE}/build {offline} 2>&1 | tee {log}",
         f"{_BUILD_SRUN} cmake --build {_CLONE}/build --target all --parallel 8",
     ]
-    note = probe_only[srun[0] - 1]
-    assert "-DCATCHEM_BUILD_MUSICA=OFF" in note
-    assert "no network" in note
-    assert srun[1] == len(probe_only) - 1  # tests off: the probe is the stage
+    assert (
+        lines[_BODY]
+        == f"echo {shlex.quote('build node: compute (' + _BUILD_SRUN + ')')}"
+    )
+    assert lines[-1] == srun[-1]  # the compute-node compile is the last line
+    assert not any("login-node finish" in line for line in lines)
 
-    tested = _lines(
-        _config(tmp_path, build_node="compute", tests={"enabled": True}),
-        Stage.BUILD,
-        app,
+
+_FALLBACK = "yaml-cpp not found on system, using internal version"
+
+
+def test_a_system_yaml_cpp_is_checked_after_each_configure(
+    app: Application, tmp_path: Path
+) -> None:
+    # CATChem prints nothing when it finds a system yaml-cpp and one status
+    # line when it falls back to its vendored copy, so the check is the
+    # fallback line absent and yaml-cpp_DIR found in the cache.
+    args = [*_ARGS.split(), "-DCATCHEM_USE_SYSTEM_YAML_CPP=ON"]
+    text = "\n".join(_lines(_config(tmp_path, cmake_args=args), Stage.BUILD, app))
+    assert text.count(_FALLBACK) == 2  # the check and its message
+    assert text.count(f"{_CLONE}/build/CMakeCache.txt") == 3
+    assert text.index(f"cmake -S {_CLONE}") < text.index(_FALLBACK)
+    assert text.index(_FALLBACK) < text.index(f"cmake --build {_CLONE}/build")
+    # Without the flag, CATChem's vendored copy is its own business.
+    plain = "\n".join(_lines(_config(tmp_path), Stage.BUILD, app))
+    assert _FALLBACK not in plain
+    assert "CMakeCache.txt" not in plain
+
+
+@pytest.mark.parametrize(
+    ("log", "cache", "ok"),
+    [
+        (
+            "-- Using system Kokkos 5.1.1\n",
+            "yaml-cpp_DIR:PATH=/env/yaml-cpp-0.8.0/lib64/cmake/yaml-cpp\n",
+            True,
+        ),
+        (f"-- {_FALLBACK}\n", "yaml-cpp_DIR:PATH=yaml-cpp_DIR-NOTFOUND\n", False),
+        ("", "yaml-cpp_DIR:PATH=yaml-cpp_DIR-NOTFOUND\n", False),
+        ("", "CMAKE_BUILD_TYPE:STRING=Debug\n", False),  # find_package never ran
+    ],
+)
+def test_the_yaml_cpp_check_runs_in_bash(
+    app: Application, tmp_path: Path, log: str, cache: str, ok: bool
+) -> None:
+    args = [*_ARGS.split(), "-DCATCHEM_USE_SYSTEM_YAML_CPP=ON"]
+    lines = _lines(_config(tmp_path, cmake_args=args), Stage.BUILD, app)
+    first = next(i for i, line in enumerate(lines) if _FALLBACK in line)
+    check = lines[first : first + 3]
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "configure.log").write_text(log)
+    (build / "CMakeCache.txt").write_text(cache)
+    script = "\n".join(["set -euo pipefail", *check]).replace(
+        f"{_CLONE}/build", str(build)
     )
-    assert tested[_BODY].endswith(", then login (tests)'")
-    finish = tested.index(
-        f"cmake -S {_CLONE} -B {_CLONE}/build {_ARGS} 2>&1 | tee {log}"
+    done = subprocess.run(
+        ["/bin/bash", "-c", script], capture_output=True, text=True, check=False
     )
-    assert finish > max(i for i, line in enumerate(tested) if line.startswith("srun "))
-    assert "-DCATCHEM_BUILD_MUSICA=ON" in tested[finish - 1]  # the note
-    assert tested[-1] == f"cmake --build {_CLONE}/build --target all --parallel 8"
-    assert sum("grep -Eq 'Using system Kokkos'" in line for line in tested) == 2
+    assert (done.returncode == 0) is ok, done.stderr
+    if ok:
+        assert done.stdout == cache  # the log names the install that was used
+    else:
+        assert "yaml-cpp" in done.stderr
 
 
 def test_test_stage_is_one_single_rank_ctest_job(
@@ -243,11 +324,14 @@ def test_validation_rules(tmp_path: Path) -> None:
         _config(
             tmp_path,
             tests={"enabled": True},
-            cmake_args=["-DCMAKE_BUILD_TYPE=Release"],
+            cmake_args=["-DCMAKE_BUILD_TYPE=Release", "-DCATCHEM_ENABLE_KOKKOS=ON"],
         )
     with pytest.raises(ValidationError, match="requires `all` among targets"):
         _config(tmp_path, tests={"enabled": True}, targets=["catchem"])
-    _config(tmp_path, cmake_args=["-DCMAKE_BUILD_TYPE=Release"])  # fine, tests off
+    _config(  # fine, tests off
+        tmp_path,
+        cmake_args=["-DCMAKE_BUILD_TYPE=Release", "-DCATCHEM_ENABLE_KOKKOS=ON"],
+    )
     # There is no container build for it: native or slurm only.
     local = run_config_file(
         tmp_path, "local.yaml", overrides={"applications.catchem": dict(_SECTION)}

@@ -17,7 +17,7 @@ from benchmarks import read_test_benchmarks_csv
 from cli.main import main
 from cli.run_config import HARNESS_ROOT, RunConfig
 from cli.run_report import newest_log, summarize_session
-from cli.selectors import toolchain_configs
+from cli.selectors import build_configs, toolchain_configs
 from cli.sessions import configured_sessions, configured_tests, job_script_for_tests
 from cli.stages import render_stage
 from jobs import JobRef, read_test_ledger
@@ -737,20 +737,37 @@ def test_the_kokkos_template_loads_as_shipped() -> None:
     assert config.toolchains["oneapi"].mpi_launcher is MpiLauncher.MPIEXEC
     assert config.toolchains["gnu"].mpi_launcher is MpiLauncher.SRUN
     for build in toolchain_configs(config, ["all"]):
-        for name, section in build.applications.items():
-            # Every application: the harness's UFS modulefile for this
-            # compiler, against the environment's own module directory;
-            # built as the offline probe; tested.
+        built = [
+            (name, variant.applications[name])
+            for name in build.applications
+            for variant in build_configs(build, get_application(name), None)
+        ]
+        # CATChem is two builds of one checkout: MUSICA off on a compute
+        # node, MUSICA on (it fetches at configure time) on the login node.
+        assert [(n, s.build_name) for n, s in built] == [
+            ("cece", None),
+            ("catchem", "compute"),
+            ("catchem", "musica"),
+            ("kokkos-smoke", None),
+        ]
+        for name, section in built:
+            # Every build: the harness's UFS modulefile for this compiler,
+            # against the environment's own module directory; tested.
             assert section.modulefile == f"ufs_ursa.{build.toolchain}", name
             harness_files, environment = section.modulepath
             assert harness_files == Path("modulefiles")
             assert environment.is_absolute()
             assert environment.parts[-2:] == ("modules", "Core")
-            assert section.build_node is BuildNode.COMPUTE, name
+            expected = (
+                BuildNode.LOGIN if section.build_name == "musica" else BuildNode.COMPUTE
+            )
+            assert section.build_node is expected, (name, section.build_name)
             assert section.tests.enabled is True, name
             # Only CECE's configure prints the ArborX line (HELM's AXIS);
             # both environments carry ArborX, and the gate is CECE's own.
             assert (_ARBORX in section.configure_gates) is (name == "cece"), name
+        assert "-DCATCHEM_BUILD_MUSICA=OFF" in built[1][1].build_flags()
+        assert "-DCATCHEM_BUILD_MUSICA=ON" in built[2][1].build_flags()
         cece = build.applications["cece"]
         assert {"-DCMAKE_BUILD_TYPE=Debug", "-DENABLE_ESMF=ON"} <= set(
             cece.build_flags()
@@ -788,22 +805,23 @@ def test_the_kokkos_template_renders_every_toolchain(
     )
     run_bash.assert_not_called()
     scripts = tmp_path / "root" / "scripts"
-    expected = [
-        f"{slot}-{stage}-{app}-{toolchain}.sh"
-        for toolchain in ("oneapi", "gnu")
-        for slot, stage, apps in (
-            (
-                "01",
-                "source",
-                ("cece", "catchem"),
-            ),  # kokkos-smoke ships with the harness
-            ("02", "build", ("cece", "catchem", "kokkos-smoke")),
-            ("04", "test", ("cece", "catchem", "kokkos-smoke")),
-        )
-        for app in apps
-    ]
+    expected = []
+    for toolchain in ("oneapi", "gnu"):
+        # kokkos-smoke ships with the harness: no source stage; CATChem is
+        # one checkout and two builds.
+        expected += [
+            f"01-source-cece-{toolchain}.sh",
+            f"01-source-catchem-{toolchain}.sh",
+        ]
+        for slot, stage in (("02", "build"), ("04", "test")):
+            expected += [
+                f"{slot}-{stage}-cece-{toolchain}.sh",
+                f"{slot}-{stage}-catchem-{toolchain}-compute.sh",
+                f"{slot}-{stage}-catchem-{toolchain}-musica.sh",
+                f"{slot}-{stage}-kokkos-smoke-{toolchain}.sh",
+            ]
     assert sorted(p.name for p in scripts.glob("*.sh")) == sorted(expected)
-    assert len(list(scripts.glob("04-test-*.sbatch"))) == 6
+    assert len(list(scripts.glob("04-test-*.sbatch"))) == 8
     gnu = (scripts / "02-build-cece-gnu.sh").read_text()
     assert "module load ufs_ursa.gnu" in gnu
     assert '-DMPIEXEC_EXECUTABLE="$(command -v srun)"' in gnu

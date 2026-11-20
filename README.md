@@ -643,14 +643,20 @@ under the docker runtime.
   (a guard requires MUSICA's), configured with `cmake_args` — by default
   `-DCMAKE_BUILD_TYPE=Debug -DCATCHEM_ENABLE_KOKKOS=ON
   -DCATCHEM_BUILD_MUSICA=ON -DCATCHEM_BUILD_NUOPC=ON` — and built
-  (`targets`, default `all`). With Kokkos on, the configure log must show
-  `Using system Kokkos`: the module environment's, never a fetched one.
-  Under `build_node: compute` the probe configures with
-  `-DCATCHEM_BUILD_MUSICA=OFF` (MUSICA fetches its dependencies at
-  configure time), and with `tests.enabled` the login-node finish
-  restores the arguments as written. Its tests are `ctest`, one
-  single-rank job; `tests.enabled` requires the Debug build and `all`
-  among the targets.
+  (`targets`, default `all`). Kokkos is always on (a build without
+  `-DCATCHEM_ENABLE_KOKKOS=ON` is refused), and the configure log must
+  show `Using system Kokkos`: the module environment's, never a fetched
+  one. MUSICA fetches its dependencies at configure time, so a build
+  with `-DCATCHEM_BUILD_MUSICA=ON` and `build_node: compute` is refused;
+  with MUSICA off nothing is fetched, and a compute-node build is the
+  whole build, its tests included. A compute-node build and a MUSICA
+  build are two build variants (below). With
+  `-DCATCHEM_USE_SYSTEM_YAML_CPP=ON` the build also checks, after each
+  configure, that CATChem took an installed yaml-cpp: its fallback line
+  (`yaml-cpp not found on system, using internal version`) must be
+  absent and `yaml-cpp_DIR` in `CMakeCache.txt` found, and the log
+  prints it. Its tests are `ctest`, one single-rank job; `tests.enabled`
+  requires the Debug build and `all` among the targets.
 - `kokkos-smoke` (build, test): a small CMake project shipped with the
   harness that requires the module environment's Kokkos and
   kokkos-kernels with no fallback, builds one executable (a

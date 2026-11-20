@@ -88,11 +88,15 @@ the build that is already there.
 
 The build stage is the **offline compile probe**: each configure and
 each build is its own `srun` step on a compute node, where nothing can
-be fetched, so the applications turn off what would reach the network
-at configure time — CECE configures with `-DCECE_BUILD_TESTING=OFF`,
-CATChem with `-DCATCHEM_BUILD_MUSICA=OFF` — and the stage then finishes
-the same build directory on the login node with those back on, which is
-what the tests need. The configure log is checked before anything is
+be fetched. CECE configures with `-DCECE_BUILD_TESTING=OFF` (its test
+stack is fetched at configure time), and the stage then finishes the
+same build directory on the login node with it back on, which is what
+the tests need. CATChem is two builds of one checkout
+(`applications.catchem.builds`): `compute`, with
+`-DCATCHEM_BUILD_MUSICA=OFF`, fetches nothing and is built whole on the
+compute node, tests included; `musica`, with MUSICA on, fetches at
+configure time and is built on the login node. Each has its own build
+directory (`build-compute`, `build-musica`), scripts and test job. The configure log is checked before anything is
 built: `CECE dependency Kokkos: system`, `CECE dependency ESMF: system`
 and the ArborX line for CECE, `Using system Kokkos` for CATChem, both
 packages found for the smoke project.
@@ -165,8 +169,9 @@ tracked way. Under the `gnu` toolchain the module is `ufs_ursa.gnu`,
 the probes are `mpicc mpic++ mpifort`, there is no `-fp-model` flag, and
 each configure also carries the launcher —
 `-DMPIEXEC_EXECUTABLE="$(command -v srun)" -DMPIEXEC_NUMPROC_FLAG=-n`.
-CATChem is the same shape with its own arguments
-(`-DCATCHEM_BUILD_MUSICA=OFF` for the probe, `ON` for the finish). The
+CATChem's `compute` build is the same two `srun` steps with MUSICA off
+and no login-node finish, into `build-compute`; its `musica` build is
+one configure and one build on the login node, into `build-musica`. The
 smoke project has one configure and one build, of
 `$ROOT/ufs-chem-assay/src/applications/kokkos_smoke/cmake` into
 `$ROOT/<toolchain>/kokkos-smoke/build`, and its test is
