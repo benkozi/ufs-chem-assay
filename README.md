@@ -694,7 +694,7 @@ toolchains:
     cmake_args: [-DCMAKE_CXX_FLAGS=-fp-model=precise]
     mpi_launcher: mpiexec             # mpiexec (FindMPI's default) | srun
     tests_env: {I_MPI_HYDRA_BOOTSTRAP: fork}
-    configure_gates: ['AXIS: ArborX .* found via find_package']
+    configure_gates: []               # added to every application's: see below
   gnu:
     modulefile: ufs_ursa.gnu
     modulepath: [modulefiles, /path/to/envs/<gcc env>/modules/Core]
@@ -708,8 +708,10 @@ environment (`modulefile`, `modulepath`, `module_env`,
 `toolchain_tools`) replaces the section's whole — and under a
 `toolchains:` map a section may not set those keys itself, nor
 `clone_dir`; its `cmake_args` are appended to the application's own; its
-`configure_gates` are added to them; its `tests_env` is merged over
-`tests.env`. `mpi_launcher: srun` adds `-DMPIEXEC_EXECUTABLE` (the path
+`configure_gates` are added to them, so a toolchain gate must be a line
+every application's configure prints (a gate only one application can
+pass, such as CECE's ArborX line, goes on that application's section);
+its `tests_env` is merged over `tests.env`. `mpi_launcher: srun` adds `-DMPIEXEC_EXECUTABLE` (the path
 of `srun`), `-DMPIEXEC_NUMPROC_FLAG=-n` and, when `mpiexec_preflags` is
 set, `-DMPIEXEC_PREFLAGS` to every CMake configure, so each MPI test is
 its own Slurm step; `mpiexec` leaves CMake's default. A section's rules

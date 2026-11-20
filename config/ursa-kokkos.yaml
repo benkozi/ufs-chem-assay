@@ -38,8 +38,7 @@ toolchains:
     mpiexec_preflags:  # mpi_launcher: srun only, e.g. --mpi=pmi2
     tests_env:  # merged into every application's tests.env
       I_MPI_HYDRA_BOOTSTRAP: fork
-    configure_gates:  # added to every application's own: what this environment claims to supply
-      - 'AXIS: ArborX .* found via find_package'
+    configure_gates: []  # added to every application's own: only what every application's configure prints
   gnu:
     modulefile: ufs_ursa.gnu
     modulepath:
@@ -57,8 +56,7 @@ toolchains:
     mpiexec_preflags:
     tests_env:
       OMPI_MCA_plm: isolated
-    configure_gates:
-      - 'AXIS: ArborX .* found via find_package'
+    configure_gates: []
 applications:  # one section per application in the run, keyed by adapter name
   cece:
     git_url: git@github.com:ufs-community/CECE.git  # develop prefers the environment's packages (find_package)
@@ -72,6 +70,7 @@ applications:  # one section per application in the run, keyed by adapter name
       - all
     configure_gates:  # with ESMF on, the adapter already requires `CECE dependency ESMF: system`
       - 'CECE dependency Kokkos: system'  # the environment's Kokkos, not a fetched one
+      - 'AXIS: ArborX .* found via find_package'  # the environment's ArborX; only CECE (HELM's AXIS) prints it
     build_node: compute  # the offline compile probe (two srun steps), then a login-node finish with the test stack
     build_minutes: 10
     tests:  # ctest, one Slurm job: ctest on the node, each MPI test launching its own ranks

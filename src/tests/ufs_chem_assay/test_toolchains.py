@@ -748,7 +748,9 @@ def test_the_kokkos_template_loads_as_shipped() -> None:
             assert environment.parts[-2:] == ("modules", "Core")
             assert section.build_node is BuildNode.COMPUTE, name
             assert section.tests.enabled is True, name
-            assert _ARBORX in section.configure_gates, name  # both envs carry it
+            # Only CECE's configure prints the ArborX line (HELM's AXIS);
+            # both environments carry ArborX, and the gate is CECE's own.
+            assert (_ARBORX in section.configure_gates) is (name == "cece"), name
         cece = build.applications["cece"]
         assert {"-DCMAKE_BUILD_TYPE=Debug", "-DENABLE_ESMF=ON"} <= set(
             cece.build_flags()
@@ -847,7 +849,7 @@ def test_the_gaea_c7_template_loads_as_shipped() -> None:
     assert toolchain.mpi_launcher is MpiLauncher.SRUN
     assert toolchain.mpiexec_preflags is None
     assert toolchain.tests_env == {}
-    assert toolchain.configure_gates == [_ARBORX]  # the environment's ArborX
+    assert toolchain.configure_gates == []  # the ArborX gate is CECE's (below)
     # The environment builds its UFS stack against one ESMF; its default
     # esmf module is a later beta, which the mapl module does not match.
     assert toolchain.module_env == {
@@ -981,3 +983,18 @@ def test_the_gaea_c7_template_renders_the_build_and_test_stages(
     assert "module reset" in job
     assert "module load ufs_gaeac7.oneapi" in job
     assert "export PIP_NO_INDEX=1" in job
+
+
+@pytest.mark.parametrize(
+    "template", sorted(p.name for p in TEMPLATES_DIR.glob("*.yaml"))
+)
+def test_shipped_templates_put_no_gate_on_a_toolchain(template: str) -> None:
+    # A toolchain's configure_gates are added to every application of the
+    # file, so each must be a line every application's configure prints.
+    # None does for the shipped applications: the ArborX line is HELM's AXIS,
+    # inside CECE only, and CATChem and kokkos-smoke never print it, so the
+    # gate belongs to applications.cece. A gate an environment claims for one
+    # application is that application's.
+    raw = yaml.safe_load((TEMPLATES_DIR / template).read_text())
+    for name, toolchain in (raw.get("toolchains") or {}).items():
+        assert not toolchain.get("configure_gates"), f"{template}: toolchains.{name}"

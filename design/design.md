@@ -765,8 +765,8 @@ the driver `BenchmarkRow` do not — a driver row's `modulefile` and
 **The kokkos template** (2026-11-16, chunk 6) is the shipped use of the
 four pieces above: `config/ursa-kokkos.yaml` declares the `oneapi` and
 `gnu` toolchains (the harness's `ufs_ursa.*` modulefiles over each
-environment's `modules/Core`, the ArborX gate, `mpiexec` for Intel MPI
-and `srun` for OpenMPI), builds `cece`, `catchem` and `kokkos-smoke` with
+environment's `modules/Core`, `mpiexec` for Intel MPI and `srun` for
+OpenMPI, no gates of their own), builds `cece`, `catchem` and `kokkos-smoke` with
 `build_node: compute` and `tests.enabled`, and keeps one named session
 that the standard run — the source, build and test stages — does not
 touch (`record_benchmarks` and baselines are off: the build is Debug).

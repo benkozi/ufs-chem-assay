@@ -48,9 +48,11 @@ Read `config/ursa-kokkos.yaml` and check four things:
   jobs, and the driver jobs.
 - **The refs.** `applications.cece` and `applications.catchem` name the
   `git_url` and `ref` to build.
-- **ArborX.** Each toolchain's `configure_gates` requires CECE to find
+- **ArborX.** `applications.cece.configure_gates` requires CECE to find
   the environment's ArborX. Remove that line for an environment that
-  does not carry it.
+  does not carry it. It is CECE's gate, not the toolchain's: a
+  toolchain's gates apply to every application, and only CECE's
+  configure prints the ArborX line.
 
 ## 2. Render and read the scripts
 
