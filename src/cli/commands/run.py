@@ -4,7 +4,10 @@ them in order with bash on this node."""
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime
 from pathlib import Path
+
+from ulid import ULID
 
 from applications.base import Application, Stage
 from applications.registry import get_application
@@ -19,6 +22,12 @@ from cli.selectors import (
     toolchain_configs,
 )
 from cli.shell import run_bash, write_script
+from cli.stage_outcomes import (
+    StageOutcome,
+    StageState,
+    newest_stage_log,
+    record_outcome,
+)
 from cli.stages import PER_SESSION, SCRIPT_INDEX, render_stage, tests_enabled
 from logs import get_logger
 from models.conventions import CONVENTIONS
@@ -144,8 +153,9 @@ _PER_BUILD = frozenset({Stage.BUILD, Stage.TEST})
 
 # One script to execute: its path, then its lane — the application, the build
 # variant (None for the unnamed build and for the stages a variant has no
-# script of) and the stage. A failure stops only its lane (_execute).
-_Step = tuple[Path, str, str | None, Stage]
+# script of) and the stage — and the session of a per-session stage. A
+# failure stops only its lane (_execute).
+_Step = tuple[Path, str, str | None, Stage, str | None]
 
 
 def _render(
@@ -192,7 +202,7 @@ def _render(
                     )
                     logger.info("wrote %s", path)
                     build = variant.applications[app.name].build_name
-                    to_run.append((path, app.name, build, stage))
+                    to_run.append((path, app.name, build, stage, None))
                 continue
             if stage in PER_SESSION:
                 for session in sessions:
@@ -205,7 +215,7 @@ def _render(
                     )
                     logger.info("wrote %s", path)
                     if stage in stages:
-                        to_run.append((path, app.name, None, stage))
+                        to_run.append((path, app.name, None, stage, session.name))
             else:
                 path = write_script(
                     render_stage(
@@ -219,29 +229,99 @@ def _render(
                     _INDEX[stage],
                 )
                 logger.info("wrote %s", path)
-                to_run.append((path, app.name, None, stage))
+                to_run.append((path, app.name, None, stage, None))
     return to_run
 
 
-def _execute(to_run: list[_Step], logs_dir: Path) -> list[tuple[Path, int]]:
+def _outcome(
+    step: _Step,
+    *,
+    toolchain: str | None,
+    run_id: str,
+    state: StageState,
+    code: int | None,
+    started: datetime,
+    log: Path | None,
+    cause: str | None,
+) -> StageOutcome:
+    """One step's entry for the stage record, ending now."""
+    path, app, build, stage, session = step
+    return StageOutcome(
+        script=path.name,
+        stage=stage,
+        application=app,
+        toolchain=toolchain,
+        build=build,
+        session=session,
+        state=state,
+        exit_status=code,
+        started_at=started,
+        finished_at=datetime.now(UTC),
+        log=log,
+        cause=cause,
+        run_id=run_id,
+    )
+
+
+def _execute(
+    to_run: list[_Step],
+    logs_dir: Path,
+    *,
+    toolchain: str | None,
+    scripts_dir: Path,
+    run_id: str,
+) -> list[tuple[Path, int]]:
     """Run one toolchain's scripts in order and return its failures (script,
     exit code), in order. A failure stops only what depends on it: a failed
     source stage every later script of that application; any other failed
     stage the later scripts of the same application and build variant (a
     failed build its tests, a failed data stage its sessions). Every other
     application and variant runs on, so one broken build cannot keep the
-    others' test jobs from being submitted."""
+    others' test jobs from being submitted. Every script's outcome — run or
+    skipped — goes into the stage record as soon as it is known
+    (cli/stage_outcomes), for `report` and `watch`."""
     failures: list[tuple[Path, int]] = []
     sources: dict[str, tuple[Path, int]] = {}
     lanes: dict[tuple[str, str | None], tuple[Path, int]] = {}
-    for path, app, build, stage in to_run:
+    for step in to_run:
+        path, app, build, stage, _session = step
         cause = sources.get(app) or lanes.get((app, build))
         if cause is not None:
             logger.warning(
                 "skipped %s: %s failed (exit %s)", path.name, cause[0].name, cause[1]
             )
+            now = datetime.now(UTC)
+            record_outcome(
+                scripts_dir,
+                _outcome(
+                    step,
+                    toolchain=toolchain,
+                    run_id=run_id,
+                    state=StageState.SKIPPED,
+                    code=None,
+                    started=now,
+                    log=None,
+                    cause=cause[0].name,
+                ),
+            )
             continue
+        started = datetime.now(UTC)
         code = run_bash(path, logs_dir)
+        log = newest_stage_log(logs_dir, path.stem)
+        state = StageState.PASSED if code == 0 else StageState.FAILED
+        record_outcome(
+            scripts_dir,
+            _outcome(
+                step,
+                toolchain=toolchain,
+                run_id=run_id,
+                state=state,
+                code=code,
+                started=started,
+                log=log,
+                cause=None,
+            ),
+        )
         if code == 0:
             continue
         logger.error("stage %s failed with exit %s", path.stem, code)
@@ -370,8 +450,15 @@ def handler(args: argparse.Namespace) -> int:
     # failure's.
     status = 0
     outcomes: list[tuple[str, list[tuple[Path, int]]]] = []
+    run_id = str(ULID())  # one per invocation, in every outcome it records
     for toolchain, to_run in plans:
-        failures = _execute(to_run, logs_dir)
+        failures = _execute(
+            to_run,
+            logs_dir,
+            toolchain=toolchain,
+            scripts_dir=scripts_dir,
+            run_id=run_id,
+        )
         if failures and not status:
             status = failures[0][1]
         if toolchain is not None:

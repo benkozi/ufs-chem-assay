@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import re
 from collections import Counter
+from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum, unique
 from pathlib import Path
@@ -32,7 +33,9 @@ from pathlib import Path
 import pandas as pd
 import yaml
 from pydantic import Field
+from ulid import ULID
 
+from applications.base import Stage
 from apptests import parse_junit
 from baselines.models import BASELINE_CONVENTIONS
 from baselines.plan import read_run, read_test_report
@@ -42,6 +45,7 @@ from benchmarks import (
     read_benchmarks_csv,
     read_test_benchmarks_csv,
 )
+from cli.stage_outcomes import StageOutcome, StageRecord, StageState
 from jobs import (
     JobLedger,
     TestCounts,
@@ -75,6 +79,10 @@ class IssueKind(StrEnum):
     # An application's own test run (a tests root, not a session).
     TESTS_FAILED = "tests-failed"  # the junit report names failed tests
     TESTS_JOB_FAILED = "tests-job-failed"  # nonzero without a failed test to name
+    TESTS_STALE = "tests-stale"  # the result predates the latest build or test stage
+    # A stage script `run` executed (the stage record, not a root).
+    STAGE_FAILED = "stage-failed"  # exited nonzero
+    STAGE_SKIPPED = "stage-skipped"  # not run: an earlier stage it needs failed
 
 
 @unique
@@ -109,6 +117,10 @@ _DRIVER_KINDS = frozenset(
 )
 _TEST_RESULTS: tuple[TestResult, ...] = ("passed", "failed", "skipped")
 _TESTS_KINDS = frozenset({IssueKind.TESTS_FAILED, IssueKind.TESTS_JOB_FAILED})
+_STAGE_KINDS = frozenset({IssueKind.STAGE_FAILED, IssueKind.STAGE_SKIPPED})
+# The stages a test run stands on, in the order a missing run's cause is sought.
+_TEST_LANE = (Stage.SOURCE, Stage.BUILD, Stage.TEST)
+_STAMP = "%Y-%m-%d %H:%M UTC"
 
 
 class Issue(StrictModel):
@@ -233,6 +245,9 @@ class TestsSummary(StrictModel):
 
     application: str = Field(description="The application's registry name")
     toolchain: str | None = Field(description="The build's toolchain; None without one")
+    build: str | None = Field(
+        default=None, description="The build variant; None for the unnamed build"
+    )
     root: Path = Field(description="The tests root")
     run_id: str | None = Field(description="The test ledger's run id; None without one")
     state: SessionState = Field(
@@ -262,8 +277,8 @@ class TestsSummary(StrictModel):
 
     @property
     def label(self) -> str:
-        suffix = f"/{self.toolchain}" if self.toolchain else ""
-        return f"tests {self.application}{suffix}"
+        parts = [self.application, self.toolchain, self.build]
+        return "tests " + "/".join(part for part in parts if part)
 
     @property
     def ok(self) -> bool:
@@ -272,6 +287,25 @@ class TestsSummary(StrictModel):
             and self.exit_status == 0
             and not self.issues
         )
+
+
+class StageSummary(StrictModel):
+    """One stage script's latest outcome as the report sees it."""
+
+    outcome: StageOutcome = Field(description="The script's entry in the stage record")
+    issues: list[Issue] = Field(
+        description="A failed or skipped stage's issue; empty when it passed"
+    )
+
+    @property
+    def label(self) -> str:
+        o = self.outcome
+        parts = [o.application, o.toolchain, o.build]
+        return f"{o.stage.value} " + "/".join(part for part in parts if part)
+
+    @property
+    def ok(self) -> bool:
+        return not self.issues
 
 
 class RunReport(StrictModel):
@@ -287,11 +321,20 @@ class RunReport(StrictModel):
         default_factory=list,
         description="One summary per application whose own tests are enabled",
     )
+    stages: list[StageSummary] = Field(
+        default_factory=list,
+        description=(
+            "The latest outcome of the selected source, build and data stages, from "
+            "the stage record; empty without one"
+        ),
+    )
 
     @property
     def ok(self) -> bool:
-        return all(session.ok for session in self.sessions) and all(
-            tests.ok for tests in self.tests
+        return (
+            all(session.ok for session in self.sessions)
+            and all(tests.ok for tests in self.tests)
+            and all(stage.ok for stage in self.stages)
         )
 
 
@@ -807,23 +850,123 @@ def _test_row(root: Path, run_id: str) -> TestBenchmarkRow | None:
     return next((row for row in rows if row.run_id == run_id), None)
 
 
+def outcome_text(outcome: StageOutcome) -> str:
+    """failed (exit N), passed, or skipped."""
+    if outcome.state is StageState.FAILED:
+        return f"failed (exit {outcome.exit_status})"
+    return outcome.state.value
+
+
+def summarize_stage(
+    outcome: StageOutcome, record: StageRecord, *, tail: int = DEFAULT_TAIL
+) -> StageSummary:
+    """One stage's outcome with its issue: a failed stage's log tail and
+    path, or the failure that skipped it."""
+    issues: list[Issue] = []
+    if outcome.state is StageState.FAILED:
+        log = outcome.log
+        issues.append(
+            Issue(
+                kind=IssueKind.STAGE_FAILED,
+                detail=f"{outcome.script} {outcome_text(outcome)}",
+                exit_code=outcome.exit_status,
+                out_tail=(tail_lines(log, tail) or []) if log is not None else [],
+                paths=[log] if log is not None and log.is_file() else [],
+            )
+        )
+    elif outcome.state is StageState.SKIPPED:
+        cause = record.outcomes.get(outcome.cause or "")
+        why = (
+            f"{outcome.cause} {outcome_text(cause)}"
+            if cause is not None
+            else f"{outcome.cause} failed"
+        )
+        issues.append(
+            Issue(
+                kind=IssueKind.STAGE_SKIPPED,
+                detail=f"{outcome.script} was skipped: {why}",
+            )
+        )
+    return StageSummary(outcome=outcome, issues=issues)
+
+
+def _created_at(run_id: str) -> datetime | None:
+    """When a test run's ledger was minted: its run id is a ULID."""
+    try:
+        return ULID.from_str(run_id).datetime
+    except ValueError:
+        return None
+
+
+def _stale(
+    created: datetime | None, lane: Mapping[Stage, StageOutcome]
+) -> Issue | None:
+    """A ledger older than the lane's latest build, or than its latest test
+    stage when that one did not pass: the result shown is not this build's."""
+    if created is None:
+        return None
+    build, test = lane.get(Stage.BUILD), lane.get(Stage.TEST)
+    later: tuple[StageOutcome, str] | None = None
+    if build is not None and build.started_at > created:
+        later = (build, "build")
+    elif (
+        test is not None
+        and test.started_at > created
+        and test.state is not StageState.PASSED
+    ):
+        later = (test, "test stage")
+    if later is None:
+        return None
+    outcome, what = later
+    return Issue(
+        kind=IssueKind.TESTS_STALE,
+        detail=(
+            f"this test run predates the latest {what} ({outcome.script}, "
+            f"{outcome_text(outcome)} at {outcome.started_at.strftime(_STAMP)}); the "
+            f"result is from {created.strftime(_STAMP)}"
+        ),
+    )
+
+
 def summarize_tests(
     root: Path,
     *,
     application: str,
     toolchain: str | None = None,
+    build: str | None = None,
     tail: int = DEFAULT_TAIL,
+    lane: Mapping[Stage, StageOutcome] | None = None,
 ) -> TestsSummary:
     """One tests root classified from its files alone: the test ledger (the
     latest run and its verdict), the run's benchmark row (wall time, Slurm
     state), the junit report (the failed tests' names) and the last `tail`
     lines of the output. A run that failed is one issue: TESTS_FAILED when
     the report names failed tests, TESTS_JOB_FAILED otherwise (a job killed
-    by its limit, a report never written)."""
+    by its limit, a report never written). `lane`: the stage record's latest
+    source, build and test stage of this run's application, toolchain and
+    variant — naming why a run is missing, and flagging one older than the
+    latest build (TESTS_STALE)."""
+    lane = lane or {}
     if not path_of_test_ledger(root).is_file():
+        cause = next(
+            (
+                outcome
+                for stage in _TEST_LANE
+                if (outcome := lane.get(stage)) is not None
+                and outcome.state is not StageState.PASSED
+            ),
+            None,
+        )
+        detail = (
+            f"no test run recorded ({root} has no "
+            f"{CONVENTIONS.test_ledger}): the test stage has not run"
+            if cause is None
+            else f"no test run: {cause.script} {outcome_text(cause)}"
+        )
         return TestsSummary(
             application=application,
             toolchain=toolchain,
+            build=build,
             root=root,
             run_id=None,
             state=SessionState.NOT_SUBMITTED,
@@ -835,15 +978,7 @@ def summarize_tests(
             wall_s=None,
             out=None,
             junit=None,
-            issues=[
-                Issue(
-                    kind=IssueKind.NOT_SUBMITTED,
-                    detail=(
-                        f"no test run recorded ({root} has no "
-                        f"{CONVENTIONS.test_ledger}): the test stage has not run"
-                    ),
-                )
-            ],
+            issues=[Issue(kind=IssueKind.NOT_SUBMITTED, detail=detail)],
         )
     ledger = read_test_ledger(root)
     job_id = ledger.job.job_id if ledger.job else None
@@ -901,9 +1036,13 @@ def summarize_tests(
                 paths=existing,
             )
         )
+    stale = _stale(_created_at(ledger.run_id), lane)
+    if stale is not None:
+        issues.append(stale)
     return TestsSummary(
         application=application,
         toolchain=toolchain,
+        build=build,
         root=root,
         run_id=ledger.run_id,
         state=state,
@@ -995,9 +1134,22 @@ def _session_line(summary: SessionSummary, label: str) -> str:
     return "  ".join(parts)
 
 
+def _stage_line(summary: StageSummary, label: str) -> str:
+    o = summary.outcome
+    return "  ".join([label, outcome_text(o), o.finished_at.strftime(_STAMP), o.script])
+
+
 def _issue_lines(issue: Issue, tail: int | None) -> list[str]:
     shown: list[str]
-    if issue.kind in _TESTS_KINDS:
+    if issue.kind in _STAGE_KINDS:
+        lines = [f"  [{issue.kind}] {issue.detail}"]
+        shown = (
+            issue.out_tail if tail is None else issue.out_tail[-tail:] if tail else []
+        )
+        if shown:
+            lines.append(f"    log tail ({len(shown)}):")
+            lines.extend(f"      | {line}" for line in shown)
+    elif issue.kind in _TESTS_KINDS:
         job = _job_text(issue)
         lines = [f"  [{issue.kind}] {issue.detail}" + (f"  {job}" if job else "")]
         if issue.failed_tests:
@@ -1045,9 +1197,20 @@ def render(
     where = f" under {report.root_dir}" if report.root_dir is not None else ""
     stamp = report.generated_at.strftime("%Y-%m-%d %H:%M UTC")
     runs = f", {len(report.tests)} test run(s)" if report.tests else ""
+    staged = f", {len(report.stages)} stage(s)" if report.stages else ""
     lines = [
-        f"report: {len(report.sessions)} session(s){runs}{where} (generated {stamp})"
+        (
+            f"report: {len(report.sessions)} session(s){runs}{staged}{where} "
+            f"(generated {stamp})"
+        )
     ]
+    # The stages first: the builds the sessions and the test runs stand on.
+    stage_width = max((len(s.label) for s in report.stages), default=0)
+    for stage in report.stages:
+        lines.append(_stage_line(stage, stage.label.ljust(stage_width)).rstrip())
+        if not quiet:
+            for issue in stage.issues:
+                lines.extend(_issue_lines(issue, tail))
     several = len({s.application for s in report.sessions}) > 1
     labels = [
         f"{s.application}/{s.label}" if several and s.session else s.label
@@ -1067,12 +1230,15 @@ def render(
                 lines.extend(_issue_lines(issue, tail))
     issue_lists = [s.issues for s in report.sessions]
     issue_lists += [t.issues for t in report.tests]
+    issue_lists += [s.issues for s in report.stages]
     total = sum(len(issues) for issues in issue_lists)
     affected = sum(1 for issues in issue_lists if issues)
     code = 0 if report.ok else 1
     scope = f"{len(report.sessions)} session(s)"
     if report.tests:
         scope += f" and {len(report.tests)} test run(s)"
+    if report.stages:
+        scope += f" and {len(report.stages)} stage(s)"
     if total:
         lines.append(f"report: {total} issue(s) in {affected} of {scope}; exit {code}")
     else:

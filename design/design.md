@@ -726,7 +726,25 @@ its exit status; `--only sessions|tests` narrows `watch` and `report`.
 line per run and, for a failed one, `tests-failed` (the failed tests'
 names from the junit, the output's tail) or `tests-job-failed` (no failed
 test to name). `cancel --tests-root` and `record-benchmarks --tests-root`
-are the per-root commands. The Debug / ESMF rule moved with this chunk
+are the per-root commands. Since 2026-11-20 the report also reads the
+stage record (`cli/stage_outcomes`: `StageRecord` in
+`<root_dir>/scripts/stages.yaml`, script file name → `StageOutcome` —
+stage, application, toolchain, variant, session, `passed` / `failed` /
+`skipped`, exit status, aware start and end, the log found by its exact
+`<stem>-<YYYYmmdd-HHMMSS>.log` name, the skipping script, the `run` ULID).
+`run._execute` merges an outcome after every script, through a temporary
+file and an atomic rename; a dry run writes nothing. `cli/sessions` finds a
+lane's entries by the script names `run` gives them (`lane_script`,
+`lane_outcomes`, `configured_lanes`) and builds the stage lines
+(`stage_summaries`: each lane's source, build and data stage, a shared one
+once); `run_report.summarize_stage` turns a failed outcome into
+`stage-failed` with the log's tail and a skipped one into `stage-skipped`
+naming its cause; `summarize_tests` takes the lane's outcomes, names the
+failed or skipped stage that left a tests root without a ledger, and adds
+`tests-stale` when the ledger's ULID time is earlier than the lane's latest
+build start, or than a later test stage that did not pass. `RunReport.stages`
+renders before the sessions and test runs and counts in the verdict;
+`TestsSummary` carries the variant in its label. The Debug / ESMF rule moved with this chunk
 from a validator of `CeceRunSection` to `ApplicationRunSection.runtime_problems(runtime)`,
 which `RunConfig` checks at load: under docker the container build
 script owns the configure, so only the `all`-among-targets half applies
@@ -1559,6 +1577,8 @@ All code under `src/`; the project is `uv`-managed with its own
       override.py         # KEY:PATH=VALUE overrides applied before validation
       stages.py           # per-application / per-session stage scripts (ShellScript)
       shell.py            # write_script, run_bash (tee to <root>/logs/)
+      stage_outcomes.py   # the stage record (<root>/scripts/stages.yaml): StageOutcome per
+                          #   script `run` executed or skipped, read by report and watch
       selectors.py        # the requested stages / sessions / applications / toolchains / build
                           #   variants of a config (toolchain_configs: one derived config per
                           #   toolchain; build_configs: one per variant of an application)

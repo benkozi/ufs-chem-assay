@@ -19,8 +19,10 @@ import apptests
 from applications.base import Application, Stage
 from applications.registry import get_application
 from cli.run_config import ResolvedSession, RunConfig
+from cli.run_report import DEFAULT_TAIL, StageSummary, summarize_stage
 from cli.selectors import build_configs
 from cli.shell import run_bash
+from cli.stage_outcomes import StageOutcome, StageRecord
 from cli.stages import SCRIPT_INDEX, stage_name, tests_enabled
 from identity import harness_commit, harness_version
 from jobs import (
@@ -381,6 +383,68 @@ def evaluate_tests(watched: WatchedTests) -> TestsReport:
         return _evaluated(apptests.evaluate(watched.root, left_queue=True))
     except ValueError as exc:
         return TestsReport(state=TestsState.FAILED, exit_status=1, detail=str(exc))
+
+
+# ── the stage record, by lane ────────────────────────────────────────────
+
+
+def lane_script(
+    stage: Stage, application: str, toolchain: str | None, build: str | None
+) -> str:
+    """The file name `run` gives a stage script of one lane (the key of its
+    entry in the stage record): <NN>-<stage>-<application>[-<toolchain>][-<build>].sh."""
+    name = stage_name(stage, application, toolchain, build=build)
+    return f"{SCRIPT_INDEX[stage]:02d}-{name}.sh"
+
+
+def configured_lanes(
+    config: RunConfig, applications: list[Application], builds: list[str] | None
+) -> list[tuple[str | None, str, str | None]]:
+    """(toolchain, application, variant) for every selected application and
+    variant of a toolchain's config, in config order."""
+    return [
+        (variant.toolchain, app.name, variant.applications[app.name].build_name)
+        for app in applications
+        for variant in build_configs(config, app, builds)
+    ]
+
+
+def lane_outcomes(
+    record: StageRecord, toolchain: str | None, application: str, build: str | None
+) -> dict[Stage, StageOutcome]:
+    """The lane's latest source, build, test and data outcomes that the record
+    has: the source and data stages are the application's, the build and
+    test stages the variant's."""
+    found: dict[Stage, StageOutcome] = {}
+    for stage in (Stage.SOURCE, Stage.BUILD, Stage.TEST, Stage.DATA):
+        variant = build if stage in (Stage.BUILD, Stage.TEST) else None
+        outcome = record.outcomes.get(
+            lane_script(stage, application, toolchain, variant)
+        )
+        if outcome is not None:
+            found[stage] = outcome
+    return found
+
+
+def stage_summaries(
+    record: StageRecord,
+    lanes: Iterable[tuple[str | None, str, str | None]],
+    *,
+    tail: int = DEFAULT_TAIL,
+) -> list[StageSummary]:
+    """The report's stage lines: each lane's source, build and data outcome
+    in that order, a source or data stage once however many variants share
+    it."""
+    seen: set[str] = set()
+    summaries: list[StageSummary] = []
+    for toolchain, application, build in lanes:
+        found = lane_outcomes(record, toolchain, application, build)
+        for stage in (Stage.SOURCE, Stage.BUILD, Stage.DATA):
+            outcome = found.get(stage)
+            if outcome is not None and outcome.script not in seen:
+                seen.add(outcome.script)
+                summaries.append(summarize_stage(outcome, record, tail=tail))
+    return summaries
 
 
 def job_script_for_tests(

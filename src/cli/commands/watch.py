@@ -23,17 +23,21 @@ from cli.sessions import (
     TestsReport,
     TestsState,
     WatchedSession,
+    configured_lanes,
     configured_sessions,
     configured_tests,
     evaluate_session,
     evaluate_tests,
+    lane_outcomes,
     load_effective,
     poll,
     read_session_ledger,
     read_tests_ledger,
+    stage_summaries,
     tick,
     tick_tests,
 )
+from cli.stage_outcomes import read_stage_record
 from logs import get_logger
 
 logger = get_logger("cli")
@@ -141,6 +145,11 @@ def handler(args: argparse.Namespace) -> int:
                 for t in configured_tests(build, applications, args.build)
             ]
         )
+        lanes = [
+            lane
+            for build in builds
+            for lane in configured_lanes(build, applications, args.build)
+        ]
         tests_alone = (
             "; `--only tests` watches the applications' own test jobs alone"
             if tests
@@ -265,6 +274,8 @@ def handler(args: argparse.Namespace) -> int:
     ]
     if failed:
         logger.error("evaluation failed: %s", ", ".join(failed))
+    # The stage record as it is now: a run may have finished since the watch began.
+    record = read_stage_record(root_dir / "scripts")
     run_report = RunReport(
         root_dir=root_dir,
         generated_at=datetime.now(UTC),
@@ -279,9 +290,16 @@ def handler(args: argparse.Namespace) -> int:
             for w in watched
         ],
         tests=[
-            summarize_tests(t.root, application=t.application, toolchain=t.toolchain)
+            summarize_tests(
+                t.root,
+                application=t.application,
+                toolchain=t.toolchain,
+                build=t.build,
+                lane=lane_outcomes(record, t.toolchain, t.application, t.build),
+            )
             for t in tests
         ],
+        stages=stage_summaries(record, lanes),
     )
     for line in render(run_report):
         logger.info("%s", line)

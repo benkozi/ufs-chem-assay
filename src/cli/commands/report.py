@@ -15,13 +15,22 @@ from cli.run_report import (
     DEFAULT_TAIL,
     RunReport,
     SessionSummary,
+    StageSummary,
     TestsSummary,
     render,
     summarize_session,
     summarize_tests,
 )
 from cli.selectors import selected_applications, selected_sessions, toolchain_configs
-from cli.sessions import configured_sessions, configured_tests, load_effective
+from cli.sessions import (
+    configured_lanes,
+    configured_sessions,
+    configured_tests,
+    lane_outcomes,
+    load_effective,
+    stage_summaries,
+)
+from cli.stage_outcomes import read_stage_record
 from logs import get_logger
 from models.conventions import CONVENTIONS
 
@@ -134,6 +143,7 @@ def handler(args: argparse.Namespace) -> int:
     evaluated, exited 0 and has no issue; 1 otherwise."""
     tests: list[TestsSummary] = []
     summaries: list[SessionSummary] = []
+    stages: list[StageSummary] = []
     if args.output_root is not None:
         if args.application or args.session or args.only or args.toolchain:
             logger.error(
@@ -161,6 +171,16 @@ def handler(args: argparse.Namespace) -> int:
             applications = selected_applications(config, args.application)
             sessions = selected_sessions(config, args.session)
             builds = toolchain_configs(config, args.toolchain)
+            record = read_stage_record(root_dir / "scripts")
+            stages = stage_summaries(
+                record,
+                [
+                    lane
+                    for build in builds
+                    for lane in configured_lanes(build, applications, args.build)
+                ],
+                tail=args.tail,
+            )
             watched_tests = (
                 []
                 if args.only == "sessions"
@@ -190,7 +210,12 @@ def handler(args: argparse.Namespace) -> int:
             ]
         tests = [
             summarize_tests(
-                t.root, application=t.application, toolchain=t.toolchain, tail=args.tail
+                t.root,
+                application=t.application,
+                toolchain=t.toolchain,
+                build=t.build,
+                tail=args.tail,
+                lane=lane_outcomes(record, t.toolchain, t.application, t.build),
             )
             for t in watched_tests
         ]
@@ -199,6 +224,7 @@ def handler(args: argparse.Namespace) -> int:
         generated_at=datetime.now(UTC),
         sessions=summaries,
         tests=tests,
+        stages=stages,
     )
     for line in render(report, quiet=args.quiet):
         logger.info("%s", line)

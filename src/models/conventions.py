@@ -111,6 +111,13 @@ class Conventions(StrictModel):
         "run-config.yaml",
         description="The effective run config `run` writes beside the rendered stage scripts",
     )
+    stage_record: str = Field(
+        "stages.yaml",
+        description=(
+            "Written beside the effective config by `run`: the latest outcome of every "
+            "stage script it ran or skipped, which `report` and `watch` read"
+        ),
+    )
 
     # ── transfers ────────────────────────────────────────────────────────
     staging_dirname: str = Field(

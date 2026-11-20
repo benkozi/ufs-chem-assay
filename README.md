@@ -630,6 +630,29 @@ of the output, or `tests-job-failed` when the job died without a failed
 test to name (a time limit, no junit report). `cancel --tests-root
 <root_dir>/tests/<application>` scancels a queued test job.
 
+**Stage outcomes.** `run` records what every stage script it executed or
+skipped came to in `<root_dir>/scripts/stages.yaml`, beside the effective
+config: the script, its stage, application, toolchain and build variant,
+`passed` / `failed` / `skipped`, the exit status, start and end times,
+its log under `<root_dir>/logs/` and, for a skipped script, the failure
+that skipped it. Each script's entry is replaced by its next run, so a
+run of one variant leaves the others' entries alone; a dry run records
+nothing. `report` and `watch` read it:
+
+- a line per selected source, build and data stage (`build
+  catchem/oneapi/musica  failed (exit 2)  2026-11-20 16:43 UTC
+  02-build-catchem-oneapi-musica.sh`), with a `stage-failed` issue (the
+  log's last `--tail` lines and its path) or a `stage-skipped` one (the
+  failure that skipped it). `--only` does not hide these lines: sessions
+  and test runs both stand on the builds;
+- a test run with no record names the stage that kept it from running
+  (`no test run: 02-build-catchem-oneapi-musica.sh failed (exit 2)`);
+- a test run older than its variant's latest build, or than a later test
+  stage that failed, gets a `tests-stale` issue: the result shown is not
+  the current build's.
+
+A failed or skipped stage and a stale result make the report's exit 1.
+
 **Applications that are built and tested, never swept.** Two registered
 applications have no driver, so no suite and no pytest session: a run
 gives them the stages they take part in and skips the rest, saying so
