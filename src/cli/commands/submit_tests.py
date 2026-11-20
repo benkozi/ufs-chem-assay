@@ -106,6 +106,7 @@ def handler(args: argparse.Namespace) -> int:
             script=script,
             application=app.name,
             toolchain=config.toolchain,
+            build=section.build_name,
             provenance=provenance_for_tests(config, app),
             timeout_s=section.tests.minutes * 60,
             queue_wait_s=config.slurm.queue_wait_s,

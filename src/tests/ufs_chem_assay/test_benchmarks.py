@@ -5,6 +5,7 @@ combination, and the append-only committed copy."""
 from __future__ import annotations
 
 import csv
+import logging
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -621,6 +622,7 @@ def _test_row(**overrides: object) -> TestBenchmarkRow:
         "run_id": "01JTESTRUNTESTRUNTESTRUNTE",
         "application": "cece",
         "toolchain": None,
+        "build": None,
         "platform": Platform.URSA,
         "runtime": Runtime.SLURM,
         "modulefile": "ufs_ursa.oneapi",
@@ -649,11 +651,12 @@ def _test_row(**overrides: object) -> TestBenchmarkRow:
 
 def test_test_benchmark_columns_are_described_and_ordered() -> None:
     assert list(TestBenchmarkRow.model_fields) == TEST_BENCHMARK_COLUMNS
-    assert TEST_BENCHMARK_COLUMNS[:4] == [
+    assert TEST_BENCHMARK_COLUMNS[:5] == [
         "recorded_at",
         "run_id",
         "application",
         "toolchain",
+        "build",  # the build variant (2026-11-20); empty for the unnamed build
     ]
     assert TEST_BENCHMARK_COLUMNS[-1] == "tests_root"
     for field in TestBenchmarkRow.model_fields.values():
@@ -688,3 +691,33 @@ def test_test_benchmarks_refuse_another_schema(tmp_path: Path) -> None:
         read_test_benchmarks_csv(path)
     with pytest.raises(ValueError, match="is not the test benchmark columns"):
         append_test_benchmarks(path, [_test_row()])
+
+
+def test_a_tests_root_file_older_than_build_reads_and_is_migrated_on_append(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A tests root evaluated before the build column existed (every C7 run of
+    # 2026-11-18/20): it reads with build null, and the next evaluation's
+    # append rewrites it with the current header, its rows kept, rather than
+    # refusing the run's row.
+    current = tmp_path / "current.csv"
+    append_test_benchmarks(current, [_test_row()])
+    header, line = current.read_text().splitlines()
+    position = TEST_BENCHMARK_COLUMNS.index("build")
+    legacy = tmp_path / "tests" / "cece" / "benchmarks.csv"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(
+        "\n".join(
+            ",".join(cell for i, cell in enumerate(text.split(",")) if i != position)
+            for text in (header, line)
+        )
+        + "\n"
+    )
+    (old,) = read_test_benchmarks_csv(legacy)
+    assert old == _test_row()  # build: null
+    newer = _test_row(run_id="01JTESTRUNTESTRUNTESTRUN02", build="musica")
+    with caplog.at_level(logging.WARNING):
+        assert append_test_benchmarks(legacy, [newer]).appended == 1
+    assert "added the build column" in caplog.text
+    assert legacy.read_text().splitlines()[0].split(",") == TEST_BENCHMARK_COLUMNS
+    assert read_test_benchmarks_csv(legacy) == [_test_row(), newer]

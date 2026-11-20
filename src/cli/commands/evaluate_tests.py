@@ -102,6 +102,7 @@ def handler(args: argparse.Namespace) -> int:
                 tests_root,
                 application=app.name,
                 toolchain=config.toolchain,
+                build=config.applications[app.name].build_name,
                 provenance=provenance_for_tests(config, app),
                 passed_marker=plan.passed_marker if plan else None,
             )

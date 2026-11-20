@@ -1255,6 +1255,7 @@ ULIDs and input digests.
 An application's own test runs are benchmarked as whole runs: every
 evaluated run appends one row to `<root_dir>/tests/<application>/benchmarks.csv`
 (a `TestBenchmarkRow`: the run's id, `application`, `toolchain`,
+`build` (the build variant; empty for an application without `builds:`),
 `platform`, `runtime`, `modulefile`, `build_type`, `cmake_args`,
 `application_commit`, the harness's identity, the Slurm job and its
 accounting, `exit_code`, `wall_s`, the junit counts — `tests_total`,
@@ -1263,7 +1264,9 @@ tests' own durations summed).
 `ufs-chem-assay record-benchmarks --tests-root=<root_dir>/tests/<application>`
 appends those rows to the committed per-application file,
 `src/tests/config/<application>/tests-benchmarks.csv`, skipping runs
-already there. A regression shows in the whole-run numbers; the run's
+already there. A tests root's file from before the `build` column still
+reads (the cell empty); the next evaluation there rewrites it with the
+current header, its rows kept, and says so. A regression shows in the whole-run numbers; the run's
 junit report in the tests root has the individual tests.
 
 ## Environment variables

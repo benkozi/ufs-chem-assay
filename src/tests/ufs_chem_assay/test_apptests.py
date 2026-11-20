@@ -299,6 +299,7 @@ def test_evaluate_records_the_verdict_and_one_benchmark_row(tmp_path: Path) -> N
         "run_id": submitted.run_id,
         "application": "cece",
         "toolchain": None,
+        "build": None,
         "platform": Platform.URSA,
         "runtime": Runtime.SLURM,
         "modulefile": "ufs_ursa.oneapi",
@@ -572,3 +573,26 @@ def test_a_test_job_is_followed_on_its_own_cluster(
     assert evaluate(tmp_path).exit_status == 0
     accounting.assert_called_once_with("4242", clusters="c7")
     assert TestJob.model_fields["cluster"].description
+
+
+@pytest.mark.usefixtures("slurm")
+def test_a_variants_run_records_the_variant(tmp_path: Path) -> None:
+    # The ledger and the benchmark row name the build variant they ran; a
+    # ledger written before the field reads with it null.
+    submitted = _submit(tmp_path, build="musica")
+    assert submitted.build == "musica"
+    assert read_test_ledger(tmp_path).build == "musica"
+    _finish(tmp_path)
+    evaluate(tmp_path, now=lambda: _T0)
+    (row,) = read_test_benchmarks_csv(tmp_path / CONVENTIONS.benchmarks)
+    assert row.build == "musica"
+    local = tmp_path / "local"
+    started = record_local(
+        local,
+        application="cece",
+        toolchain=None,
+        build="compute",
+        provenance=_PROVENANCE,
+    )
+    assert started.build == "compute"
+    assert _submit(tmp_path / "plain").build is None

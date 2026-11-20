@@ -323,10 +323,17 @@ class BenchmarkRow(StrictModel):
 
 BENCHMARK_COLUMNS = list(BenchmarkRow.model_fields)
 
-# Columns added after files were already written: a file without them still
-# reads (the cells are null) — an old output root, a published baseline's
-# row — but is never appended to; the committed files were migrated.
-_ADDED_COLUMNS = frozenset({"build_type"})
+# Columns added after files were already written, per kind of file: a file
+# without them still reads (the cells are null). A driver rows' file — an old
+# output root, a published baseline's row — is never appended to (the
+# committed files were migrated); a test rows' file — a tests root, evaluated
+# once per run — is rewritten with the current header on its next append
+# (_MIGRATED_ON_APPEND), since a tests root outlives harness updates.
+_ADDED_COLUMNS: dict[str, frozenset[str]] = {
+    "BenchmarkRow": frozenset({"build_type"}),
+    "TestBenchmarkRow": frozenset({"build"}),
+}
+_MIGRATED_ON_APPEND = frozenset({"TestBenchmarkRow"})
 
 
 class TestBenchmarkRow(StrictModel):
@@ -341,6 +348,9 @@ class TestBenchmarkRow(StrictModel):
     application: str = Field(description="Registry name of the application")
     toolchain: str | None = Field(
         description="The run config's toolchain the build used; null without one"
+    )
+    build: str | None = Field(
+        description="The build variant the tests ran against; null for the unnamed build"
     )
     platform: Platform = Field(description="Machine the tests ran on")
     runtime: Runtime = Field(description="How the tests were launched")
@@ -434,6 +444,12 @@ def write_benchmarks_csv(rows: Sequence[BenchmarkRow], path: Path) -> pd.DataFra
     return frame
 
 
+def _older_columns(model: type[StrictModel]) -> list[str]:
+    """The model's columns less the ones added since files were first written."""
+    added = _ADDED_COLUMNS.get(model.__name__, frozenset())
+    return [name for name in model.model_fields if name not in added]
+
+
 def _read_csv(model: type[RowT], path: Path, *, legacy: bool = False) -> list[RowT]:
     """Every row validated through `model`; empty cells are None. The header
     must be the model's columns — or, with `legacy`, those columns less the
@@ -443,7 +459,7 @@ def _read_csv(model: type[RowT], path: Path, *, legacy: bool = False) -> list[Ro
     with open(path, newline="") as f:
         reader = csv.reader(f)
         header = next(reader, [])
-        older = [name for name in columns if name not in _ADDED_COLUMNS]
+        older = _older_columns(model)
         if header != columns and not (legacy and header == older):
             raise ValueError(
                 f"{path}: header {header} is not the {_KINDS[model]} columns "
@@ -474,8 +490,10 @@ def read_benchmarks_csv(path: Path) -> list[BenchmarkRow]:
 
 def read_test_benchmarks_csv(path: Path) -> list[TestBenchmarkRow]:
     """A tests root's (or the committed per-application) rows, validated
-    through the model; a header that is not its columns is a ValueError."""
-    return _read_csv(TestBenchmarkRow, path)
+    through the model; a header that is not its columns is a ValueError —
+    except a file older than a later-added column (build), which reads with
+    that column None."""
+    return _read_csv(TestBenchmarkRow, path, legacy=True)
 
 
 class AppendResult(StrictModel):
@@ -497,6 +515,19 @@ def _append_locked(
         _write_csv(model, rows, repo_csv)
         logger.info("wrote %s %s row(s) to %s", len(rows), _KINDS[model], repo_csv)
         return AppendResult(appended=len(rows), skipped=0)
+    if model.__name__ in _MIGRATED_ON_APPEND and _header(repo_csv) == _older_columns(
+        model
+    ):
+        rows_before = _read_csv(model, repo_csv, legacy=True)
+        _write_csv(model, rows_before, repo_csv)
+        added = sorted(set(model.model_fields) - set(_older_columns(model)))
+        logger.warning(
+            "%s: added the %s column%s to its %s row(s) (empty in each)",
+            repo_csv,
+            ", ".join(added),
+            "" if len(added) == 1 else "s",
+            len(rows_before),
+        )
     original = repo_csv.read_text()
     keys = {key(row) for row in _read_csv(model, repo_csv)}  # validates the header
     to_append = [row for row in rows if key(row) not in keys]
@@ -523,6 +554,11 @@ def _append_locked(
         result.skipped,
     )
     return result
+
+
+def _header(path: Path) -> list[str]:
+    with open(path, newline="") as f:
+        return next(csv.reader(f), [])
 
 
 def _append(

@@ -758,7 +758,9 @@ collect the sessions and test runs of every selected toolchain (labels
 `<toolchain>/<session>`, `tests <application>/<toolchain>`; the session
 log lookup includes the toolchain); `submit-tests` and `evaluate-tests`
 take `--toolchain` and work on exactly one (`one_toolchain_config`). The
-test ledger and `TestBenchmarkRow` carry the toolchain; `run.yaml` and
+test ledger and `TestBenchmarkRow` carry the toolchain (and, since
+2026-11-20, the build variant: `TestLedger.build`, `TestBenchmarkRow.build`,
+written by `submit-tests` / `evaluate-tests --build`); `run.yaml` and
 the driver `BenchmarkRow` do not — a driver row's `modulefile` and
 `build_type` tell the toolchains apart.
 
@@ -1253,7 +1255,14 @@ Persistent benchmarking (2026-10-23, `src/benchmarks.py`; full design in
   the tests root's `benchmarks.csv` at evaluation and, by
   `record-benchmarks --tests-root`, to the committed per-application
   `src/tests/config/<application>/tests-benchmarks.csv` (key: the run's
-  ULID). The CSV helpers are generic over the two models.
+  ULID). The CSV helpers are generic over the two models. Its `build`
+  column (2026-11-20, after `toolchain`: the build variant, null for the
+  unnamed build) is the test rows' added column: a file without it reads
+  with the cell null, and unlike a driver rows' file it is not refused on
+  append but rewritten with the current header, its rows kept and a
+  warning logged (`_MIGRATED_ON_APPEND`) — a tests root on a machine
+  outlives harness updates, and no committed test-benchmarks file existed
+  when the column was added. `_ADDED_COLUMNS` is per model.
 - **One row per executed combination per run** — `BenchmarkRow`, a strict
   model whose fields are the CSV columns: identity (`run_id`, `combo_id`,
   `suite`, `combo`, `config_sha256` — the SHA-256 of the adapter's

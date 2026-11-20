@@ -464,6 +464,7 @@ def test_submit_tests_finds_the_variants_job(
     assert submit.call_args.args[0] == root / "oneapi" / "tests" / "catchem" / "musica"
     assert kwargs["script"] == root / "scripts" / "04-test-catchem-oneapi-musica.sbatch"
     assert kwargs["timeout_s"] == 9 * 60
+    assert kwargs["build"] == "musica"  # recorded in the ledger and the row
     # Several variants and none named: the command works on one.
     assert main(args) == 1
 
@@ -499,3 +500,51 @@ def test_a_per_build_command_finds_its_one_variant(tmp_path: Path) -> None:
         ValueError, match=r"--build 'x' is no build of cece \(it has no builds:\)"
     ):
         one_build_config(oneapi, _CECE, "x")
+
+
+def test_evaluate_tests_records_the_variant_of_a_run_in_place(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    # native runtime: the test stage runs ctest in place, then evaluate-tests.
+    mocker.patch("cli.commands.run.run_bash")
+    login = {
+        name: {**overlay, "build_node": "login"}  # type: ignore[dict-item]
+        for name, overlay in _BUILDS.items()
+    }
+    path = _kokkos_file(
+        tmp_path,
+        **{
+            "applications.catchem.builds": login,
+            "applications.cece.build_node": "login",
+            "applications.kokkos-smoke.build_node": "login",
+            "harness.runtime": "native",
+            "harness.submit_only": False,
+        },
+    )
+    root = tmp_path / "root"
+    run = ["run", f"--config-file={path}", f"--root-dir={root}"]
+    assert (
+        main(
+            [
+                *run,
+                "--application=catchem",
+                "--toolchain=oneapi",
+                "--stage=test",
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    record = mocker.patch("apptests.record_local")
+    evaluate = mocker.patch("apptests.evaluate")
+    evaluate.return_value.tests = None
+    evaluate.return_value.exit_status = 0
+    args = [
+        "evaluate-tests",
+        f"--root-dir={root}",
+        "--application=catchem",
+        "--toolchain=oneapi",
+    ]
+    assert main([*args, "--build=compute", "--exit-status=0"]) == 0
+    assert record.call_args.args[0] == root / "oneapi" / "tests" / "catchem" / "compute"
+    assert record.call_args.kwargs["build"] == "compute"

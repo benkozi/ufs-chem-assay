@@ -170,6 +170,7 @@ def submit(
     queue_wait_s: int,
     passed_marker: str | None = None,
     resubmit: bool = False,
+    build: str | None = None,
     now: Clock | None = None,
 ) -> TestLedger:
     """Submit an application's test job and record it: the tests root
@@ -185,6 +186,7 @@ def submit(
         run_id=str(ULID()),
         application=application,
         toolchain=toolchain,
+        build=build,
         submitted_by=submitted_by(),
         provenance=provenance,
         job=TestJob(
@@ -217,6 +219,7 @@ def record_local(
     toolchain: str | None,
     provenance: TestProvenance,
     passed_marker: str | None = None,
+    build: str | None = None,
 ) -> TestLedger:
     """Record a test run made in place (native, docker): the stage script
     ran the tests into <tests root>/tests.out and tests.xml; this starts
@@ -228,6 +231,7 @@ def record_local(
         run_id=str(ULID()),
         application=application,
         toolchain=toolchain,
+        build=build,
         submitted_by=submitted_by(),
         provenance=provenance,
         job=None,
@@ -310,6 +314,7 @@ def evaluate(
         run_id=ledger.run_id,
         application=ledger.application,
         toolchain=ledger.toolchain,
+        build=ledger.build,
         platform=provenance.platform,
         runtime=provenance.runtime,
         modulefile=provenance.modulefile,

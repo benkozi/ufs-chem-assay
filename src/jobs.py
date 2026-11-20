@@ -217,6 +217,10 @@ class TestLedger(StrictModel):
         default=None,
         description="The run config's toolchain the build used; null without one",
     )
+    build: str | None = Field(
+        default=None,
+        description="The build variant the tests ran against; null for the unnamed build",
+    )
     submitted_by: str = Field(
         description="user@host of the process that launched the run"
     )
