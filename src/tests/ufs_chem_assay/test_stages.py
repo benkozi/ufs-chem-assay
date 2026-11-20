@@ -4,6 +4,7 @@ and these scripts must stay recognisably the same commands."""
 
 import os
 import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ import pytest
 from applications.base import Application, Stage
 from applications.registry import REGISTRY, get_application
 from cli.run_config import HARNESS_ROOT, ResolvedSession, RunConfig
-from cli.stages import SCRIPT_INDEX, render_stage
+from cli.stages import HARNESS_VENV_OFF, SCRIPT_INDEX, render_stage
 from platforms import Platform
 from tests.ufs_chem_assay.run_configs import (
     TEMPLATES_DIR,
@@ -19,6 +20,10 @@ from tests.ufs_chem_assay.run_configs import (
     run_config_file,
 )
 from tests.ufs_chem_assay.stubs import stub_application
+
+# The first body line of a build or test stage script: after the shebang, strict
+# mode, the banner and the lines that leave the harness venv.
+_BODY = 3 + len(HARNESS_VENV_OFF)
 
 _CECE = get_application("cece")
 
@@ -773,7 +778,7 @@ def _starting(lines: list[str], prefix: str) -> list[int]:
 
 def test_login_build_is_the_default_and_says_so(ursa: RunConfig) -> None:
     lines = render_stage(Stage.BUILD, ursa, _CECE).text.splitlines()
-    assert lines[3] == "echo 'build node: login'"  # first, after the banner
+    assert lines[_BODY] == "echo 'build node: login'"  # first, after the banner
     assert not any("srun" in line for line in lines)
     # One configure with the cmake_args as written: no test-stack flag added.
     assert len(_starting(lines, "cmake -S")) == 1
@@ -785,7 +790,8 @@ def test_compute_build_probes_offline_behind_srun(tmp_path: Path) -> None:
     lines = render_stage(Stage.BUILD, config, _CECE).text.splitlines()
     clone = str(config.checkout_dir(_CECE))
     assert (
-        lines[3] == f"echo {shlex.quote('build node: compute (' + _BUILD_SRUN + ')')}"
+        lines[_BODY]
+        == f"echo {shlex.quote('build node: compute (' + _BUILD_SRUN + ')')}"
     )
     # Configure and build are two srun steps (two allocations), never one
     # spanning both; the configure has the test stack off, because GTest and
@@ -848,7 +854,7 @@ def test_compute_build_finishes_on_the_login_node_when_tests_are_enabled(
     clone = str(config.checkout_dir(_CECE))
     args = "-DCMAKE_BUILD_TYPE=Debug -DENABLE_ESMF=ON"
     where = f"build node: compute ({_BUILD_SRUN}), then login (tests)"
-    assert lines[3] == f"echo {shlex.quote(where)}"
+    assert lines[_BODY] == f"echo {shlex.quote(where)}"
     # Phase 1, the compute-node probe; phase 2, the login-node finish: the
     # same build directory re-configured with the test stack on, the gates
     # again, the build reusing the compute-built objects.
@@ -885,7 +891,7 @@ def test_login_build_with_tests_is_one_configure(tmp_path: Path) -> None:
     # what cmake_args and targets say, nothing is turned off or back on.
     config = _ursa(tmp_path, _TESTED_CECE)
     lines = render_stage(Stage.BUILD, config, _CECE).text.splitlines()
-    assert lines[3] == "echo 'build node: login'"
+    assert lines[_BODY] == "echo 'build node: login'"
     assert len(_starting(lines, "cmake -S")) == 1
     assert "CECE_BUILD_TESTING" not in "\n".join(lines)
     assert lines[-1].endswith("--target all --parallel 8")
@@ -968,9 +974,11 @@ def test_slurm_test_stage_guards_then_submits_through_the_harness(
         'echo ">>> stage: test (cece)"',
     ]
     # The guard: the test stage never compiles, so the test stack must be there.
-    assert lines[3].startswith(f"[ -f {clone}/build/CTestTestfile.cmake ] || {{ echo ")
-    assert _NO_TESTS_BUILT in lines[3]
-    assert lines[3].endswith(">&2; exit 1; }")
+    assert lines[_BODY].startswith(
+        f"[ -f {clone}/build/CTestTestfile.cmake ] || {{ echo "
+    )
+    assert _NO_TESTS_BUILT in lines[_BODY]
+    assert lines[_BODY].endswith(">&2; exit 1; }")
     # The submit is the harness's own command, in the harness's clean
     # environment, from the harness checkout — as the data stage calls fetch.
     assert lines[-1] == (
@@ -1056,7 +1064,7 @@ def test_native_test_stage_runs_ctest_in_place_and_records_it(tmp_path: Path) ->
     clone = config.checkout_dir(_CECE)
     tests_root = config.root_dir / "tests" / "cece"
     out = f"{tests_root}/tests.out"
-    assert lines[3].startswith(f"[ -f {clone}/build/CTestTestfile.cmake ]")
+    assert lines[_BODY].startswith(f"[ -f {clone}/build/CTestTestfile.cmake ]")
     run = lines.index(
         "srun --ntasks=1 --cpus-per-task=8 ctest --test-dir build --output-on-failure "
         f"--output-junit {tests_root}/tests.xml 2>&1 | tee -a {out} || status=$?"
@@ -1111,3 +1119,95 @@ def test_docker_test_stage_runs_ctest_in_the_applications_image(
     assert "module" not in script.text
     assert lines[-2].startswith("uv run --no-sync ufs-chem-assay evaluate-tests ")
     assert lines[-1] == 'exit "$status"'
+
+
+# ── the harness's venv stays out of the applications' builds and tests ──────
+# `uv run ufs-chem-assay run` exports VIRTUAL_ENV and puts the venv's bin/
+# first on PATH, and every stage script (and, through sbatch, every test job)
+# inherits both; `module reset` touches neither. HELM's AXIS prepends
+# $VIRTUAL_ENV (or $CONDA_PREFIX) to CMAKE_PREFIX_PATH, so CECE's configure
+# searched the harness venv first for every find_package (every C7 build
+# printed "AXIS: Active Virtual Environment detected").
+
+
+def test_build_and_test_stages_start_outside_the_harness_venv(
+    tmp_path: Path, local: RunConfig
+) -> None:
+    compute = _tests_on(tmp_path, **{"applications.cece.build_node": "compute"})
+    native = _tests_on(
+        tmp_path,
+        **{"harness.runtime": "native", "harness.submit_only": False},
+    )
+    scripts = {
+        "login build": render_stage(Stage.BUILD, _tests_on(tmp_path), _CECE).text,
+        "compute build": render_stage(Stage.BUILD, compute, _CECE).text,
+        "docker build": render_stage(Stage.BUILD, local, _CECE).text,
+        "slurm test stage": render_stage(Stage.TEST, compute, _CECE).text,
+        "slurm test job": render_stage(Stage.TEST, compute, _CECE).attachments[
+            ".sbatch"
+        ],
+        "native test stage": render_stage(Stage.TEST, native, _CECE).text,
+    }
+    for what, text in scripts.items():
+        lines = text.splitlines()
+        start = lines.index(HARNESS_VENV_OFF[0])
+        assert lines[start : start + len(HARNESS_VENV_OFF)] == HARNESS_VENV_OFF, what
+        # Before anything the application runs: the modules and the tools.
+        later = [
+            i
+            for i, line in enumerate(lines)
+            if line.startswith(("module ", "cmake ", "ctest ", "python3 ", "docker "))
+        ]
+        assert later, what
+        assert start < min(later), what
+
+
+def test_the_source_data_and_harness_stages_keep_the_venv(ursa: RunConfig) -> None:
+    # Only what builds or runs the application leaves the venv; the harness's
+    # own commands run from it.
+    for stage in (Stage.SOURCE, Stage.DATA, Stage.HARNESS):
+        text = render_stage(stage, ursa, _CECE, _first(ursa)).text
+        assert HARNESS_VENV_OFF[0] not in text, stage
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/venv/bin:/usr/bin:/bin", "/usr/bin:/bin"),  # where uv run puts it
+        ("/usr/bin:/venv/bin:/bin", "/usr/bin:/bin"),
+        ("/usr/bin:/bin:/venv/bin", "/usr/bin:/bin"),
+        (
+            "/usr/bin:/venv/binary:/bin",
+            "/usr/bin:/venv/binary:/bin",
+        ),  # whole entries only
+        ("/usr/bin:/bin", "/usr/bin:/bin"),
+    ],
+)
+def test_the_venv_lines_drop_the_venv_from_path_and_its_variables(
+    path: str, expected: str
+) -> None:
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            *HARNESS_VENV_OFF,
+            'echo "$PATH"',
+            'echo "${VIRTUAL_ENV-unset} ${CONDA_PREFIX-unset}"',
+        ]
+    )
+    env = {"PATH": path, "VIRTUAL_ENV": "/venv", "CONDA_PREFIX": "/conda"}
+    done = subprocess.run(
+        ["/bin/bash", "-c", script], env=env, capture_output=True, text=True, check=True
+    )
+    assert done.stdout.splitlines() == [expected, "unset unset"]
+
+
+def test_the_venv_lines_are_a_no_op_outside_a_venv() -> None:
+    script = "\n".join(["set -euo pipefail", *HARNESS_VENV_OFF, 'echo "$PATH"'])
+    done = subprocess.run(
+        ["/bin/bash", "-c", script],
+        env={"PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert done.stdout == "/usr/bin:/bin\n"

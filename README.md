@@ -486,6 +486,15 @@ load, so the log names the compilers the configure will see) and
 match before anything is built, after the adapter's own gates — the
 claims of the environment, such as `Using system Kokkos`).
 
+The build and test stages, and the test job, start by leaving the
+harness's own Python environment: they take its `bin/` off `PATH` and
+unset `VIRTUAL_ENV` and `CONDA_PREFIX`, which `uv run` and a conda shell
+would otherwise pass on. A CMake project can read those variables (HELM's
+AXIS library, inside CECE, puts either one first on `CMAKE_PREFIX_PATH`),
+so without this the harness venv would be searched before the module
+environment for every package. The source, data and harness stages keep
+the venv: they run the harness itself.
+
 The harness ships UFS platform modulefiles of its own under
 `modulefiles/` (`modulefiles/ufs_ursa.oneapi.lua`, `ufs_ursa.gnu.lua`,
 `ufs_gaeac6.oneapi.lua`, `ufs_gaeac7.oneapi.lua`, and the `ufs_common.lua`

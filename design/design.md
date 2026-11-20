@@ -618,7 +618,18 @@ harness checkout and is exported absolute), `module load <modulefile>`,
 `purge` on Ursa and by default, `reset` on Gaea, where a purge strips
 Cray's `craype`/`PrgEnv` machinery; the harness venv's shell is cleaned
 the same way before `unset PYTHONPATH`. `modulefile: null` switches the
-whole block off. Two more section keys are the build stage's alone:
+whole block off. Before the block, every build and test stage script and the
+test job leave the harness's venv (`cli/stages.py:HARNESS_VENV_OFF`, added
+2026-11-20 by `render_stage` for `Stage.BUILD` / `Stage.TEST` and by the
+slurm test job's module lines): the venv's `bin/` comes off `PATH` (matched
+as a whole entry through a variable, since a `/` in a bash `${…//…}` pattern
+ends it) and `VIRTUAL_ENV` and `CONDA_PREFIX` are unset. `uv run` exports the
+first two to every stage script and, through `submit-tests` and `sbatch`, to
+the test job, and `module reset` touches neither; HELM's AXIS prepends
+`$CONDA_PREFIX`, else `$VIRTUAL_ENV`, to `CMAKE_PREFIX_PATH`, so CECE's
+configure had searched the harness venv first for every `find_package`. The
+harness's own `uv run --no-sync` lines in the same scripts need neither (uv
+finds the project venv from the checkout). Two more section keys are the build stage's alone:
 `toolchain_tools` (the `which` probe after the load; empty keeps the
 adapter's default) and `configure_gates` (grep -E patterns the configure
 log must match after the adapter's own gates and before the build, each

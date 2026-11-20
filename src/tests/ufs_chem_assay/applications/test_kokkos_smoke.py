@@ -14,8 +14,12 @@ from applications.kokkos_smoke.cli import PROJECT_DIR, KokkosSmokeRunSection
 from applications.kokkos_smoke.settings import KokkosSmokeSettings
 from applications.registry import get_application
 from cli.run_config import HARNESS_ROOT, RunConfig
-from cli.stages import render_stage
+from cli.stages import HARNESS_VENV_OFF, render_stage
 from tests.ufs_chem_assay.run_configs import load_run_config, run_config_file
+
+# The first body line of a build or test stage script: after the shebang, strict
+# mode, the banner and the lines that leave the harness venv.
+_BODY = 3 + len(HARNESS_VENV_OFF)
 
 _ROOT = Path("/scratch/ursa-run")
 _CHECKOUT = _ROOT / "kokkos-smoke"
@@ -81,7 +85,7 @@ def test_build_stage_configures_the_shipped_project_and_gates_both_packages(
 ) -> None:
     lines = render_stage(Stage.BUILD, _config(tmp_path), app).text.splitlines()
     log = f"{_CHECKOUT}/build/configure.log"
-    assert lines[3] == "echo 'build node: login'"
+    assert lines[_BODY] == "echo 'build node: login'"
     load = lines.index("module load ufs_ursa.oneapi")
     assert lines[load - 1] == f"module use {HARNESS_ROOT}/modulefiles"
     configure = lines.index(
@@ -105,7 +109,8 @@ def test_compute_build_changes_nothing_but_the_node(
     config = _config(tmp_path, build_node="compute", tests={"enabled": True})
     lines = render_stage(Stage.BUILD, config, app).text.splitlines()
     assert (
-        lines[3] == f"echo {shlex.quote('build node: compute (' + _BUILD_SRUN + ')')}"
+        lines[_BODY]
+        == f"echo {shlex.quote('build node: compute (' + _BUILD_SRUN + ')')}"
     )
     srun = [line for line in lines if line.startswith("srun ")]
     assert srun == [
@@ -124,7 +129,7 @@ def test_test_stage_runs_the_executable_as_the_job(
 ) -> None:
     config = _config(tmp_path, tests={"enabled": True})
     script = render_stage(Stage.TEST, config, app)
-    assert script.text.splitlines()[3].startswith(f"[ -f {_CHECKOUT}/build/smoke ]")
+    assert script.text.splitlines()[_BODY].startswith(f"[ -f {_CHECKOUT}/build/smoke ]")
     job = script.attachments[".sbatch"].splitlines()
     assert f"#SBATCH --chdir={_CHECKOUT}" in job
     assert "#SBATCH -n 1" in job

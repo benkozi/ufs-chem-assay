@@ -13,8 +13,12 @@ from applications.catchem.cli import CatchemRunSection
 from applications.catchem.settings import CatchemSettings
 from applications.registry import get_application
 from cli.run_config import HARNESS_ROOT, RunConfig
-from cli.stages import render_stage
+from cli.stages import HARNESS_VENV_OFF, render_stage
 from tests.ufs_chem_assay.run_configs import load_run_config, run_config_file
+
+# The first body line of a build or test stage script: after the shebang, strict
+# mode, the banner and the lines that leave the harness venv.
+_BODY = 3 + len(HARNESS_VENV_OFF)
 
 _ROOT = Path("/scratch/ursa-run")
 _CLONE = _ROOT / "CATChem"
@@ -128,7 +132,7 @@ def test_login_build_configures_gates_on_system_kokkos_and_builds(
 ) -> None:
     lines = _lines(_config(tmp_path), Stage.BUILD, app)
     log = f"{_CLONE}/build/configure.log"
-    assert lines[3] == "echo 'build node: login'"
+    assert lines[_BODY] == "echo 'build node: login'"
     load = lines.index("module load ufs_ursa.oneapi")
     assert lines[load - 2 : load] == [
         f"module use {HARNESS_ROOT}/modulefiles",
@@ -181,7 +185,7 @@ def test_compute_build_swaps_musica_off_and_the_login_finish_restores_it(
         Stage.BUILD,
         app,
     )
-    assert tested[3].endswith(", then login (tests)'")
+    assert tested[_BODY].endswith(", then login (tests)'")
     finish = tested.index(
         f"cmake -S {_CLONE} -B {_CLONE}/build {_ARGS} 2>&1 | tee {log}"
     )

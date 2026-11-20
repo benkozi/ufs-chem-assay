@@ -132,6 +132,29 @@ def module_block(
     )
 
 
+# The first lines of every build stage, test stage and test job: leave the
+# harness's venv before anything of the application's runs. `uv run` exports
+# VIRTUAL_ENV and puts <venv>/bin first on PATH, every stage script (and,
+# through sbatch, every test job) inherits both, and `module reset` touches
+# neither. CMake projects read them: HELM's AXIS prepends $CONDA_PREFIX, else
+# $VIRTUAL_ENV, to CMAKE_PREFIX_PATH, so every find_package after it searched
+# the harness venv first. The harness's own `uv run --no-sync` lines later in
+# a script need neither: uv finds the project venv from the checkout.
+# The entry is matched through a variable: a `/` in the pattern itself would
+# end it, even quoted.
+HARNESS_VENV_OFF = [
+    (
+        'if [ -n "${VIRTUAL_ENV:-}" ]; then _venv_bin=":$VIRTUAL_ENV/bin:"; '
+        'PATH=":$PATH:"; PATH="${PATH//"$_venv_bin"/:}"; PATH="${PATH#:}"; '
+        'PATH="${PATH%:}"; unset _venv_bin; fi'
+    ),
+    "unset VIRTUAL_ENV CONDA_PREFIX",
+]
+
+# The stages whose scripts build or run the application itself.
+_APPLICATION_STAGES = frozenset({Stage.BUILD, Stage.TEST})
+
+
 def toolchain_probe(section: ApplicationRunSection, default: str) -> str:
     """The build stage's `which` line: the section's toolchain_tools when it
     names any, else the adapter's `default` probe."""
@@ -636,7 +659,8 @@ def _test(
             directives=sbatch_directives(
                 config.slurm.job_args(ntasks=tests.ntasks, cpus=tests.cpus)
             ),
-            module_lines=module_block(config, checkout, section),
+            # submit-tests runs under `uv run`: the job inherits its venv.
+            module_lines=[*HARNESS_VENV_OFF, *module_block(config, checkout, section)],
             env=exports,
             command=plan_for(f'{q(tests_root)}/{stem}-"$SLURM_JOB_ID".xml'),
             srun_args="",
@@ -718,7 +742,8 @@ def render_stage(
     """The stand-alone script for one stage of one application — of one
     session for the per-session stages (harness, resume): shebang, strict
     mode, banner, body. Modules are loaded only by the build body and by the
-    job script. `session`: required when the config names sessions, implied
+    job script; the build and test stages first leave the harness's venv
+    (HARNESS_VENV_OFF). `session`: required when the config names sessions, implied
     otherwise; the resume stage needs the session's harness.submit_only.
     `sessions`: the sessions the data stage fetches for (default: all).
     `shared_data`: render the harness-wide data lines (the cartopy cache) —
@@ -762,6 +787,7 @@ def render_stage(
         _SHEBANG,
         "set -euo pipefail",
         f'echo ">>> stage: {stage.value} ({who})"',
+        *(HARNESS_VENV_OFF if stage in _APPLICATION_STAGES else []),
         *body,
     ]
     return ShellScript(name=name, text="\n".join(lines) + "\n", attachments=attachments)
