@@ -11,6 +11,8 @@ from applications.registry import get_application
 from cli.commands import Subparsers
 from cli.run_config import ResolvedSession, RunConfig
 from cli.selectors import (
+    build_configs,
+    check_builds,
     selected_applications,
     selected_sessions,
     selected_stages,
@@ -79,6 +81,18 @@ def register(subparsers: Subparsers, name: str) -> None:
         ),
     )
     run.add_argument(
+        "--build",
+        action="extend",
+        nargs="+",
+        default=None,
+        metavar="NAME",
+        help=(
+            "build variant(s) of the applications' builds: maps to build and "
+            "test, or 'all' (repeatable or space-separated); default every "
+            "variant. An application without builds: has its one build either way"
+        ),
+    )
+    run.add_argument(
         "--session",
         action="append",
         default=None,
@@ -124,13 +138,18 @@ def register(subparsers: Subparsers, name: str) -> None:
     )
 
 
+# The stages a build variant has its own script of; the others render once
+# per application from the section as written.
+_PER_BUILD = frozenset({Stage.BUILD, Stage.TEST})
+
+
 def _render(
     config: RunConfig,
     applications: list[Application],
     sessions: list[ResolvedSession],
     stages: list[Stage],
     render: list[Stage],
-    testing: dict[str, bool],
+    builds: list[str] | None,
     scripts_dir: Path,
 ) -> list[Path]:
     """Render and write one build's scripts — the config as loaded, or as
@@ -140,7 +159,9 @@ def _render(
     render once per application per session. An application is rendered
     only the stages it takes part in. A submit-only session's resume script
     is rendered beside its harness script whenever the harness stage is —
-    `watch` runs it — but executed only when --stage resume asks."""
+    `watch` runs it — but executed only when --stage resume asks. The build
+    and test stages render once per selected variant of an application with
+    builds:, in the map's order."""
     # The harness-wide data lines render once, under the first application
     # that has a data stage.
     shared_data_app = next(
@@ -151,13 +172,21 @@ def _render(
         for app in applications:
             if stage not in app.stages:
                 continue
-            if stage is Stage.TEST and not testing[app.name]:
-                logger.info(
-                    "tests disabled for %s (applications.%s.tests.enabled): "
-                    "no test stage",
-                    app.name,
-                    app.name,
-                )
+            if stage in _PER_BUILD:
+                for variant in build_configs(config, app, builds):
+                    if stage is Stage.TEST and not tests_enabled(variant, app):
+                        logger.info(
+                            "tests disabled for %s (applications.%s.tests.enabled): "
+                            "no test stage",
+                            app.name,
+                            app.name,
+                        )
+                        continue
+                    path = write_script(
+                        render_stage(stage, variant, app), scripts_dir, _INDEX[stage]
+                    )
+                    logger.info("wrote %s", path)
+                    to_run.append(path)
                 continue
             if stage in PER_SESSION:
                 for session in sessions:
@@ -188,6 +217,23 @@ def _render(
     return to_run
 
 
+def _refuse_driver_stages_with_builds(
+    config: RunConfig, applications: list[Application], stages: list[Stage]
+) -> None:
+    """A driver session runs against one build, and a run config cannot yet
+    say which variant: an application with builds: takes no driver stage."""
+    driver = [s for s in (Stage.DATA, Stage.HARNESS, Stage.RESUME) if s in stages]
+    for app in applications:
+        variants = config.applications[app.name].builds
+        if variants and any(stage in app.stages for stage in driver):
+            raise ValueError(
+                f"applications.{app.name} has builds: ({', '.join(variants)}), and "
+                "the data and harness stages run a driver against one build, which "
+                "a run config cannot name yet: run the source, build and test "
+                "stages (--stage source --stage build --stage test)"
+            )
+
+
 def handler(args: argparse.Namespace) -> int:
     try:
         config = RunConfig.from_yaml(
@@ -202,19 +248,20 @@ def handler(args: argparse.Namespace) -> int:
         stages = selected_stages(args.stage)
         # One build per selected toolchain; the config itself without any.
         builds = toolchain_configs(config, args.toolchain)
+        selected_builds = check_builds(config, applications, args.build)
         if Stage.RESUME in stages and not all(
             session.harness.submit_only for session in sessions
         ):
             raise ValueError(_RESUME_NEEDS_SUBMIT_ONLY)
-        # The test stage exists for the applications whose own tests are
-        # enabled (and is an error for one with no test suite to enable).
-        testing = [
-            {
-                app.name: Stage.TEST in stages and tests_enabled(build, app)
-                for app in applications
-            }
-            for build in builds
-        ]
+        _refuse_driver_stages_with_builds(config, applications, stages)
+        # The test stage is an error for an application with no test suite
+        # to enable: ask every variant that will be rendered, before any is.
+        if Stage.TEST in stages:
+            for build in builds:
+                for app in applications:
+                    if Stage.TEST in app.stages:
+                        for variant in build_configs(build, app, args.build):
+                            tests_enabled(variant, app)
     except ValueError as exc:
         logger.error("%s", exc)
         return 1
@@ -250,7 +297,9 @@ def handler(args: argparse.Namespace) -> int:
     # it produced: re-runs the same run with no override list, and `watch`
     # and `report` read it for the sessions' and the tests' roots.
     effective = scripts_dir / CONVENTIONS.effective_config
-    config.model_copy(update={"selected_toolchains": toolchains}).to_yaml(effective)
+    config.model_copy(
+        update={"selected_toolchains": toolchains, "selected_builds": selected_builds}
+    ).to_yaml(effective)
     logger.info("wrote %s", effective)
 
     # Render and write everything first — every toolchain's scripts — so a
@@ -271,10 +320,10 @@ def handler(args: argparse.Namespace) -> int:
         (
             build.toolchain,
             _render(
-                build, applications, sessions, stages, render, enabled, scripts_dir
+                build, applications, sessions, stages, render, args.build, scripts_dir
             ),
         )
-        for build, enabled in zip(builds, testing, strict=True)
+        for build in builds
     ]
     if args.dry_run:
         logger.info("dry run: nothing executed")

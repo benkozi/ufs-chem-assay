@@ -19,6 +19,7 @@ import apptests
 from applications.base import Application, Stage
 from applications.registry import get_application
 from cli.run_config import ResolvedSession, RunConfig
+from cli.selectors import build_configs
 from cli.shell import run_bash
 from cli.stages import SCRIPT_INDEX, stage_name, tests_enabled
 from identity import harness_commit, harness_version
@@ -267,12 +268,15 @@ class WatchedTests(StrictModel):
     toolchain: str | None = Field(
         default=None, description="The build's toolchain; None without one"
     )
+    build: str | None = Field(
+        default=None, description="The build variant; None for the unnamed build"
+    )
     root: Path = Field(description="The tests root (<root_dir>/tests/<application>)")
 
     @property
     def label(self) -> str:
-        suffix = f"/{self.toolchain}" if self.toolchain else ""
-        return f"tests {self.application}{suffix}"
+        parts = [self.application, self.toolchain, self.build]
+        return "tests " + "/".join(part for part in parts if part)
 
 
 class TestsReport(StrictModel):
@@ -308,18 +312,24 @@ class TestsReport(StrictModel):
 
 
 def configured_tests(
-    config: RunConfig, applications: list[Application]
+    config: RunConfig,
+    applications: list[Application],
+    builds: list[str] | None = None,
 ) -> list[WatchedTests]:
-    """The test run of every selected application whose own tests are
-    enabled, in config order."""
+    """The test run of every selected application — of every selected
+    variant of one with builds: (`builds`, as `--build` gives them; default
+    the recorded selection, else all) — whose own tests are enabled, in
+    config order."""
     return [
         WatchedTests(
             application=app.name,
-            toolchain=config.toolchain,
-            root=config.tests_root(app),
+            toolchain=variant.toolchain,
+            build=variant.applications[app.name].build_name,
+            root=variant.tests_root(app),
         )
         for app in applications
-        if tests_enabled(config, app)
+        for variant in build_configs(config, app, builds)
+        if tests_enabled(variant, app)
     ]
 
 
@@ -374,11 +384,15 @@ def evaluate_tests(watched: WatchedTests) -> TestsReport:
 
 
 def job_script_for_tests(
-    scripts_dir: Path, app: Application, toolchain: str | None
+    scripts_dir: Path,
+    app: Application,
+    toolchain: str | None,
+    build: str | None = None,
 ) -> Path:
     """The test job script `run` rendered beside the application's test
-    stage script: <scripts_dir>/04-test-<application>[-<toolchain>].sbatch."""
-    name = stage_name(Stage.TEST, app.name, toolchain)
+    stage script:
+    <scripts_dir>/04-test-<application>[-<toolchain>][-<build>].sbatch."""
+    name = stage_name(Stage.TEST, app.name, toolchain, build=build)
     return scripts_dir / f"{SCRIPT_INDEX[Stage.TEST]:02d}-{name}.sbatch"
 
 
@@ -400,7 +414,7 @@ def provenance_for_tests(config: RunConfig, app: Application) -> TestProvenance:
         platform=config.platform,
         runtime=config.runtime,
         modulefile=section.modulefile,
-        build_type=settings.build_type(),
+        build_type=settings.build_type(section.build_dirname),
         cmake_args=" ".join(section.build_flags()) or None,
         application_commit=commit,
         harness_version=harness_version(),

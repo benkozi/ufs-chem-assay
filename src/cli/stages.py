@@ -276,18 +276,21 @@ def cmake_stage(
     return lines
 
 
-def ctest_plan(tests: TestsSection, junit: str) -> TestPlan:
-    """A CMake application's own tests: ctest over the build directory,
-    from the checkout root, with the section's filter and parallelism.
-    Every MPI test launches its own ranks (the launcher is baked in at
-    configure time), so ctest itself is never behind one."""
-    words = ["ctest", "--test-dir", "build", "--output-on-failure"]
+def ctest_plan(tests: TestsSection, junit: str, build_dir: str = "build") -> TestPlan:
+    """A CMake application's own tests: ctest over the build directory
+    (`build_dir`, under the checkout: build, or build-<variant>), from the
+    checkout root, with the section's filter and parallelism. Every MPI
+    test launches its own ranks (the launcher is baked in at configure
+    time), so ctest itself is never behind one."""
+    words = ["ctest", "--test-dir", build_dir, "--output-on-failure"]
     words += ["--output-junit", junit]
     if tests.filter is not None:
         words += ["-R", q(tests.filter)]
     if tests.parallel is not None:
         words += ["-j", str(tests.parallel)]
-    return TestPlan(requires="build/CTestTestfile.cmake", command=" ".join(words))
+    return TestPlan(
+        requires=f"{build_dir}/CTestTestfile.cmake", command=" ".join(words)
+    )
 
 
 def source_lines(
@@ -362,12 +365,14 @@ def stage_name(
     application: str,
     toolchain: str | None = None,
     session: str | None = None,
+    build: str | None = None,
 ) -> str:
     """A rendered script's name (and its log's stem, after the slot number):
-    <stage>-<application>[-<toolchain>][-<session>] — the toolchain for a
-    config built with one, the session for the per-session stages of a
+    <stage>-<application>[-<toolchain>][-<build>][-<session>] — the
+    toolchain for a config built with one, the build variant for the build
+    and test stages of one, the session for the per-session stages of a
     named session."""
-    parts = [stage.value, application, toolchain, session]
+    parts = [stage.value, application, toolchain, build, session]
     return "-".join(part for part in parts if part is not None)
 
 
@@ -626,6 +631,8 @@ def _test(
     selection = f"--root-dir {q(config.root_dir)} --application {q(app.name)}"
     if config.toolchain is not None:
         selection += f" --toolchain {q(config.toolchain)}"
+    if section.build_name is not None:
+        selection += f" --build {q(section.build_name)}"
 
     def plan_for(junit: str) -> str:
         plan = app.test_plan(section, junit)
@@ -650,7 +657,13 @@ def _test(
         job = render_job_script(
             job_name="-".join(
                 part
-                for part in (HARNESS_NAME, "tests", app.name, config.toolchain)
+                for part in (
+                    HARNESS_NAME,
+                    "tests",
+                    app.name,
+                    config.toolchain,
+                    section.build_name,
+                )
                 if part is not None
             ),
             out_path=tests_root / f"{stem}-%j.out",
@@ -777,12 +790,14 @@ def render_stage(
         name = stage_name(stage, app.name, config.toolchain)
     elif stage is Stage.TEST:
         body, attachments = _test(config, app, section)
-        name = stage_name(stage, app.name, config.toolchain)
+        name = stage_name(stage, app.name, config.toolchain, build=section.build_name)
     else:
         body = app.stage_lines(stage, config, section)
-        name = stage_name(stage, app.name, config.toolchain)
+        name = stage_name(stage, app.name, config.toolchain, build=section.build_name)
     if config.toolchain is not None:
         who = f"{who}, {config.toolchain}"
+    if section.build_name is not None:
+        who = f"{who}, {section.build_name}"
     lines = [
         _SHEBANG,
         "set -euo pipefail",

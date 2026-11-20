@@ -775,6 +775,48 @@ ufs-chem-assay run --config-file=config/gaea-c7.yaml --application cece \
 ufs-chem-assay watch --only tests
 ```
 
+**Build variants.** `applications.<name>.builds:` is a map of variant
+name → an overlay on that application's section: several builds of one
+checkout with different options, each with its own build directory,
+tests root and scripts. A variant may set `cmake_args`, `build_jobs`,
+`targets` and `tests` (each replacing the section's whole),
+`configure_gates` (added to the section's), `build_node` and
+`build_minutes`; the checkout keys and, under `toolchains:`, the module
+keys stay the section's and the toolchain's. The variant is overlaid on
+the section as written, then the toolchain on top, so a toolchain's
+configure arguments still come last.
+
+```yaml
+applications:
+  catchem:
+    builds:
+      compute:   # MUSICA off: nothing to fetch, so the whole build runs on a compute node
+        cmake_args: [-DCMAKE_BUILD_TYPE=Debug, -DCATCHEM_ENABLE_KOKKOS=ON, -DCATCHEM_BUILD_MUSICA=OFF]
+        build_node: compute
+      musica:    # MUSICA fetches at configure time: the login node
+        cmake_args: [-DCMAKE_BUILD_TYPE=Debug, -DCATCHEM_ENABLE_KOKKOS=ON, -DCATCHEM_BUILD_MUSICA=ON]
+        build_node: login
+```
+
+| | No `builds:` | Variant `<v>` |
+|---|---|---|
+| Build directory | `<checkout>/build` | `<checkout>/build-<v>` |
+| Tests root | `<root>[/<toolchain>]/tests/<app>` | `<root>[/<toolchain>]/tests/<app>/<v>` |
+| Build and test scripts | `02-build-<app>[-<toolchain>].sh` | `02-build-<app>[-<toolchain>]-<v>.sh`, the same for `04-test-…` |
+| Labels | `tests <app>[/<toolchain>]` | `tests <app>[/<toolchain>]/<v>` |
+
+The source stage runs once per application (one checkout serves every
+variant); the build and test stages run once per variant, in the map's
+order. `--build NAME [NAME ...]` (or `all`) on `run`, `watch` and
+`report` selects variants, every one by default; an application
+without `builds:` keeps its one build either way, and a name no selected
+application has is an error. `run` records the selection
+(`selected_builds`, empty for every variant) for `watch` and `report`;
+`submit-tests` and `evaluate-tests` take `--build` the way they take
+`--toolchain`. An application with variants takes no data or harness
+stage yet: a driver session runs against one build, and a run config
+cannot name which. Without `builds:` nothing about a run changes.
+
 **Sessions.** `sessions:` is a map of session name → an overlay on the
 file's `harness:`, `slurm:` and `baselines:` sections, one level deep: an
 overlaid key replaces the base value whole (a session that restates `env`

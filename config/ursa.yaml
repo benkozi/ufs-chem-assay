@@ -43,6 +43,7 @@ applications:  # one section per application in the run, keyed by adapter name
       cpus: 8  # the test job's sbatch -c
       minutes: 5  # the test job's time limit
       env: {}  # exported inside the test job before ctest, e.g. I_MPI_HYDRA_BOOTSTRAP: fork
+    builds: {}  # named build variants, each an overlay with its own build-<name> directory; none: one build
 data:  # the data stage runs `ufs-chem-assay fetch` for the selected suites' inputs, then:
   warm_cartopy: true  # fetch the plots' Natural Earth coastlines and borders on the login node
   cartopy_dir:  # ASSAY_CARTOPY_DATA_DIR: where cartopy keeps that data; default <root_dir>/cartopy

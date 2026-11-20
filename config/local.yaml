@@ -36,6 +36,7 @@ applications:  # one section per application in the run, keyed by adapter name
       cpus: 8
       minutes: 5
       env: {}
+    builds: {}  # no build variants: the build is one uv install
   cece:
     git_url: git@github.com:ufs-community/CECE.git
     ref: develop
@@ -62,6 +63,7 @@ applications:  # one section per application in the run, keyed by adapter name
       cpus: 8  # slurm runtime only
       minutes: 5  # slurm runtime only
       env: {}  # passed to ctest in the container
+    builds: {}  # named build variants, each an overlay with its own build-<name> directory; none: one build
 data:
   warm_cartopy: false
   cartopy_dir:  # ASSAY_CARTOPY_DATA_DIR: where cartopy keeps the plots' map data; default <root_dir>/cartopy

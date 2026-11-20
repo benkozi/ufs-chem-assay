@@ -79,10 +79,9 @@ def _as_smoke(section: ApplicationRunSection) -> KokkosSmokeRunSection:
 def test_plan(section: ApplicationRunSection, junit: str) -> TestPlan:
     """The smoke test: the executable itself, from the build root. It
     writes no junit report — its last line is the verdict."""
-    _ = section, junit
-    return TestPlan(
-        requires="build/smoke", command="./build/smoke", passed_marker=_PASSED
-    )
+    _ = junit
+    smoke = f"{section.build_dirname}/smoke"
+    return TestPlan(requires=smoke, command=f"./{smoke}", passed_marker=_PASSED)
 
 
 def stage_lines(
@@ -90,7 +89,7 @@ def stage_lines(
 ) -> list[str]:
     smoke = _as_smoke(section)
     if stage is Stage.BUILD:
-        build = checkout / "build"
+        build = checkout / smoke.build_dirname
         log = build / "configure.log"
         # It fetches nothing, so a compute-node build is the whole build:
         # no offline arguments, no login-node finish.

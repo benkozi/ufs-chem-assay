@@ -122,9 +122,20 @@ class RunConfig(StrictModel):
             "a key to write by hand"
         ),
     )
+    selected_builds: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The build variants the last `run` selected, recorded in the "
+            "effective config so `watch` and `report` cover the same ones by "
+            "default; empty means every variant. Not a key to write by hand"
+        ),
+    )
     # The toolchain a derived config (for_toolchain) builds with; None for
     # the config as loaded. Never read from or written to a file.
     _toolchain: str | None = PrivateAttr(default=None)
+    # The config as loaded, for a derived one: a variant is overlaid on the
+    # section as written, before the toolchain (for_build).
+    _loaded: RunConfig | None = PrivateAttr(default=None)
 
     @field_validator("toolchains", mode="before")
     @classmethod
@@ -199,22 +210,58 @@ class RunConfig(StrictModel):
         return self
 
     @model_validator(mode="after")
+    def _builds_resolve(self) -> RunConfig:
+        # Every variant resolves once at load, so an overlay key the section
+        # does not have fails from_yaml, not the build stage.
+        known = {v for section in self.applications.values() for v in section.builds}
+        unknown = [n for n in self.selected_builds if n not in known]
+        if unknown:
+            raise ValueError(
+                f"selected_builds: {unknown} not among the applications' builds "
+                f"({sorted(known)})"
+            )
+        for name, section in self.applications.items():
+            for variant in section.builds:
+                try:
+                    section.with_build(variant)
+                except ValueError as exc:
+                    raise ValueError(f"applications.{name}.{exc}") from None
+        return self
+
+    def _sections_as_built(self) -> list[tuple[str, ApplicationRunSection]]:
+        """Every section this config builds, labelled for an error message:
+        the section itself, or each of its variants instead."""
+        built: list[tuple[str, ApplicationRunSection]] = []
+        for name, section in self.applications.items():
+            if not section.builds:
+                built.append((f"applications.{name}", section))
+                continue
+            built += [
+                (f"applications.{name}.builds.{variant}", variant_section)
+                for variant in section.builds
+                for variant_section in [
+                    self.for_build(name, variant).applications[name]
+                ]
+            ]
+        return built
+
+    @model_validator(mode="after")
     def _compute_builds_have_somewhere_to_go(self) -> RunConfig:
         # build_node: compute is an srun from a login node: it needs the
         # slurm runtime (docker builds in the container; native is already
         # inside an allocation) and the slurm: section's account to charge.
-        for name, section in self.applications.items():
+        for where, section in self._sections_as_built():
             if section.build_node is not BuildNode.COMPUTE:
                 continue
             if self.runtime is not Runtime.SLURM:
                 raise ValueError(
-                    f"applications.{name}: build_node: compute needs the slurm "
+                    f"{where}: build_node: compute needs the slurm "
                     f"runtime; {self.platform.value} runs {self.runtime.value} "
                     "(there is no compute node to build on)"
                 )
             if self.slurm is None:
                 raise ValueError(
-                    f"applications.{name}: build_node: compute needs a slurm: "
+                    f"{where}: build_node: compute needs a slurm: "
                     "section (the account, QOS and partition of the compile srun)"
                 )
         return self
@@ -233,10 +280,10 @@ class RunConfig(StrictModel):
                 for name in self.toolchains
             ]
         for prefix, config in builds:
-            for name, section in config.applications.items():
+            for where, section in config._sections_as_built():
                 problems = section.runtime_problems(self.runtime)
                 if problems:
-                    raise ValueError(f"{prefix}applications.{name}: {problems[0]}")
+                    raise ValueError(f"{prefix}{where}: {problems[0]}")
         return self
 
     @field_validator("root_dir", mode="before")
@@ -359,6 +406,33 @@ class RunConfig(StrictModel):
             }
         )
         derived._toolchain = name
+        derived._loaded = self._loaded or self
+        return derived
+
+    # ── build variants ───────────────────────────────────────────────────
+
+    def build_names(self, app_name: str) -> list[str | None]:
+        """The application's variants in the config's order; [None] — its
+        one unnamed build — without a builds: map."""
+        return list(self.applications[app_name].builds) or [None]
+
+    def for_build(self, app_name: str, name: str | None) -> RunConfig:
+        """This config with one application's section as its variant `name`
+        builds it (None: the config itself): the overlay on the section as
+        written, then this config's toolchain on top, so the toolchain's
+        configure arguments still come last. The other applications are
+        untouched. For rendering and locating roots; never written."""
+        if name is None:
+            return self
+        loaded = self._loaded or self
+        section = loaded.applications[app_name].with_build(name)
+        if self._toolchain is not None:
+            section = section.with_toolchain(self.toolchains[self._toolchain])
+        derived = self.model_copy(
+            update={"applications": {**self.applications, app_name: section}}
+        )
+        derived._toolchain = self._toolchain
+        derived._loaded = loaded
         return derived
 
     @property
@@ -397,8 +471,10 @@ class RunConfig(StrictModel):
     def tests_root(self, app: Application) -> Path:
         """Where the application's own test runs leave their files: the
         output, the junit report, the test ledger, the benchmark rows —
-        <root_dir>[/<toolchain>]/tests/<application>."""
-        return self._build_root / CONVENTIONS.tests_dirname / app.name
+        <root_dir>[/<toolchain>]/tests/<application>[/<variant>]."""
+        root = self._build_root / CONVENTIONS.tests_dirname / app.name
+        variant = self.applications[app.name].build_name
+        return root if variant is None else root / variant
 
     def build_launcher(self, section: ApplicationRunSection, *, cpus: int) -> list[str]:
         """The command prefix of one compile step of `section`: empty on the

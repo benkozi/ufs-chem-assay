@@ -11,7 +11,7 @@ from pathlib import Path
 import apptests
 from cli.commands import Subparsers
 from cli.run_config import HARNESS_ROOT
-from cli.selectors import one_toolchain_config, selected_applications
+from cli.selectors import one_build_config, one_toolchain_config, selected_applications
 from cli.sessions import load_effective, provenance_for_tests, tests_line
 from cli.stages import tests_enabled
 from logs import get_logger
@@ -53,6 +53,15 @@ def register(subparsers: Subparsers, name: str) -> None:
         ),
     )
     evaluate.add_argument(
+        "--build",
+        default=None,
+        metavar="NAME",
+        help=(
+            "the build variant whose test run to evaluate (the rendered stage passes "
+            "it); needed when the application has several builds:"
+        ),
+    )
+    evaluate.add_argument(
         "--exit-status",
         type=int,
         default=None,
@@ -73,6 +82,7 @@ def handler(args: argparse.Namespace) -> int:
     try:
         config = one_toolchain_config(load_effective(root_dir), args.toolchain)
         (app,) = selected_applications(config, [args.application])
+        config = one_build_config(config, app, args.build)
         if not tests_enabled(config, app):
             raise ValueError(
                 f"applications.{app.name}.tests.enabled is false: no tests to evaluate"
@@ -99,6 +109,7 @@ def handler(args: argparse.Namespace) -> int:
     except ValueError as exc:
         logger.error("%s", exc)
         return 1
-    label = app.name if config.toolchain is None else f"{app.name}/{config.toolchain}"
+    parts = [app.name, config.toolchain, config.applications[app.name].build_name]
+    label = "/".join(part for part in parts if part)
     logger.info("tests %s: %s", label, tests_line(ledger))
     return 0

@@ -100,7 +100,7 @@ def _build(config: RunConfigView, checkout: Path, section: CeceRunSection) -> li
                 f"{targets} --jobs {section.build_jobs}"
             )
         ]
-    build = clone / "build"
+    build = clone / section.build_dirname
     log = build / "configure.log"
     return cmake_stage(
         config,
@@ -141,7 +141,7 @@ def _build(config: RunConfigView, checkout: Path, section: CeceRunSection) -> li
 def test_plan(section: ApplicationRunSection, junit: str) -> TestPlan:
     """CECE's own tests: ctest over the build directory, from the checkout
     root (cli/stages.ctest_plan)."""
-    return ctest_plan(_as_cece(section).tests, junit)
+    return ctest_plan(section.tests, junit, section.build_dirname)
 
 
 def stage_lines(

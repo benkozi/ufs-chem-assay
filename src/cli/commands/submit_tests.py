@@ -10,7 +10,7 @@ from pathlib import Path
 import apptests
 from cli.commands import Subparsers
 from cli.run_config import HARNESS_ROOT
-from cli.selectors import one_toolchain_config, selected_applications
+from cli.selectors import one_build_config, one_toolchain_config, selected_applications
 from cli.sessions import job_script_for_tests, load_effective, provenance_for_tests
 from cli.stages import tests_enabled
 from jobs import SlurmSubmissionError
@@ -52,6 +52,15 @@ def register(subparsers: Subparsers, name: str) -> None:
         ),
     )
     submit.add_argument(
+        "--build",
+        default=None,
+        metavar="NAME",
+        help=(
+            "the build variant whose test run to submit (the rendered stage passes "
+            "it); needed when the application has several builds:"
+        ),
+    )
+    submit.add_argument(
         "--resubmit",
         action="store_true",
         help=(
@@ -71,6 +80,7 @@ def handler(args: argparse.Namespace) -> int:
     try:
         config = one_toolchain_config(load_effective(root_dir), args.toolchain)
         (app,) = selected_applications(config, [args.application])
+        config = one_build_config(config, app, args.build)
         if not tests_enabled(config, app):
             raise ValueError(
                 f"applications.{app.name}.tests.enabled is false: no tests to submit"
@@ -81,13 +91,15 @@ def handler(args: argparse.Namespace) -> int:
                 f"{config.runtime.value}, where the test stage runs the tests in "
                 "place and calls evaluate-tests"
             )
-        script = job_script_for_tests(root_dir / "scripts", app, config.toolchain)
+        section = config.applications[app.name]
+        script = job_script_for_tests(
+            root_dir / "scripts", app, config.toolchain, section.build_name
+        )
         if not script.is_file():
             raise ValueError(
                 f"{script} does not exist: `ufs-chem-assay run --config-file=... "
                 "--dry-run` (same config, same --root-dir) renders it"
             )
-        section = config.applications[app.name]
         plan = app.test_plan(section, "junit")
         apptests.submit(
             config.tests_root(app),

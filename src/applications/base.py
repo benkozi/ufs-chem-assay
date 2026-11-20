@@ -21,7 +21,13 @@ from enum import StrEnum, unique
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Annotated, ClassVar, Protocol, Self
 
-from pydantic import Field, ValidationInfo, field_validator
+from pydantic import (
+    Field,
+    PrivateAttr,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+)
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from models.base import StrictModel
@@ -189,14 +195,15 @@ class ApplicationSettings(BaseSettings):
             return list(self.modulepath)
         return [] if self.root_dir is None else [self.root_dir / "modulefiles"]
 
-    def build_type(self) -> str | None:
+    def build_type(self, build_dirname: str = "build") -> str | None:
         """CMAKE_BUILD_TYPE of the checkout's build directory
-        (<root_dir>/build/CMakeCache.txt), for run.yaml and the benchmark
-        rows. None without a checkout, without a cache (not a CMake build,
-        or not built yet), or when the cache leaves it empty."""
+        (<root_dir>/<build_dirname>/CMakeCache.txt: build, or
+        build-<variant>), for run.yaml and the benchmark rows. None without
+        a checkout, without a cache (not a CMake build, or not built yet),
+        or when the cache leaves it empty."""
         if self.root_dir is None:
             return None
-        cache = self.root_dir / "build" / "CMakeCache.txt"
+        cache = self.root_dir / build_dirname / "CMakeCache.txt"
         if not cache.is_file():
             return None
         match = re.search(
@@ -433,6 +440,46 @@ class TestPlan(StrictModel):
     )
 
 
+# A build variant's name: it names a directory (build-<name>) and a script.
+_BUILD_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+class BuildOverlay(StrictModel):
+    """One build variant of an application (`applications.<name>.builds.<v>:`):
+    the keys that may differ between builds of one checkout, each null when
+    the variant leaves the section's value alone. An overlaid key replaces the
+    section's value whole, except configure_gates, which are added to the
+    section's. A key the application's section does not have (cmake_args for
+    an application that is not a CMake build) fails the load."""
+
+    cmake_args: list[str] | None = Field(
+        default=None,
+        description="cmake configure arguments, replacing the section's whole",
+    )
+    build_jobs: int | None = Field(
+        default=None, gt=0, description="cmake --build --parallel N"
+    )
+    targets: list[str] | None = Field(
+        default=None, description="CMake targets to build, replacing the section's"
+    )
+    configure_gates: list[str] | None = Field(
+        default=None,
+        description="grep -E patterns added to the section's configure gates",
+    )
+    build_node: BuildNode | None = Field(
+        default=None, description="Where this variant's compile steps run"
+    )
+    build_minutes: int | None = Field(
+        default=None,
+        gt=0,
+        description="build_node: compute only: each compile step's time limit",
+    )
+    tests: TestsSection | None = Field(
+        default=None,
+        description="This variant's own tests section, replacing the section's whole",
+    )
+
+
 class ApplicationRunSection(StrictModel):
     """An application's section of the run config (`applications.<name>:`):
     where its checkout comes from, plus the mirror of ApplicationSettings —
@@ -530,6 +577,69 @@ class ApplicationRunSection(StrictModel):
         default_factory=TestsSection,
         description="The application's own test suite; off by default",
     )
+    builds: dict[str, BuildOverlay] = Field(
+        default_factory=dict,
+        description=(
+            "Named build variants of this application, each an overlay on this "
+            "section with its own build directory (<checkout>/build-<name>), "
+            "tests root and scripts, all from the one checkout. Select with "
+            "`run --build NAME ...`; empty means one unnamed build, <checkout>/build"
+        ),
+    )
+    # The variant this section is (with_build), None for the section as
+    # written. Never read from or written to a file.
+    _build: str | None = PrivateAttr(default=None)
+
+    @field_validator("builds", mode="before")
+    @classmethod
+    def _build_names(cls, value: object) -> object:
+        if isinstance(value, dict):
+            for name in value:
+                if (
+                    not isinstance(name, str)
+                    or not _BUILD_NAME.match(name)
+                    or name == "all"
+                ):
+                    raise ValueError(
+                        f"builds: {name!r} is not a build name (lower-case letters, "
+                        "digits and dashes, and not 'all': it names a directory and "
+                        "a script)"
+                    )
+        return value
+
+    @property
+    def build_name(self) -> str | None:
+        """The variant this section is, None for the section as written."""
+        return self._build
+
+    @property
+    def build_dirname(self) -> str:
+        """The build directory's name under the checkout: build, or
+        build-<variant>."""
+        return "build" if self._build is None else f"build-{self._build}"
+
+    def with_build(self, name: str) -> Self:
+        """This section as its variant `name` builds it, re-validated: the
+        overlay's keys replace the section's, its gates are added to the
+        section's, and the result has no variants of its own. ValueError
+        (naming the variant) for a key the section does not have."""
+        overlay = self.builds[name]
+        updates = overlay.model_dump(exclude_none=True)
+        if overlay.configure_gates is not None:
+            updates["configure_gates"] = [
+                *self.configure_gates,
+                *(g for g in overlay.configure_gates if g not in self.configure_gates),
+            ]
+        try:
+            built = type(self).model_validate(
+                {**self.model_dump(), **updates, "builds": {}}
+            )
+        except ValidationError as exc:
+            first = exc.errors()[0]
+            where = ".".join(str(part) for part in first["loc"])
+            raise ValueError(f"builds.{name}: {where}: {first['msg']}") from None
+        built._build = name
+        return built
 
     @field_validator("module_env", mode="before")
     @classmethod
@@ -576,10 +686,13 @@ class ApplicationRunSection(StrictModel):
         }
 
     def with_toolchain(self, toolchain: ToolchainSection) -> Self:
-        """This section as one toolchain builds it, re-validated."""
-        return type(self).model_validate(
+        """This section as one toolchain builds it, re-validated; a variant
+        stays the variant it is."""
+        built = type(self).model_validate(
             {**self.model_dump(), **self.toolchain_updates(toolchain)}
         )
+        built._build = self._build
+        return built
 
     def runtime_problems(self, runtime: Runtime) -> list[str]:
         """What is wrong with this section under `runtime`, one sentence

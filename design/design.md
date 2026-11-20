@@ -762,6 +762,42 @@ test ledger and `TestBenchmarkRow` carry the toolchain; `run.yaml` and
 the driver `BenchmarkRow` do not — a driver row's `modulefile` and
 `build_type` tell the toolchains apart.
 
+**Build variants** (2026-11-20, `design/feat/20261113-1348-build-test-kokkos/20261120-1005-add-catchem.md` §2, chunk 3)
+are the sweep over build configurations: `ApplicationRunSection.builds`, a
+map of name → `BuildOverlay` (`cmake_args`, `build_jobs`, `targets`,
+`configure_gates`, `build_node`, `build_minutes`, `tests`; null leaves the
+section's value; `StrictModel`, so a checkout or module key there fails
+the load). `with_build(name)` re-validates the section with the overlay's
+keys replacing its own, the gates unioned, `builds` emptied and the
+private `_build` set — exposed as `build_name` and `build_dirname`
+(`build` or `build-<name>`); `with_toolchain` keeps `_build`.
+`RunConfig.for_build(app, name)` overlays the variant on the section *as
+loaded* (a toolchain-derived config keeps `_loaded`) and then re-applies
+its toolchain, so a toolchain's `cmake_args` stay last, and replaces only
+that application's section. `tests_root` appends the variant, the
+adapters build in `section.build_dirname`, `ctest_plan` takes the build
+directory, `stage_name` gains the variant after the toolchain, and
+`render_stage` names it in the banner and passes `--build` to
+`submit-tests` / `evaluate-tests`; `provenance_for_tests` reads the build
+type from the variant's `CMakeCache.txt`. At load every variant resolves
+(`_builds_resolve`) and is judged as it builds: the compute-node check and
+`runtime_problems` iterate `_sections_as_built()`, the variants in place of
+a section that has them, with `applications.<app>.builds.<v>:` in the
+message. `cli/selectors.build_configs` gives the variants a command
+selects (the recorded `selected_builds`, empty for all, else every one),
+`check_builds` refuses a `--build` name no selected application has, and
+`one_build_config` picks the one a per-build command works on. `run`
+renders `Stage.BUILD` and `Stage.TEST` once per selected variant
+(`_PER_BUILD`), the source stage once, and refuses the data, harness and
+resume stages for an application with variants (a driver session runs
+against one build; a run config cannot name which yet). Inside one
+toolchain a failed stage still ends that toolchain's sequence, variants
+included — the design asked for a failed variant to leave the next one
+running, which needs per-application failure tracking in `run` and is
+not done. Without `builds:` every name, path and script is what it was
+(`test_builds.py` renders each shipped template with and without an
+empty map and compares the scripts).
+
 **The kokkos template** (2026-11-16, chunk 6) is the shipped use of the
 four pieces above: `config/ursa-kokkos.yaml` declares the `oneapi` and
 `gnu` toolchains (the harness's `ufs_ursa.*` modulefiles over each
@@ -1500,8 +1536,9 @@ All code under `src/`; the project is `uv`-managed with its own
       override.py         # KEY:PATH=VALUE overrides applied before validation
       stages.py           # per-application / per-session stage scripts (ShellScript)
       shell.py            # write_script, run_bash (tee to <root>/logs/)
-      selectors.py        # the requested stages / sessions / applications / toolchains of a
-                          #   config (toolchain_configs: one derived config per toolchain)
+      selectors.py        # the requested stages / sessions / applications / toolchains / build
+                          #   variants of a config (toolchain_configs: one derived config per
+                          #   toolchain; build_configs: one per variant of an application)
       sessions.py         # the watch machinery: the effective config, each session's root
                           #   and resume script, the squeue tick, one session's evaluation
       run_report.py       # the per-root classifier (SessionSummary, Issue, RunReport)

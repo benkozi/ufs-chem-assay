@@ -83,6 +83,17 @@ def register(subparsers: Subparsers, name: str) -> None:
         ),
     )
     watch_parser.add_argument(
+        "--build",
+        action="extend",
+        nargs="+",
+        default=None,
+        metavar="NAME",
+        help=(
+            "watch only these build variants' test jobs, or 'all' "
+            "(default: the ones the last `run` selected, else every variant)"
+        ),
+    )
+    watch_parser.add_argument(
         "--only",
         choices=("sessions", "tests"),
         default=None,
@@ -124,7 +135,11 @@ def handler(args: argparse.Namespace) -> int:
         tests = (
             []
             if args.only == "sessions"
-            else [t for build in builds for t in configured_tests(build, applications)]
+            else [
+                t
+                for build in builds
+                for t in configured_tests(build, applications, args.build)
+            ]
         )
         tests_alone = (
             "; `--only tests` watches the applications' own test jobs alone"

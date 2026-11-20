@@ -83,6 +83,17 @@ def register(subparsers: Subparsers, name: str) -> None:
         ),
     )
     report_parser.add_argument(
+        "--build",
+        action="extend",
+        nargs="+",
+        default=None,
+        metavar="NAME",
+        help=(
+            "with --root-dir: report only these build variants' test runs, or 'all' "
+            "(default: the ones the last `run` selected, else every variant)"
+        ),
+    )
+    report_parser.add_argument(
         "--only",
         choices=("sessions", "tests"),
         default=None,
@@ -154,7 +165,9 @@ def handler(args: argparse.Namespace) -> int:
                 []
                 if args.only == "sessions"
                 else [
-                    t for build in builds for t in configured_tests(build, applications)
+                    t
+                    for build in builds
+                    for t in configured_tests(build, applications, args.build)
                 ]
             )
         except ValueError as exc:

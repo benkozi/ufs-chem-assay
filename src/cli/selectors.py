@@ -95,6 +95,78 @@ def one_toolchain_config(config: RunConfig, requested: str | None) -> RunConfig:
     return builds[0]
 
 
+def _tokens(requested: list[str]) -> list[str]:
+    return [token for item in requested for token in item.split()]
+
+
+def build_configs(
+    config: RunConfig, app: Application, requested: list[str] | None
+) -> list[RunConfig]:
+    """The config as each selected variant of `app` builds it, in the
+    config's order; [config] for an application without variants. The
+    selection names variants ('all' selects every one; tokens may be
+    space-separated); with none requested, the selection the last `run`
+    recorded, else every variant. A name this application has no variant of
+    selects nothing of it (check_builds refuses a name no application has)."""
+    names = [name for name in config.build_names(app.name) if name is not None]
+    if not names:
+        return [config]
+    if requested is None:
+        chosen = list(config.selected_builds) or names
+    else:
+        tokens = _tokens(requested)
+        chosen = names if "all" in tokens else tokens
+    return [config.for_build(app.name, name) for name in names if name in chosen]
+
+
+def check_builds(
+    config: RunConfig, applications: list[Application], requested: list[str] | None
+) -> list[str]:
+    """The --build names, validated against the selected applications'
+    variants: every name must be one of them ('all' always is). Returns the
+    selection to record ([] for every variant)."""
+    if requested is None:
+        return []
+    tokens = _tokens(requested)
+    if not tokens:
+        raise ValueError("--build requires at least one build name or 'all'")
+    known = {
+        name
+        for app in applications
+        for name in config.build_names(app.name)
+        if name is not None
+    }
+    unknown = sorted(set(tokens) - {"all"} - known)
+    if unknown:
+        raise ValueError(
+            f"--build {unknown} is no build of the selected applications "
+            f"({', '.join(sorted(known)) or 'none has builds:'})"
+        )
+    return [] if "all" in tokens else [n for n in tokens if n in known]
+
+
+def one_build_config(
+    config: RunConfig, app: Application, requested: str | None
+) -> RunConfig:
+    """The config as the one variant of `app` a per-build command works on
+    builds it: the named one; without a name, the only one there is (no
+    builds: map, or a single variant)."""
+    names = [name for name in config.build_names(app.name) if name is not None]
+    if requested is None:
+        if len(names) > 1:
+            raise ValueError(
+                f"--build is required: {app.name} has several builds "
+                f"({', '.join(names)}), and this command works on one"
+            )
+        return config.for_build(app.name, names[0] if names else None)
+    if requested not in names:
+        raise ValueError(
+            f"--build {requested!r} is no build of {app.name} "
+            f"({', '.join(names) or 'it has no builds:'})"
+        )
+    return config.for_build(app.name, requested)
+
+
 def selected_applications(
     config: RunConfig, requested: list[str] | None
 ) -> list[Application]:
@@ -103,7 +175,7 @@ def selected_applications(
     space-separated); naming an unconfigured application is a ValueError."""
     if requested is None:
         return [get_application(name) for name in config.application_names]
-    tokens = [token for item in requested for token in item.split()]
+    tokens = _tokens(requested)
     if not tokens:
         raise ValueError(
             "--application requires at least one application name or 'all'"

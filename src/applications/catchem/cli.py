@@ -98,7 +98,7 @@ def _as_catchem(section: ApplicationRunSection) -> CatchemRunSection:
 def _build(
     config: RunConfigView, checkout: Path, section: CatchemRunSection
 ) -> list[str]:
-    build = checkout / "build"
+    build = checkout / section.build_dirname
     log = build / "configure.log"
     offline_args = [
         arg.replace(f"{_MUSICA}=ON", f"{_MUSICA}=OFF") for arg in section.cmake_args
@@ -146,7 +146,7 @@ def _build(
 def test_plan(section: ApplicationRunSection, junit: str) -> TestPlan:
     """CATChem's own tests: ctest over the build directory. Every test is
     single-rank; the job's cores are for its OpenMP Kokkos tests."""
-    return ctest_plan(section.tests, junit)
+    return ctest_plan(section.tests, junit, section.build_dirname)
 
 
 def stage_lines(
