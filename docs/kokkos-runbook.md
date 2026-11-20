@@ -234,9 +234,9 @@ diff and commit it.
 
 ## 8. Gaea C7
 
-`config/gaea-c7.yaml` is the same run on Gaea C7, for CECE and one
-toolchain (`oneapi`: Intel's compilers with cray-mpich), from a C7 login
-node. Sections 1 to 5 and 7 apply with these differences:
+`config/gaea-c7.yaml` is the same run on Gaea C7, for CECE, CATChem and
+one toolchain (`oneapi`: Intel's compilers with cray-mpich), from a C7
+login node. Sections 1 to 5 and 7 apply with these differences:
 
 - **The build is the compute-node build of section 3**, the same as on
   Ursa: two `srun` steps on a C7 compute node (they carry
@@ -245,8 +245,13 @@ node. Sections 1 to 5 and 7 apply with these differences:
   line) plus `CECE dependency yaml-cpp: system`: the C7 modulefile also
   loads the environment's `yaml-cpp`, which CECE then takes over its
   submodule. To build on the login node alone, add
-  `--override applications:cece:build_node=login`. CATChem and the Kokkos
-  smoke project are not in the C7 template yet.
+  `--override applications:cece:build_node=login`.
+- **CATChem is two builds**, as on Ursa (`compute` and `musica`, section
+  3), and both take the environment's yaml-cpp
+  (`-DCATCHEM_USE_SYSTEM_YAML_CPP=ON`): after each configure the build
+  fails if CATChem fell back to its vendored copy, and prints the
+  `yaml-cpp_DIR` it used. The Kokkos smoke project is not in the C7
+  template.
 - **The module block starts with `module reset`**, never a purge, and the
   modulefile swaps the site's default oneAPI and cray-mpich for the ones
   the environment was built with. `module_env` pins `esmf_ver` and
@@ -256,21 +261,32 @@ node. Sections 1 to 5 and 7 apply with these differences:
   scheduler moves single-node jobs to the `batch-shared` partition and
   says so when the test job is submitted; that message is expected.
 - **MPI tests launch through `srun`** with no extra flags, and compute
-  nodes have no network: the test job exports `PIP_NO_INDEX=1` so the pip
-  steps of CECE's Python tests return at once.
+  nodes have no network: CECE's test job exports `PIP_NO_INDEX=1` so the
+  pip steps of its Python tests return at once.
+
+CATChem's vendored yaml-cpp exists because some ESMF builds carry their
+own yaml-cpp in the same `YAML::` namespace. Before the first CATChem
+build on C7, count the `YAML::` symbols the environment's ESMF exports
+(0 means no clash; anything else, record it and set
+`-DCATCHEM_USE_SYSTEM_YAML_CPP=OFF` in both builds):
+
+```bash
+( module reset; export esmf_ver=9.0.0b17 mapl_ver=2.69.1-esmf-9.0.0b17; module use $ROOT/ufs-chem-assay/modulefiles; module use /ncrc/proj/epic/spack-stack/c7/spack-stack-2.2.0/envs/ue-oneapi-2025.3.1/modules/Core; module load ufs_gaeac7.oneapi; L=$(dirname $ESMFMKFILE); ls $L/libesmf*; nm -DC --defined-only $L/libesmf.so 2>/dev/null | grep -c ' YAML::' )
+```
 
 ```bash
 cd $ROOT/ufs-chem-assay
-C7=(--config-file=config/gaea-c7.yaml --application cece)
+C7=(--config-file=config/gaea-c7.yaml --application all)
 uv run ufs-chem-assay run "${C7[@]}" --stage source --stage build --stage test --dry-run
 uv run ufs-chem-assay run "${C7[@]}" --stage source --stage build --stage test
 uv run ufs-chem-assay watch --only tests
 uv run ufs-chem-assay report --only tests
 ```
 
-To pull a newer commit of the CECE ref into the existing clone and
-rebuild only what changed, add
-`--override applications:cece:update_source=true` to the `run` command.
+To pull a newer commit of a ref into the existing clone and rebuild
+only what changed, add `--override applications:cece:update_source=true`
+(or `applications:catchem:…`) to the `run` command; `--build compute` or
+`--build musica` runs one CATChem build.
 
 ## What to record after the first run
 

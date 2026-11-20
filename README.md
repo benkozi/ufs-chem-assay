@@ -758,7 +758,7 @@ asked for.
 
 `config/gaea-c7.yaml` is the same idea on Gaea C7, for what has been
 built and tested there: one toolchain (`oneapi`: Intel's `icx` / `icpx` /
-`ifx` with cray-mpich, `mpi_launcher: srun`) and CECE, against the
+`ifx` with cray-mpich, `mpi_launcher: srun`), CECE and CATChem, against the
 spack-stack 2.2.0 environment through `modulefiles/ufs_gaeac7.oneapi.lua`.
 Three things in it are particular to the machine. `module_env` pins
 `esmf_ver` and `mapl_ver`, because the environment's default ESMF is a
@@ -770,10 +770,14 @@ a local addition), each held by a gate (`CECE dependency Kokkos: system`,
 `CECE dependency yaml-cpp: system`, the ArborX line). So the build is the
 offline compile probe, as on Ursa: `build_node: compute`, with
 `--override applications:cece:build_node=login` to build on the login
-node alone. CATChem and the Kokkos smoke project are not in the template
-yet. The test job exports `PIP_NO_INDEX=1`, which stops the pip
-fixtures of CECE's Python tests from retrying an index a compute node
-cannot reach.
+node alone. CATChem is two build variants of one checkout (`compute`,
+MUSICA off, built whole on a compute node; `musica`, on the login node),
+both with `-DCATCHEM_USE_SYSTEM_YAML_CPP=ON`, so they take the
+environment's yaml-cpp and the build checks that they did. The Kokkos
+smoke project is not in the template. CECE's test job exports
+`PIP_NO_INDEX=1`, which stops the pip fixtures of CECE's Python tests
+from retrying an index a compute node cannot reach; CATChem's tests reach
+no network.
 
 ```bash
 ufs-chem-assay run --config-file=config/gaea-c7.yaml --application cece \

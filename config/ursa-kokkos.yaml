@@ -82,8 +82,8 @@ applications:  # one section per application in the run, keyed by adapter name
       minutes: 5
       env: {}
   catchem:
-    git_url: git@github.com:benkozi/CATChem.git  # the branch with the spack-stack build changes
-    ref: feature/spack-stack-wm-tweaks
+    git_url: git@github.com:benkozi/CATChem.git  # the coupling-protos branch, as on Gaea C7
+    ref: feature/cece-coupling-proto
     update_source: false
     cmake_args:  # the adapter's defaults, written out: a Debug build (what its tests need) with all three components
       - -DCMAKE_BUILD_TYPE=Debug

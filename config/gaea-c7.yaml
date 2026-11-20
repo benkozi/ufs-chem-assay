@@ -1,20 +1,22 @@
-# Run config for Gaea C7 (RDHPCS): build and test CECE against the spack-stack 2.2.0 environment the way the UFS
-# builds there — the harness's own UFS modulefile (modulefiles/ufs_gaeac7.oneapi.lua) on top of the environment's
-# modules/Core. One toolchain, one application: what has been built and tested on C7. The standard run:
-#   ufs-chem-assay run --config-file=config/gaea-c7.yaml --application cece \
+# Run config for Gaea C7 (RDHPCS): build and test CECE and CATChem against the spack-stack 2.2.0 environment the
+# way the UFS builds there — the harness's own UFS modulefile (modulefiles/ufs_gaeac7.oneapi.lua) on top of the
+# environment's modules/Core. One toolchain; CECE is one build, CATChem two. The standard run:
+#   ufs-chem-assay run --config-file=config/gaea-c7.yaml --application all \
 #     --stage source --stage build --stage test [--dry-run]
 #   ufs-chem-assay watch --only tests  # evaluates the test job when it leaves the queue
 #   ufs-chem-assay report --only tests
-# The build is under <root_dir>/oneapi/ (checkout, build directory, tests root); its scripts are
-# <root_dir>/scripts/<NN>-<stage>-cece-oneapi.sh. Single-node jobs are moved to the batch-shared partition by the
-# scheduler ("Single node Jobs are redirected"): the compile steps and the test job are one node each, so that
-# message is expected.
+# Everything is under <root_dir>/oneapi/ (checkouts, build directories, tests roots); the scripts are
+# <root_dir>/scripts/<NN>-<stage>-<application>-oneapi[-<build>].sh. Single-node jobs are moved to the
+# batch-shared partition by the scheduler ("Single node Jobs are redirected"): the compile steps and the test
+# jobs are one node each, so that message is expected.
 # The environment provides Kokkos, kokkos-kernels, ArborX and yaml-cpp (kokkos/5.1.1, kokkos-kernels/5.1.1,
-# arborx/2.1, yaml-cpp/0.8.0), and the gates require CECE to take them rather than fetch or bundle its own. The
-# build is the offline compile probe: configure and compile as two srun steps on a compute node with the test
-# stack off (a compute node has no network), then a login-node finish that builds the test stack. To build on the
-# login node alone, add --override applications:cece:build_node=login. CATChem and the harness's Kokkos smoke
-# project are not in this file yet (config/ursa-kokkos.yaml has them).
+# arborx/2.1, yaml-cpp/0.8.0), and the gates require CECE and CATChem to take them rather than fetch or bundle their
+# own. CECE's build is the offline compile probe: configure and compile as two srun steps on a compute node with the
+# test stack off (a compute node has no network), then a login-node finish that builds the test stack. To build on
+# the login node alone, add --override applications:cece:build_node=login. CATChem is two builds of one checkout:
+# compute (MUSICA off, built whole on a compute node) and musica (MUSICA fetches at configure time: the login node);
+# --build compute or --build musica runs one. The harness's Kokkos smoke project is not in this file
+# (config/ursa-kokkos.yaml has it).
 # Keys not listed keep their defaults (config/ursa.yaml lists every key); command-line overrides change any of
 # them: --override applications:cece:update_source=true slurm:qos=debug
 platform: gaea-c7  # optional: detected from the hostname (gaea7N) when absent; --platform wins
@@ -72,6 +74,43 @@ applications:  # one section per application in the run, keyed by adapter name
       minutes: 15
       env:
         PIP_NO_INDEX: '1'  # no network on a compute node: CECE's pip fixtures return at once instead of retrying
+  catchem:
+    # The coupling-protos branch (with the CECE coupling work). TODO(gaea-c7): back to ufs-community/CATChem at
+    # develop once that work is merged there.
+    git_url: git@github.com:benkozi/CATChem.git
+    ref: feature/cece-coupling-proto
+    update_source: false  # true: fetch, checkout ref, pull --ff-only, submodule update --init --recursive
+    cmake_args:  # a Debug build (what its tests need); the adapter requires Kokkos on and `Using system Kokkos`
+      - -DCMAKE_BUILD_TYPE=Debug
+      - -DCATCHEM_ENABLE_KOKKOS=ON
+      - -DCATCHEM_BUILD_MUSICA=ON  # MUSICA fetches at configure time: login node only
+      - -DCATCHEM_BUILD_NUOPC=ON
+      - -DCATCHEM_USE_SYSTEM_YAML_CPP=ON  # the environment's yaml-cpp; the build checks it was taken
+    build_jobs: 8
+    targets:  # `all` includes the test stack, which tests.enabled requires
+      - all
+    configure_gates: []
+    build_node: login
+    build_minutes: 10  # each compile step's time limit under build_node: compute
+    tests:  # ctest, one Slurm job; every CATChem test is single-rank, and none reaches the network
+      enabled: true
+      filter:
+      parallel:
+      ntasks: 1
+      cpus: 8  # for its OpenMP Kokkos tests
+      minutes: 15
+      env: {}
+    builds:  # two builds of the one checkout, each with its own build-<name> directory and test job
+      compute:  # MUSICA off: nothing is fetched, so the whole build, tests included, runs on a compute node
+        cmake_args:
+          - -DCMAKE_BUILD_TYPE=Debug
+          - -DCATCHEM_ENABLE_KOKKOS=ON
+          - -DCATCHEM_BUILD_MUSICA=OFF
+          - -DCATCHEM_BUILD_NUOPC=ON
+          - -DCATCHEM_USE_SYSTEM_YAML_CPP=ON
+        build_node: compute
+      musica:  # the section as written: MUSICA on, on the login node
+        build_node: login
 slurm:  # the account, QOS and partition of the test job
   account: epic
   qos: normal

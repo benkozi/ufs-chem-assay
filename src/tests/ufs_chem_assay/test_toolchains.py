@@ -775,6 +775,18 @@ def test_the_kokkos_template_loads_as_shipped() -> None:
         assert "CECE dependency Kokkos: system" in cece.configure_gates
         assert cece.tests.ntasks == 4
         assert build.applications["catchem"].tests.ntasks == 1
+        catchem = build.applications["catchem"]
+        # The CATChem branch the C7 template builds too (the coupling work).
+        assert (catchem.git_url, catchem.ref) == (
+            "git@github.com:benkozi/CATChem.git",
+            "feature/cece-coupling-proto",
+        )
+        # Ursa's modulefiles load no yaml-cpp: CATChem keeps its vendored copy.
+        assert not any(
+            "CATCHEM_USE_SYSTEM_YAML_CPP" in flag
+            for _, s in built
+            for flag in s.build_flags()
+        )
     # The driver sessions are there to be asked for, not run by default
     # against a Debug build; nothing is recorded into the committed files.
     assert list(config.sessions) == ["simple-maccity"]
@@ -862,7 +874,7 @@ def test_the_gaea_c7_template_loads_as_shipped() -> None:
     config = load_run_config(_GAEA_C7)
     assert config.platform.value == "gaea-c7"
     assert list(config.toolchains) == ["oneapi"]
-    assert config.application_names == ["cece"]  # what has been built there
+    assert config.application_names == ["cece", "catchem"]
     toolchain = config.toolchains["oneapi"]
     assert toolchain.mpi_launcher is MpiLauncher.SRUN
     assert toolchain.mpiexec_preflags is None
@@ -912,7 +924,7 @@ def test_the_gaea_c7_template_loads_as_shipped() -> None:
     text = _GAEA_C7.read_text()
     assert not any(line.startswith("root_dir:") for line in text.splitlines())
     for needle in (
-        "--config-file=config/gaea-c7.yaml --application cece",
+        "--config-file=config/gaea-c7.yaml --application all",
         "--stage source --stage build --stage test",
         "ufs-chem-assay watch --only tests",
         "ufs-chem-assay report --only tests",
@@ -1016,3 +1028,77 @@ def test_shipped_templates_put_no_gate_on_a_toolchain(template: str) -> None:
     raw = yaml.safe_load((TEMPLATES_DIR / template).read_text())
     for name, toolchain in (raw.get("toolchains") or {}).items():
         assert not toolchain.get("configure_gates"), f"{template}: toolchains.{name}"
+
+
+def test_the_gaea_c7_template_builds_catchem_twice(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    # CATChem on C7: one checkout of the coupling branch, a compute-node
+    # build with MUSICA off and a login-node build with it on, each taking
+    # the environment's yaml-cpp (the C7 modulefile loads it) and checking it.
+    config = load_run_config(_GAEA_C7)
+    (oneapi,) = toolchain_configs(config, None)
+    catchem = get_application("catchem")
+    section = oneapi.applications["catchem"]
+    assert (section.git_url, section.ref) == (
+        "git@github.com:benkozi/CATChem.git",
+        "feature/cece-coupling-proto",
+    )
+    compute, musica = build_configs(oneapi, catchem, None)
+    c, m = compute.applications["catchem"], musica.applications["catchem"]
+    assert (c.build_name, c.build_node) == ("compute", BuildNode.COMPUTE)
+    assert (m.build_name, m.build_node) == ("musica", BuildNode.LOGIN)
+    for variant, musica_flag in ((c, "OFF"), (m, "ON")):
+        flags = variant.build_flags()
+        assert f"-DCATCHEM_BUILD_MUSICA={musica_flag}" in flags
+        assert "-DCATCHEM_ENABLE_KOKKOS=ON" in flags
+        assert "-DCATCHEM_USE_SYSTEM_YAML_CPP=ON" in flags
+        assert (
+            flags[-1] == "-DCMAKE_CXX_FLAGS=-fp-model=precise"
+        )  # the toolchain's, last
+        assert variant.configure_gates == []  # ArborX is CECE's gate
+        assert (variant.tests.enabled, variant.tests.ntasks, variant.tests.cpus) == (
+            True,
+            1,
+            8,
+        )
+        assert variant.tests.env == {}  # CATChem's tests reach no network
+
+    run_bash = mocker.patch("cli.commands.run.run_bash")
+    root = tmp_path / "root"
+    assert (
+        main(
+            [
+                "run",
+                f"--config-file={_GAEA_C7}",
+                f"--root-dir={root}",
+                "--application=all",
+                "--stage=source",
+                "--stage=build",
+                "--stage=test",
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    run_bash.assert_not_called()
+    scripts = root / "scripts"
+    assert sorted(p.name for p in scripts.glob("*catchem*")) == [
+        "01-source-catchem-oneapi.sh",
+        "02-build-catchem-oneapi-compute.sh",
+        "02-build-catchem-oneapi-musica.sh",
+        "04-test-catchem-oneapi-compute.sbatch",
+        "04-test-catchem-oneapi-compute.sh",
+        "04-test-catchem-oneapi-musica.sbatch",
+        "04-test-catchem-oneapi-musica.sh",
+    ]
+    compute_build = (scripts / "02-build-catchem-oneapi-compute.sh").read_text()
+    srun = "srun -A epic -q normal -p batch --clusters=c7 "
+    assert sum(line.startswith(srun) for line in compute_build.splitlines()) == 2
+    assert "yaml-cpp not found on system, using internal version" in compute_build
+    musica_build = (scripts / "02-build-catchem-oneapi-musica.sh").read_text()
+    assert "srun " not in musica_build
+    assert "module load ufs_gaeac7.oneapi" in musica_build
+    job = (scripts / "04-test-catchem-oneapi-compute.sbatch").read_text()
+    assert "#SBATCH --clusters=c7" in job
+    assert "ctest --test-dir build-compute " in job

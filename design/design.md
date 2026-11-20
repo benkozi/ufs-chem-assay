@@ -826,7 +826,7 @@ toolchain, `oneapi` (`modulefiles/ufs_gaeac7.oneapi.lua` — the weather
 model's C7 file, with the oneAPI swap made part of the file — over the
 spack-stack 2.2.0 environment's `modules/Core`; `esmf_ver` and `mapl_ver`
 pinned in `module_env`; `mpi_launcher: srun` with no preflags and an
-empty `tests_env`), and one application, `cece`. It is what the first C7
+empty `tests_env`), and `cece` first, then `catchem` (below). It is what the first C7
 runs established. Since 2026-11-20 the environment carries Kokkos,
 kokkos-kernels and ArborX (`kokkos/5.1.1`, `kokkos-kernels/5.1.1`,
 `arborx/2.1`), so the modulefile loads the first two as the Ursa and C6
@@ -838,8 +838,11 @@ ArborX line). The modulefile also loads the environment's `yaml-cpp/0.8.0`
 `CECE dependency Kokkos: FetchContent` and built on the login node. The
 build is the compute-node build since its first C7 run passed on
 2026-11-20 (`build_node: compute`: the two `srun` steps carry
-`--clusters=c7` from `slurm.extra_args`). One thing is still interim:
-`catchem` and `kokkos-smoke` are left out. The CECE ref is a
+`--clusters=c7` from `slurm.extra_args`). `catchem` joined on 2026-11-20 as two build
+variants (`compute`, MUSICA off on a compute node; `musica`, the login node),
+both with the environment's yaml-cpp and the adapter's check of it, on
+`benkozi/CATChem` at `feature/cece-coupling-proto`; `kokkos-smoke` is left
+out. The CECE ref is a
 fork branch for the same reason a template may name one at all: it is
 the only ref that builds there — ESMF 9's own CMake package passes the
 Fortran driver's `-cxxlib` to `icpx`, and the fix to CECE's
@@ -1488,8 +1491,8 @@ All code under `src/`; the project is `uv`-managed with its own
                           #   sessions: simple-maccity, gcafs-anthro, a commented exhaustive-maccity),
                           #   ursa-kokkos.yaml (toolchains oneapi + gnu; cece, catchem and
                           #   kokkos-smoke built as the offline probe and tested; sessions opt-in),
-                          #   gaea-c7.yaml (toolchain oneapi; cece built on the login node and
-                          #   tested; interim until the environment carries Kokkos)
+                          #   gaea-c7.yaml (toolchain oneapi; cece built as the offline probe,
+                          #   catchem as two builds, compute and musica; all tested)
   modulefiles/            # harness-owned UFS platform modulefiles (ufs_common, ufs_ursa.oneapi,
                           #   ufs_ursa.gnu, ufs_gaeac6.oneapi, ufs_gaeac7.oneapi): no environment
                           #   root of their own
