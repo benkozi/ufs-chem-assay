@@ -17,8 +17,6 @@ _PLATFORM_FILES = (
     "ufs_ursa.gnu.lua",
     "ufs_ursa.oneapi.lua",
 )
-# The platforms whose environment is known to carry Kokkos and kokkos-kernels.
-_WITH_KOKKOS = tuple(name for name in _PLATFORM_FILES if name != _GAEA_C7)
 
 
 def test_the_harness_ships_the_ufs_modulefiles() -> None:
@@ -79,25 +77,14 @@ def _loads(text: str, call: str) -> bool:
     return re.search(rf"^\s*{re.escape(call)}$", text, re.MULTILINE) is not None
 
 
-@pytest.mark.parametrize("name", _WITH_KOKKOS)
-def test_the_kokkos_packages_are_required_where_the_environment_has_them(
-    name: str,
-) -> None:
+@pytest.mark.parametrize("name", _PLATFORM_FILES)
+def test_the_kokkos_packages_are_required(name: str) -> None:
+    # Every platform's environment carries Kokkos and kokkos-kernels (Gaea
+    # C7's since 2026-11-20): a missing one fails the load, not the build.
     text = (_MODULEFILES / name).read_text()
     for package in ("kokkos", "kokkos-kernels"):
         assert _loads(text, f'load("{package}")'), package
         assert not _loads(text, f'try_load("{package}")'), package
-
-
-def test_the_gaea_c7_file_takes_the_kokkos_packages_only_if_present() -> None:
-    # The spack-stack 2.2.0 environment on Gaea C7 carries neither Kokkos nor
-    # kokkos-kernels (its site config does not ask for them), so an
-    # unconditional load would fail the whole file. A pin still loads hard.
-    text = (_MODULEFILES / _GAEA_C7).read_text()
-    for package in ("kokkos", "kokkos-kernels", "arborx"):
-        assert _loads(text, f'try_load("{package}")'), package
-        assert not _loads(text, f'load("{package}")'), package
-    assert "TODO(gaea-c7)" in text  # what changes once they are installed
 
 
 def test_the_gaea_c7_file_is_the_weather_models_recipe() -> None:

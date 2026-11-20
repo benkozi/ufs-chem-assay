@@ -8,11 +8,13 @@
 # The build is under <root_dir>/oneapi/ (checkout, build directory, tests root); its scripts are
 # <root_dir>/scripts/<NN>-<stage>-cece-oneapi.sh. Single-node jobs are moved to the batch-shared partition by the
 # scheduler ("Single node Jobs are redirected"): the test job is one node, so that message is expected.
-# TODO(gaea-c7): this environment has no Kokkos, kokkos-kernels or ArborX yet. Until it does, CECE fetches and
-# builds its own Kokkos, which needs the network, so the build runs on the login node. Once they are installed,
-# three values change, each marked below: the modulefile's kokkos loads (try_load to load), the CECE gate
-# ('CECE dependency Kokkos: system') and the build placement (build_node: compute). CATChem and the harness's
-# Kokkos smoke project need the environment's Kokkos and join this file then (config/ursa-kokkos.yaml has them).
+# The environment provides Kokkos, kokkos-kernels and ArborX (kokkos/5.1.1, kokkos-kernels/5.1.1, arborx/2.1), and
+# the gates require CECE to take them rather than fetch its own. TODO(gaea-c7): the build runs on the login node,
+# where everything has run on C7 so far. The compute-node build (an offline compile probe on a compute node, then
+# a login-node finish with the test stack) has not been tried here; try it with
+#   --override applications:cece:build_node=compute
+# and make it the default once it works. CATChem and the harness's Kokkos smoke project are not in this file yet
+# (config/ursa-kokkos.yaml has them).
 # Keys not listed keep their defaults (config/ursa.yaml lists every key); command-line overrides change any of
 # them: --override applications:cece:update_source=true slurm:qos=debug
 platform: gaea-c7  # optional: detected from the hostname (gaea7N) when absent; --platform wins
@@ -40,7 +42,8 @@ toolchains:
     mpi_launcher: srun  # cray-mpich: every MPI test is its own `srun -n <ranks>` step of the test job
     mpiexec_preflags:  # none needed
     tests_env: {}  # merged into every application's tests.env; none needed
-    configure_gates: []  # TODO(gaea-c7): 'AXIS: ArborX .* found via find_package' once the environment has ArborX
+    configure_gates:  # added to every application's own: what this environment claims to supply
+      - 'AXIS: ArborX .* found via find_package'
 applications:  # one section per application in the run, keyed by adapter name
   cece:
     # The branch that builds against ESMF 9: develop plus a fix to cmake/FindESMF.cmake (ESMF 9's own CMake
@@ -56,8 +59,9 @@ applications:  # one section per application in the run, keyed by adapter name
     targets:  # `all` includes the test stack, which tests.enabled requires
       - all
     configure_gates:  # with ESMF on, the adapter already requires `CECE dependency ESMF: system`
-      - 'CECE dependency Kokkos: FetchContent'  # TODO(gaea-c7): 'CECE dependency Kokkos: system'
-    build_node: login  # TODO(gaea-c7): `build_node: compute` (with build_minutes) once nothing is fetched
+      - 'CECE dependency Kokkos: system'  # the environment's Kokkos, not a fetched one
+    build_node: login  # TODO(gaea-c7): compute, once a compute-node build has run here (see the header)
+    build_minutes: 10  # each compile step's time limit under build_node: compute
     tests:  # ctest, one Slurm job: ctest on the node, each MPI test launching its own ranks
       enabled: true
       filter:  # ctest -R regex; null = every test

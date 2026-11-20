@@ -19,13 +19,11 @@
 --   3. cmake and nccmp version pins removed (load the default), mirroring
 --      the Ursa recipe: exact tool versions are not what this validates.
 --      Override via cmake_ver / nccmp_ver if ever needed.
---   4. kokkos, kokkos-kernels and arborx loaded tolerantly at the end (pin
---      via kokkos_ver / kokkos_kernels_ver / arborx_ver, else try_load).
---      TODO(gaea-c7): the spack-stack 2.2.0 environment on C7 carries none
---      of the three (its site config does not ask for them), so a consumer's
---      find_package falls back to whatever it does without them. Once they
---      are installed, kokkos and kokkos-kernels become plain loads, as in
---      the Ursa and C6 files.
+--   4. kokkos + kokkos-kernels loads appended at the end — the packages
+--      under test (JCSDA/spack-stack#2081), installed in the C7 environment
+--      since 2026-11-20 (kokkos/5.1.1, kokkos-kernels/5.1.1) — then arborx
+--      tolerantly (pin via arborx_ver, else try_load), as in the Ursa and
+--      C6 files.
 -- Everything else is verbatim: the cray-mpich unload, the stack pins (the
 -- toolchain under test) and the compilers, which are Intel's own icx / icpx
 -- / ifx (C7 has no Cray cc / CC / ftn wrappers). Load it after
@@ -88,22 +86,25 @@ setenv("CXX","icpx")
 setenv("FC","ifx")
 setenv("CMAKE_Platform","gaeac7.oneapi")
 
--- Local addition (see header): the Kokkos packages, tolerantly. try_load is
--- a silent no-op when the module does not exist.
+-- Local addition (see header): the packages under test in
+-- JCSDA/spack-stack#2081. Unversioned loads take the environment's default.
 kokkos_ver=os.getenv("kokkos_ver")
 if kokkos_ver then
   load(pathJoin("kokkos", kokkos_ver))
 else
-  try_load("kokkos")
+  load("kokkos")
 end
 
 kokkos_kernels_ver=os.getenv("kokkos_kernels_ver")
 if kokkos_kernels_ver then
   load(pathJoin("kokkos-kernels", kokkos_kernels_ver))
 else
-  try_load("kokkos-kernels")
+  load("kokkos-kernels")
 end
 
+-- Local addition (see header): arborx, tolerantly (arborx/2.1 in the C7
+-- environment). try_load is a silent no-op when the module does not exist,
+-- letting consumers' find_package(ArborX) fall back.
 arborx_ver=os.getenv("arborx_ver")
 if arborx_ver then
   load(pathJoin("arborx", arborx_ver))

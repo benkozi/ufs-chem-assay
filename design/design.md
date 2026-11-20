@@ -770,13 +770,15 @@ model's C7 file, with the oneAPI swap made part of the file — over the
 spack-stack 2.2.0 environment's `modules/Core`; `esmf_ver` and `mapl_ver`
 pinned in `module_env`; `mpi_launcher: srun` with no preflags and an
 empty `tests_env`), and one application, `cece`. It is what the first C7
-runs established, and it is interim in one respect: that environment
-carries no Kokkos, kokkos-kernels or ArborX, so CECE fetches its own
-Kokkos, the build is the login node's (`build_node: login`), the gate is
-`CECE dependency Kokkos: FetchContent`, there is no ArborX gate, the
-modulefile takes the three packages with `try_load`, and `catchem` and
-`kokkos-smoke` (which need the environment's Kokkos) are left out. Every
-such line carries `TODO(gaea-c7)` and what it becomes. The CECE ref is a
+runs established. Since 2026-11-20 the environment carries Kokkos,
+kokkos-kernels and ArborX (`kokkos/5.1.1`, `kokkos-kernels/5.1.1`,
+`arborx/2.1`), so the modulefile loads the first two as the Ursa and C6
+files do and the gates are Ursa's (`CECE dependency Kokkos: system`, the
+ArborX line). Before that, CECE fetched its own Kokkos and gated on
+`CECE dependency Kokkos: FetchContent`. Two things are still interim:
+the build is the login node's (`build_node: login`, marked
+`TODO(gaea-c7)`: the compute-node build has not run on C7), and `catchem`
+and `kokkos-smoke` are left out. The CECE ref is a
 fork branch for the same reason a template may name one at all: it is
 the only ref that builds there — ESMF 9's own CMake package passes the
 Fortran driver's `-cxxlib` to `icpx`, and the fix to CECE's

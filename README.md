@@ -745,13 +745,14 @@ spack-stack 2.2.0 environment through `modulefiles/ufs_gaeac7.oneapi.lua`.
 Three things in it are particular to the machine. `module_env` pins
 `esmf_ver` and `mapl_ver`, because the environment's default ESMF is a
 later beta than the one its MAPL is built against. `slurm.extra_args` is
-`--clusters=c7`. And the environment carries no Kokkos, kokkos-kernels or
-ArborX yet, so CECE fetches and builds its own Kokkos: that needs the
-network, which only the login node has, so the template says
-`build_node: login`, gates on `CECE dependency Kokkos: FetchContent` and
-leaves CATChem and the Kokkos smoke project out. Each of those lines is
-marked `TODO(gaea-c7)` with what it becomes once the packages are
-installed. The test job exports `PIP_NO_INDEX=1`, which stops the pip
+`--clusters=c7`. And the build stays on the login node
+(`build_node: login`), where every C7 build so far has run: the
+environment provides Kokkos, kokkos-kernels and ArborX, and the gates
+require CECE to take them (`CECE dependency Kokkos: system`, the ArborX
+line), but the compute-node build has not been tried there yet. To try
+it, add `--override applications:cece:build_node=compute`; the line is
+marked `TODO(gaea-c7)`. CATChem and the Kokkos smoke project are not in
+the template yet. The test job exports `PIP_NO_INDEX=1`, which stops the pip
 fixtures of CECE's Python tests from retrying an index a compute node
 cannot reach.
 

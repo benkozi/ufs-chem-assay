@@ -847,6 +847,7 @@ def test_the_gaea_c7_template_loads_as_shipped() -> None:
     assert toolchain.mpi_launcher is MpiLauncher.SRUN
     assert toolchain.mpiexec_preflags is None
     assert toolchain.tests_env == {}
+    assert toolchain.configure_gates == [_ARBORX]  # the environment's ArborX
     # The environment builds its UFS stack against one ESMF; its default
     # esmf module is a later beta, which the mapl module does not match.
     assert toolchain.module_env == {
@@ -868,11 +869,10 @@ def test_the_gaea_c7_template_loads_as_shipped() -> None:
         "git@github.com:benkozi/CECE.git",
         "feature/multi-tile-host-decomp",
     )
-    # Interim, until the environment carries Kokkos: CECE fetches its own,
-    # which needs the network, so the build is the login node's; and there is
-    # no ArborX to gate on.
+    # The environment's Kokkos, never a fetched one. The build stays on the
+    # login node until a compute-node build has run on C7.
+    assert cece.configure_gates == ["CECE dependency Kokkos: system", _ARBORX]
     assert cece.build_node is BuildNode.LOGIN
-    assert cece.configure_gates == ["CECE dependency Kokkos: FetchContent"]
     assert cece.tests.enabled is True
     assert (cece.tests.ntasks, cece.tests.cpus, cece.tests.minutes) == (4, 8, 15)
     assert cece.tests.env == {"PIP_NO_INDEX": "1"}  # no network on a compute node
@@ -892,8 +892,7 @@ def test_the_gaea_c7_template_loads_as_shipped() -> None:
         "ufs-chem-assay watch --only tests",
         "ufs-chem-assay report --only tests",
         "TODO(gaea-c7)",
-        "CECE dependency Kokkos: system",  # what the gate becomes
-        "build_node: compute",  # and where the build goes
+        "applications:cece:build_node=compute",  # how to try the compute node
     ):
         assert needle in text, needle
 
@@ -947,7 +946,8 @@ def test_the_gaea_c7_template_renders_the_build_and_test_stages(
     gates = [line for line in build if line.startswith("grep -Eq ")]
     assert [gate.split("'")[1] for gate in gates] == [
         "CECE dependency ESMF: system",
-        "CECE dependency Kokkos: FetchContent",
+        "CECE dependency Kokkos: system",
+        _ARBORX,
     ]
     job = (scripts / "04-test-cece-oneapi.sbatch").read_text().splitlines()
     for directive in (

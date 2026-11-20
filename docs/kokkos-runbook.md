@@ -231,15 +231,14 @@ diff and commit it.
 toolchain (`oneapi`: Intel's compilers with cray-mpich), from a C7 login
 node. Sections 1 to 5 and 7 apply with these differences:
 
-- **The environment has no Kokkos, kokkos-kernels or ArborX yet.** CECE
-  then fetches and builds its own Kokkos at configure time, which needs
-  the network, so the whole build runs on the login node
-  (`build_node: login`: no `srun` steps, one configure, the test stack
-  included) and the gate is `CECE dependency Kokkos: FetchContent`.
-  CATChem and the Kokkos smoke project need the environment's Kokkos and
-  are not in the template. The lines that change once the packages are
-  installed are marked `TODO(gaea-c7)` in the template and in
-  `modulefiles/ufs_gaeac7.oneapi.lua`.
+- **The build runs on the login node** (`build_node: login`: no `srun`
+  steps, one configure, the test stack included). The environment
+  provides Kokkos, kokkos-kernels and ArborX, and the gates are the same
+  as on Ursa (`CECE dependency Kokkos: system`, the ArborX line), but the
+  compute-node build of section 3 has not been tried on C7 yet. To try
+  it, add `--override applications:cece:build_node=compute` to the `run`
+  command (the line is marked `TODO(gaea-c7)` in the template). CATChem
+  and the Kokkos smoke project are not in the C7 template yet.
 - **The module block starts with `module reset`**, never a purge, and the
   modulefile swaps the site's default oneAPI and cray-mpich for the ones
   the environment was built with. `module_env` pins `esmf_ver` and
