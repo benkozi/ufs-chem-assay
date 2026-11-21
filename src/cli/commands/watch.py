@@ -33,7 +33,9 @@ from cli.sessions import (
     poll,
     read_session_ledger,
     read_tests_ledger,
+    session_cause,
     stage_summaries,
+    tests_cause,
     tick,
     tick_tests,
 )
@@ -41,6 +43,12 @@ from cli.stage_outcomes import read_stage_record
 from logs import get_logger
 
 logger = get_logger("cli")
+
+# How many checks a session or test run may stay not submitted, with nothing
+# in the stage record to say why, before watch stops waiting for it: about
+# five minutes at the default 30 s poll, time for a `run` started alongside
+# to submit what it renders.
+_NOT_SUBMITTED_TICKS = 10
 
 
 def register(subparsers: Subparsers, name: str) -> None:
@@ -115,10 +123,36 @@ def register(subparsers: Subparsers, name: str) -> None:
         help="seconds between polls (default: the config's slurm.poll_s)",
     )
     watch_parser.add_argument(
+        "--not-submitted-ticks",
+        type=int,
+        default=_NOT_SUBMITTED_TICKS,
+        metavar="N",
+        help=(
+            "stop waiting for a session or test run that is still not submitted "
+            f"after N checks (default {_NOT_SUBMITTED_TICKS}); one the stage record "
+            "says will not be submitted (its build failed, say) is settled at the "
+            "first check. Either way it is reported as not submitted, exit 1"
+        ),
+    )
+    watch_parser.add_argument(
         "--once",
         action="store_true",
         help="report every session's state once and exit 0; evaluate nothing",
     )
+
+
+def _give_up(
+    cause: str | None, root: Path, counts: dict[Path, int], limit: int
+) -> str | None:
+    """Why watch stops waiting for a root that is not submitted, or None to
+    keep waiting: the stage record's reason at once, else after `limit`
+    checks in a row."""
+    if cause is not None:
+        return cause
+    counts[root] = counts.get(root, 0) + 1
+    if counts[root] >= limit:
+        return f"still not submitted after {counts[root]} checks"
+    return None
 
 
 def handler(args: argparse.Namespace) -> int:
@@ -197,6 +231,12 @@ def handler(args: argparse.Namespace) -> int:
             "--interval must be a positive number of seconds; got %s", interval
         )
         return 1
+    if args.not_submitted_ticks <= 0:
+        logger.error(
+            "--not-submitted-ticks must be a positive number of checks; got %s",
+            args.not_submitted_ticks,
+        )
+        return 1
     logs_dir = root_dir / "logs"
     logger.info(
         "watching %s session(s) and %s test run(s) under %s every %ss: %s",
@@ -206,8 +246,9 @@ def handler(args: argparse.Namespace) -> int:
         interval,
         ", ".join([*(w.label for w in watched), *(t.label for t in tests)]),
     )
-    final: dict[Path, SessionReport] = {}  # evaluated or failed this watch
+    final: dict[Path, SessionReport] = {}  # evaluated, failed or given up this watch
     final_tests: dict[Path, TestsReport] = {}
+    unsubmitted: dict[Path, int] = {}  # consecutive not-submitted checks per root
     try:
         while True:
             ledgers = {w.root: read_session_ledger(w) for w in watched}
@@ -215,6 +256,29 @@ def handler(args: argparse.Namespace) -> int:
             states = poll(ledgers.values(), test_ledgers.values())
             reports = tick(watched, ledgers, states)
             test_reports = tick_tests(tests, test_ledgers, states)
+            # Re-read each check: a run started alongside records as it goes.
+            record = read_stage_record(root_dir / "scripts")
+            limit = args.not_submitted_ticks
+            for w in watched:
+                waiting = reports[w.root].state is SessionState.NOT_SUBMITTED
+                if w.root not in final and waiting:
+                    detail = _give_up(
+                        session_cause(record, w), w.root, unsubmitted, limit
+                    )
+                    if detail is not None:
+                        final[w.root] = SessionReport(
+                            state=SessionState.NOT_SUBMITTED, detail=detail
+                        )
+            for t in tests:
+                waiting = test_reports[t.root].state is TestsState.NOT_SUBMITTED
+                if t.root not in final_tests and waiting:
+                    detail = _give_up(
+                        tests_cause(record, t), t.root, unsubmitted, limit
+                    )
+                    if detail is not None:
+                        final_tests[t.root] = TestsReport(
+                            state=TestsState.NOT_SUBMITTED, detail=detail
+                        )
             for w in watched:
                 report = final.get(w.root, reports[w.root])
                 logger.info("%s: %s", w.label, report.line())
@@ -260,6 +324,12 @@ def handler(args: argparse.Namespace) -> int:
         return 130
     failed = [w.label for w in watched if final[w.root].state is SessionState.FAILED]
     failed += [t.label for t in tests if final_tests[t.root].state is TestsState.FAILED]
+    never = [
+        w.label for w in watched if final[w.root].state is SessionState.NOT_SUBMITTED
+    ]
+    never += [
+        t.label for t in tests if final_tests[t.root].state is TestsState.NOT_SUBMITTED
+    ]
     nonzero = [
         w.label
         for w in watched
@@ -274,6 +344,8 @@ def handler(args: argparse.Namespace) -> int:
     ]
     if failed:
         logger.error("evaluation failed: %s", ", ".join(failed))
+    if never:
+        logger.error("not submitted: %s", ", ".join(never))
     # The stage record as it is now: a run may have finished since the watch began.
     record = read_stage_record(root_dir / "scripts")
     run_report = RunReport(
@@ -303,4 +375,4 @@ def handler(args: argparse.Namespace) -> int:
     )
     for line in render(run_report):
         logger.info("%s", line)
-    return 1 if failed or nonzero else 0
+    return 1 if failed or nonzero or never else 0

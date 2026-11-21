@@ -122,6 +122,14 @@ class RunConfig(StrictModel):
             "a key to write by hand"
         ),
     )
+    selected_applications: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The applications the last `run` selected, recorded in the effective "
+            "config so `watch` and `report` cover the same ones by default; empty "
+            "means every application. Not a key to write by hand"
+        ),
+    )
     selected_builds: list[str] = Field(
         default_factory=list,
         description=(
@@ -207,6 +215,16 @@ class RunConfig(StrictModel):
                     f"{self.platform.value} runs {runtime.value} "
                     "(--override harness:submit_only=false to run this config here)"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _selected_applications_are_configured(self) -> RunConfig:
+        unknown = [n for n in self.selected_applications if n not in self.applications]
+        if unknown:
+            raise ValueError(
+                f"selected_applications: {unknown} not in applications "
+                f"({list(self.applications)})"
+            )
         return self
 
     @model_validator(mode="after")

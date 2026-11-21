@@ -722,6 +722,17 @@ jobs with the sessions' in one `squeue` per cluster (`cli/sessions.poll`), evalu
 a finished one in-process (`evaluate_tests`: there is no resume script),
 cancels one still queued past its deadline, and folds the verdicts into
 its exit status; `--only sessions|tests` narrows `watch` and `report`.
+A root that stays not submitted does not keep `watch` running (since
+2026-11-20): each check re-reads the stage record, and
+`cli/sessions.tests_cause` (the lane's source, build and test scripts) or
+`session_cause` (source, build, data, then the session's harness script)
+names the first one that failed or was skipped, which settles the root at
+once as `SessionReport` / `TestsReport` `NOT_SUBMITTED` with that `detail`
+(`not submitted (<script> failed (exit N))`); with nothing recorded,
+`watch._give_up` settles it after `--not-submitted-ticks` consecutive
+checks (default `_NOT_SUBMITTED_TICKS`, 10). A settled not-submitted root
+is final, the closing ERROR lists them (`not submitted: …`), and the exit
+status is 1.
 `report` summarizes a tests root from its files (`summarize_tests`): a
 line per run and, for a failed one, `tests-failed` (the failed tests'
 names from the junit, the output's tail) or `tests-job-failed` (no failed
@@ -776,7 +787,10 @@ which `cmake_stage` appends unquoted — one of them is
 is the selection every command shares: the config itself without a map;
 the requested names or `all`; else the selection the last `run` recorded
 (`selected_toolchains` in the effective config), else the map's only
-entry — several unrecorded ones are an error. `run` renders every
+entry — several unrecorded ones are an error. `selectors.selected_applications`
+works the same way for applications: `--application`, else the recorded
+`selected_applications` (written by `run`; validated against
+`applications`; empty for every one), else every configured application. `run` renders every
 selected toolchain's scripts before executing anything, then runs
 toolchain-major, and a failure stops only what depends on it (2026-11-20,
 `run._execute`: each script carries its lane — application, build variant,

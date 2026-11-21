@@ -19,10 +19,10 @@ import apptests
 from applications.base import Application, Stage
 from applications.registry import get_application
 from cli.run_config import ResolvedSession, RunConfig
-from cli.run_report import DEFAULT_TAIL, StageSummary, summarize_stage
+from cli.run_report import DEFAULT_TAIL, StageSummary, outcome_text, summarize_stage
 from cli.selectors import build_configs
 from cli.shell import run_bash
-from cli.stage_outcomes import StageOutcome, StageRecord
+from cli.stage_outcomes import StageOutcome, StageRecord, StageState
 from cli.stages import SCRIPT_INDEX, stage_name, tests_enabled
 from identity import harness_commit, harness_version
 from jobs import (
@@ -104,10 +104,14 @@ class SessionReport(StrictModel):
     exit_status: int | None = Field(
         default=None, description="The evaluating session's exit status, when evaluated"
     )
+    detail: str | None = Field(
+        default=None,
+        description="Why a session `watch` stopped waiting for was never submitted",
+    )
 
     def line(self) -> str:
         if self.state is SessionState.NOT_SUBMITTED:
-            return "not submitted"
+            return f"not submitted ({self.detail})" if self.detail else "not submitted"
         if self.state is SessionState.EVALUATED:
             return f"evaluated (exit {self.exit_status})"
         total = self.queued + self.running + self.done
@@ -301,7 +305,7 @@ class TestsReport(StrictModel):
 
     def line(self) -> str:
         if self.state is TestsState.NOT_SUBMITTED:
-            return "not submitted"
+            return f"not submitted ({self.detail})" if self.detail else "not submitted"
         if self.state is TestsState.EVALUATED:
             return self.detail or f"evaluated (exit {self.exit_status})"
         if self.state is TestsState.FAILED:
@@ -389,12 +393,61 @@ def evaluate_tests(watched: WatchedTests) -> TestsReport:
 
 
 def lane_script(
-    stage: Stage, application: str, toolchain: str | None, build: str | None
+    stage: Stage,
+    application: str,
+    toolchain: str | None,
+    build: str | None,
+    session: str | None = None,
 ) -> str:
     """The file name `run` gives a stage script of one lane (the key of its
-    entry in the stage record): <NN>-<stage>-<application>[-<toolchain>][-<build>].sh."""
-    name = stage_name(stage, application, toolchain, build=build)
+    entry in the stage record):
+    <NN>-<stage>-<application>[-<toolchain>][-<build>][-<session>].sh."""
+    name = stage_name(stage, application, toolchain, session, build=build)
     return f"{SCRIPT_INDEX[stage]:02d}-{name}.sh"
+
+
+def _first_not_passed(
+    record: StageRecord, scripts: Iterable[str]
+) -> StageOutcome | None:
+    for script in scripts:
+        outcome = record.outcomes.get(script)
+        if outcome is not None and outcome.state is not StageState.PASSED:
+            return outcome
+    return None
+
+
+def tests_cause(record: StageRecord, watched: WatchedTests) -> str | None:
+    """Why a test run that is not submitted never will be, from the stage
+    record: its application's source stage, or its variant's build or test
+    stage, failed or was skipped in their latest run. None when the record
+    has no such reason (the run may still be coming)."""
+    app, toolchain, build = watched.application, watched.toolchain, watched.build
+    outcome = _first_not_passed(
+        record,
+        [
+            lane_script(Stage.SOURCE, app, toolchain, None),
+            lane_script(Stage.BUILD, app, toolchain, build),
+            lane_script(Stage.TEST, app, toolchain, build),
+        ],
+    )
+    return None if outcome is None else f"{outcome.script} {outcome_text(outcome)}"
+
+
+def session_cause(record: StageRecord, watched: WatchedSession) -> str | None:
+    """The same for a session: its application's source, build or data
+    stage, or the session's own harness stage, failed or was skipped."""
+    app, toolchain = watched.application, watched.toolchain
+    outcome = _first_not_passed(
+        record,
+        [
+            *(
+                lane_script(stage, app, toolchain, None)
+                for stage in (Stage.SOURCE, Stage.BUILD, Stage.DATA)
+            ),
+            lane_script(Stage.HARNESS, app, toolchain, None, watched.session),
+        ],
+    )
+    return None if outcome is None else f"{outcome.script} {outcome_text(outcome)}"
 
 
 def configured_lanes(

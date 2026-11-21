@@ -773,7 +773,7 @@ uv run ufs-chem-assay report --only tests --toolchain gnu
 ```
 
 The effective config stays one file — the config as loaded, plus
-`selected_toolchains` — and `watch` and `report` cover the toolchains
+`selected_toolchains` (and `selected_applications`, `selected_builds`) — and `watch` and `report` cover the toolchains
 the last `run` selected (`--toolchain` narrows them), labelling each
 session and test run with its toolchain (`gnu/simple-maccity`, `tests
 cece/gnu`). Without a `toolchains:` map nothing changes: one unnamed
@@ -888,7 +888,16 @@ session's resume script once its jobs have all left the queue — one
 session at a time, so the committed files are written serially — and
 exits when every selected session is evaluated, with the sessions'
 pytest statuses as its own (`--once` reports and exits; `--session` and
-`--application` narrow it). It is safe to kill and restart: a session
+`--application` narrow it, and by default it covers the applications the
+last `run` selected, recorded as `selected_applications` in the effective
+config). A session or test run that is not submitted does not keep it
+waiting: when the stage record says why (its source, build, data or
+harness stage failed or was skipped) `watch` settles it at the first
+check, as `not submitted (02-build-cece.sh failed (exit 2))`; with
+nothing recorded it gives up after `--not-submitted-ticks` checks
+(default 10, about five minutes at a 30 s poll), as `not submitted
+(still not submitted after 10 checks)`. Either way it ends with the
+report and exit status 1, naming what was never submitted. It is safe to kill and restart: a session
 already evaluated is skipped by its ledger, a resume that died is tried
 again by the next `watch`. `tmux` is a convenience for watching, not a
 requirement. `ufs-chem-assay cancel --output-root=<session root>`

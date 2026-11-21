@@ -172,9 +172,14 @@ def selected_applications(
 ) -> list[Application]:
     """The configured applications, in the config's order, narrowed to the
     requested ones ('all' selects every configured application; tokens may be
-    space-separated); naming an unconfigured application is a ValueError."""
+    space-separated); naming an unconfigured application is a ValueError.
+    With none requested: the ones the last `run` recorded (an effective
+    config's selected_applications), else every configured application."""
     if requested is None:
-        return [get_application(name) for name in config.application_names]
+        names = config.selected_applications or config.application_names
+        return [
+            get_application(name) for name in config.application_names if name in names
+        ]
     tokens = _tokens(requested)
     if not tokens:
         raise ValueError(

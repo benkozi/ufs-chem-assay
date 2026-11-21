@@ -472,8 +472,9 @@ def test_report_clean_errors(
     )
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert _report(tmp_path / "local-root") == 1
-    messages = [r.getMessage() for r in caplog.records]
-    assert "cece     not submitted" in messages
+    messages = [r.getMessage().split() for r in caplog.records]
+    # Only cece: the run selected it, so the report covers no other application.
+    assert ["cece", "not", "submitted"] in messages
 
 
 # ── cancel ───────────────────────────────────────────────────────────────────

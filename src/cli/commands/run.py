@@ -414,7 +414,11 @@ def handler(args: argparse.Namespace) -> int:
     # and `report` read it for the sessions' and the tests' roots.
     effective = scripts_dir / CONVENTIONS.effective_config
     config.model_copy(
-        update={"selected_toolchains": toolchains, "selected_builds": selected_builds}
+        update={
+            "selected_toolchains": toolchains,
+            "selected_builds": selected_builds,
+            "selected_applications": [app.name for app in applications],
+        }
     ).to_yaml(effective)
     logger.info("wrote %s", effective)
 
