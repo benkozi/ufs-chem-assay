@@ -98,7 +98,7 @@ the tests need. CATChem is two builds of one checkout
 `-DCATCHEM_BUILD_MUSICA=OFF`, fetches nothing and is built whole on the
 compute node, tests included; `musica`, with MUSICA on, fetches at
 configure time and is built on the login node. Each has its own build
-directory (`build-compute`, `build-musica`), scripts and test job. The configure log is checked before anything is
+directory (`build-compute`, `build-musica`), scripts and test job; the test job exports `OMP_PROC_BIND=false` (its `tests.env`), which keeps Kokkos's OpenMP backend from warning in every test without pinning threads. The configure log is checked before anything is
 built: `CECE dependency Kokkos: system`, `CECE dependency ESMF: system`
 and the ArborX line for CECE, `Using system Kokkos` for CATChem, both
 packages found for the smoke project.

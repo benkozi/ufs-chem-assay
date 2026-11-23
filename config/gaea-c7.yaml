@@ -99,7 +99,11 @@ applications:  # one section per application in the run, keyed by adapter name
       ntasks: 1
       cpus: 8  # for its OpenMP Kokkos tests
       minutes: 15
-      env: {}
+      env:
+        # Kokkos's OpenMP backend warns in every test when unset. false (unpinned) silences it without
+        # pinning threads: pinning buys nothing for short tests, and parallel ctest processes would pin onto
+        # the same CPUs.
+        OMP_PROC_BIND: 'false'
     builds:  # two builds of the one checkout, each with its own build-<name> directory and test job
       compute:  # MUSICA off: nothing is fetched, so the whole build, tests included, runs on a compute node
         cmake_args:

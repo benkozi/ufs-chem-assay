@@ -1062,7 +1062,9 @@ def test_the_gaea_c7_template_builds_catchem_twice(
             1,
             8,
         )
-        assert variant.tests.env == {}  # CATChem's tests reach no network
+        # CATChem's tests reach no network; OMP_PROC_BIND set (unpinned) so
+        # Kokkos's OpenMP backend does not warn in every test.
+        assert variant.tests.env == {"OMP_PROC_BIND": "false"}
 
     run_bash = mocker.patch("cli.commands.run.run_bash")
     root = tmp_path / "root"
@@ -1102,3 +1104,6 @@ def test_the_gaea_c7_template_builds_catchem_twice(
     job = (scripts / "04-test-catchem-oneapi-compute.sbatch").read_text()
     assert "#SBATCH --clusters=c7" in job
     assert "ctest --test-dir build-compute " in job
+    for name in ("compute", "musica"):
+        job = (scripts / f"04-test-catchem-oneapi-{name}.sbatch").read_text()
+        assert "export OMP_PROC_BIND=false" in job.splitlines()
