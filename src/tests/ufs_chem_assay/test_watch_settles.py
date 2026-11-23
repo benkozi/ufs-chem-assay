@@ -57,7 +57,18 @@ def test_run_records_its_applications_and_watch_and_report_follow(
         f"--root-dir={root}",
         "--toolchain=oneapi",
     ]
-    assert main([*command, "--application=catchem", "--stage=build", "--dry-run"]) == 0
+    assert (
+        main(
+            [
+                *command,
+                "--application=catchem",
+                "--stage=build",
+                "--stage=test",
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
     effective = yaml.safe_load((root / "scripts" / "run-config.yaml").read_text())
     assert effective["selected_applications"] == ["catchem"]
     # watch covers CATChem's test runs only: CECE's was never part of the run.
@@ -140,7 +151,9 @@ def test_an_unexplained_test_run_is_given_up_after_the_limit(
     tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
     root = tmp_path / "root"
-    _run(root, mocker, {}, "--stage=build", "--dry-run")  # rendered, never run
+    _run(
+        root, mocker, {}, "--stage=build", "--stage=test", "--dry-run"
+    )  # rendered, never run
     code, lines, slept = _watch(
         root,
         mocker,
@@ -165,7 +178,7 @@ def test_a_test_run_submitted_before_the_limit_is_followed(
     tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
     root = tmp_path / "root"
-    _run(root, mocker, {}, "--stage=build", "--dry-run")
+    _run(root, mocker, {}, "--stage=build", "--stage=test", "--dry-run")
     tests_root = root / "oneapi" / "tests" / "cece"
     calls = {"n": 0}
 
@@ -212,7 +225,7 @@ def test_the_limit_must_be_positive(
     tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
     root = tmp_path / "root"
-    _run(root, mocker, {}, "--stage=build", "--dry-run")
+    _run(root, mocker, {}, "--stage=build", "--stage=test", "--dry-run")
     code, lines, _ = _watch(
         root, mocker, caplog, "--only", "tests", "--not-submitted-ticks", "0"
     )

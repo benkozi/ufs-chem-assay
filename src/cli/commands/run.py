@@ -418,6 +418,7 @@ def handler(args: argparse.Namespace) -> int:
             "selected_toolchains": toolchains,
             "selected_builds": selected_builds,
             "selected_applications": [app.name for app in applications],
+            "selected_stages": stages,
         }
     ).to_yaml(effective)
     logger.info("wrote %s", effective)

@@ -25,6 +25,7 @@ from applications.base import (
     ApplicationRunSection,
     BuildNode,
     MpiLauncher,
+    Stage,
     ToolchainSection,
 )
 from cli.override import apply_overrides
@@ -128,6 +129,15 @@ class RunConfig(StrictModel):
             "The applications the last `run` selected, recorded in the effective "
             "config so `watch` and `report` cover the same ones by default; empty "
             "means every application. Not a key to write by hand"
+        ),
+    )
+    selected_stages: list[Stage] = Field(
+        default_factory=list,
+        description=(
+            "The stages the last `run` selected, recorded in the effective "
+            "config so `watch` and `report` cover only the sessions and test "
+            "runs a run started (or the stage record or a ledger shows); empty "
+            "means every stage. Not a key to write by hand"
         ),
     )
     selected_builds: list[str] = Field(

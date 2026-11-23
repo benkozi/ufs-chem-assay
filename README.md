@@ -773,7 +773,7 @@ uv run ufs-chem-assay report --only tests --toolchain gnu
 ```
 
 The effective config stays one file — the config as loaded, plus
-`selected_toolchains` (and `selected_applications`, `selected_builds`) — and `watch` and `report` cover the toolchains
+`selected_toolchains` (and `selected_applications`, `selected_stages`, `selected_builds`) — and `watch` and `report` cover the toolchains
 the last `run` selected (`--toolchain` narrows them), labelling each
 session and test run with its toolchain (`gnu/simple-maccity`, `tests
 cece/gnu`). Without a `toolchains:` map nothing changes: one unnamed
@@ -890,7 +890,14 @@ exits when every selected session is evaluated, with the sessions'
 pytest statuses as its own (`--once` reports and exits; `--session` and
 `--application` narrow it, and by default it covers the applications the
 last `run` selected, recorded as `selected_applications` in the effective
-config). A session or test run that is not submitted does not keep it
+config). `watch` and `report` cover only what a run started: a session
+when the last `run` selected the harness or resume stage, a test run when
+it selected the test stage (`selected_stages`), or when the stage record
+holds that script from an earlier run, or the root already has a ledger.
+So a `run --stage source --stage build --stage test` reports and watches
+its test runs alone, with no driver session flagged as not submitted, and a
+later build-only run keeps the earlier test runs in view (stale, if the
+build is newer). A session or test run that is not submitted does not keep it
 waiting: when the stage record says why (its source, build, data or
 harness stage failed or was skipped) `watch` settles it at the first
 check, as `not submitted (02-build-cece.sh failed (exit 2))`; with

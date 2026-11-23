@@ -28,7 +28,9 @@ from cli.sessions import (
     configured_tests,
     lane_outcomes,
     load_effective,
+    session_started,
     stage_summaries,
+    tests_started,
 )
 from cli.stage_outcomes import read_stage_record
 from logs import get_logger
@@ -181,6 +183,8 @@ def handler(args: argparse.Namespace) -> int:
                 ],
                 tail=args.tail,
             )
+            # Only what a run started: not a session or test run whose stage
+            # no run selected or recorded (cli/sessions.*_started).
             watched_tests = (
                 []
                 if args.only == "sessions"
@@ -188,6 +192,7 @@ def handler(args: argparse.Namespace) -> int:
                     t
                     for build in builds
                     for t in configured_tests(build, applications, args.build)
+                    if tests_started(config, record, t)
                 ]
             )
         except ValueError as exc:
@@ -207,6 +212,7 @@ def handler(args: argparse.Namespace) -> int:
                 for w in configured_sessions(
                     build, applications, sessions, root_dir / "scripts"
                 )
+                if session_started(config, record, w)
             ]
         tests = [
             summarize_tests(

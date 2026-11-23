@@ -732,7 +732,17 @@ once as `SessionReport` / `TestsReport` `NOT_SUBMITTED` with that `detail`
 `watch._give_up` settles it after `--not-submitted-ticks` consecutive
 checks (default `_NOT_SUBMITTED_TICKS`, 10). A settled not-submitted root
 is final, the closing ERROR lists them (`not submitted: …`), and the exit
-status is 1.
+status is 1. Both commands cover only what a run started (since
+2026-11-23): `run` records its stages (`RunConfig.selected_stages`, empty
+for every stage, so an effective config written before covers everything),
+and `cli/sessions.session_started` / `tests_started` keep a root when the
+last run selected its stage (harness or resume; test), when the stage record
+holds its script from any run, or when its root has a ledger (`run.yaml` or
+`jobs.yaml`; `tests.yaml`). The selection covers a `watch` started beside a
+`run`, before the record has the script; the record covers a later
+build-only run, which would otherwise hide stale test runs. `watch` checks
+`harness.submit_only` only for the sessions it keeps, and a root with
+nothing kept is "nothing to watch", naming the recorded stages.
 `report` summarizes a tests root from its files (`summarize_tests`): a
 line per run and, for a failed one, `tests-failed` (the failed tests'
 names from the junit, the output's tail) or `tests-job-failed` (no failed

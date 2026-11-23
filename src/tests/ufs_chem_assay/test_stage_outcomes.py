@@ -198,8 +198,10 @@ def test_a_clean_run_reports_its_stages_without_issues(
         line.startswith("build cece/oneapi") and "passed" in line for line in lines
     )
     assert not any("[stage-" in line for line in lines)
-    # cece's test stage has not run: that is the tests' issue, not the build's.
-    assert code == 1
+    # The test stage was not part of the run, so no test run is reported as
+    # missing: a clean build is a clean report.
+    assert not any(line.startswith("tests ") for line in lines)
+    assert code == 0
 
 
 def test_a_skipped_build_is_reported_with_its_cause(

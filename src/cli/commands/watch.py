@@ -34,8 +34,10 @@ from cli.sessions import (
     read_session_ledger,
     read_tests_ledger,
     session_cause,
+    session_started,
     stage_summaries,
     tests_cause,
+    tests_started,
     tick,
     tick_tests,
 )
@@ -170,7 +172,10 @@ def handler(args: argparse.Namespace) -> int:
         # One build per selected toolchain (the config itself without any):
         # each has its own session roots, resume scripts and tests roots.
         builds = toolchain_configs(config, args.toolchain)
-        tests = (
+        # Only what a run started (cli/sessions.*_started): a session or
+        # test run whose stage no run selected or recorded is not waited for.
+        started = read_stage_record(root_dir / "scripts")
+        configured = (
             []
             if args.only == "sessions"
             else [
@@ -179,6 +184,7 @@ def handler(args: argparse.Namespace) -> int:
                 for t in configured_tests(build, applications, args.build)
             ]
         )
+        tests = [t for t in configured if tests_started(config, started, t)]
         lanes = [
             lane
             for build in builds
@@ -192,8 +198,19 @@ def handler(args: argparse.Namespace) -> int:
         watched: list[WatchedSession] = []
         if args.only != "tests":
             sessions = selected_sessions(config, args.session)
+            watched = [
+                w
+                for build in builds
+                for w in configured_sessions(
+                    build, applications, sessions, root_dir / "scripts"
+                )
+                if session_started(config, started, w)
+            ]
+            names = {w.session for w in watched}
             not_submit_only = [
-                s.name or "(nameless)" for s in sessions if not s.harness.submit_only
+                s.name or "(nameless)"
+                for s in sessions
+                if s.name in names and not s.harness.submit_only
             ]
             if not_submit_only:
                 raise ValueError(
@@ -201,13 +218,6 @@ def handler(args: argparse.Namespace) -> int:
                     "harness.submit_only (their harness stage evaluates in place)"
                     + tests_alone
                 )
-            watched = [
-                w
-                for build in builds
-                for w in configured_sessions(
-                    build, applications, sessions, root_dir / "scripts"
-                )
-            ]
             missing = [w.script for w in watched if not w.script.is_file()]
             if missing:
                 raise ValueError(
@@ -215,10 +225,16 @@ def handler(args: argparse.Namespace) -> int:
                     "`ufs-chem-assay run --dry-run` (same config, same --root-dir) "
                     "renders them" + tests_alone
                 )
-        elif not tests:
+        elif not configured:
             raise ValueError(
                 "nothing to watch: no application has tests enabled "
                 "(applications.<name>.tests.enabled)"
+            )
+        if not watched and not tests:
+            selected = ", ".join(config.selected_stages) or "every stage"
+            raise ValueError(
+                f"nothing to watch: the last run (stages {selected}) started no "
+                "session or test run, and the stage record holds none"
             )
     except ValueError as exc:
         logger.error("%s", exc)

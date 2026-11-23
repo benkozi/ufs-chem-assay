@@ -450,6 +450,63 @@ def session_cause(record: StageRecord, watched: WatchedSession) -> str | None:
     return None if outcome is None else f"{outcome.script} {outcome_text(outcome)}"
 
 
+def _started(
+    selected: list[Stage],
+    record: StageRecord,
+    stages: Iterable[Stage],
+    scripts: Iterable[str],
+    ledgers: Iterable[Path],
+) -> bool:
+    if not selected or any(stage in selected for stage in stages):
+        return True  # the last run selected it (an empty selection: every stage)
+    if any(script in record.outcomes for script in scripts):
+        return True  # some run ran or skipped it
+    return any(path.is_file() for path in ledgers)  # made some other way
+
+
+def session_started(
+    config: RunConfig, record: StageRecord, watched: WatchedSession
+) -> bool:
+    """Whether a session is part of what was run under the root: the last
+    run selected the harness or resume stage, the stage record holds the
+    session's harness or resume script from any run, or its root has a
+    run manifest or job ledger. One no run started (C7's nameless session
+    after a source, build and test run) is left out of `report` and
+    `watch`."""
+    app, toolchain, session = watched.application, watched.toolchain, watched.session
+    stages = (Stage.HARNESS, Stage.RESUME)
+    return _started(
+        config.selected_stages,
+        record,
+        stages,
+        [lane_script(stage, app, toolchain, None, session) for stage in stages],
+        [
+            watched.root / CONVENTIONS.run_manifest,
+            watched.root / CONVENTIONS.job_ledger,
+        ],
+    )
+
+
+def tests_started(
+    config: RunConfig, record: StageRecord, watched: WatchedTests
+) -> bool:
+    """The same for a test run: the test stage selected, its lane's test
+    script in the record, or a test ledger at its root. A later build-only
+    run keeps the test runs an earlier one started, so their staleness
+    shows."""
+    return _started(
+        config.selected_stages,
+        record,
+        (Stage.TEST,),
+        [
+            lane_script(
+                Stage.TEST, watched.application, watched.toolchain, watched.build
+            )
+        ],
+        [watched.root / CONVENTIONS.test_ledger],
+    )
+
+
 def configured_lanes(
     config: RunConfig, applications: list[Application], builds: list[str] | None
 ) -> list[tuple[str | None, str, str | None]]:
