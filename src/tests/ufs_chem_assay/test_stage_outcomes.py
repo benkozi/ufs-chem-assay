@@ -45,7 +45,7 @@ def _run(
     stubbed: each script writes a log as run_bash would, and the named
     scripts fail with the given exit code."""
 
-    def bash(path: Path, logs_dir: Path) -> int:
+    def bash(path: Path, logs_dir: Path, **_kw: object) -> int:
         logs_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")  # run_bash's
         (logs_dir / f"{path.stem}-{stamp}.log").write_text(

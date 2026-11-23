@@ -56,7 +56,7 @@ from cli.commands import (
     upload_output,
     watch,
 )
-from logs import configure_logging
+from logs import configure_logging, set_command
 from settings import Settings
 
 
@@ -123,6 +123,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     configure_logging(Settings().log_level)
     args = _parser().parse_args(argv)
+    set_command(args.command)  # every line from here on says which command
     return HANDLERS[Command(args.command)](args)
 
 

@@ -135,7 +135,7 @@ def test_a_session_whose_build_failed_settles_on_the_first_check(
     path = run_config_file(tmp_path, root_dir=root)
     mocker.patch(
         "cli.commands.run.run_bash",
-        side_effect=lambda p, _l: 2 if "02-build" in p.name else 0,
+        side_effect=lambda p, _l, **_kw: 2 if "02-build" in p.name else 0,
     )
     main(["run", f"--config-file={path}", "--application=cece"])
     code, lines, slept = _watch(root, mocker, caplog, "--only", "sessions")

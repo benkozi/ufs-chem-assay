@@ -1,11 +1,23 @@
 """Harness-test fixtures: paths to the checked-in maccity configs, and the
-machine-independence guard every test runs under."""
+machine-independence guards every test runs under."""
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+import logs
 from settings import CONVENTIONS
+
+
+@pytest.fixture(autouse=True)
+def session_command() -> Iterator[None]:
+    """A test that calls main() names the process's command (cli/main.py);
+    put the pytest session's back, so log lines and stage-log headers never
+    depend on the test order."""
+    before = logs.current_command()
+    yield
+    logs.set_command(before)
 
 
 @pytest.fixture(autouse=True)

@@ -291,7 +291,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         settings = Settings(**overrides)
     except ValidationError as exc:
         raise pytest.UsageError(str(exc)) from exc
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, command="pytest")
     use_cartopy_data_dir(settings.cartopy_data_dir)  # before any map is drawn
     config.stash[_SETTINGS] = settings
     submit_only = bool(config.getoption("--submit-only"))

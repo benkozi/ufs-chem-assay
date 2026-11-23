@@ -23,7 +23,9 @@ def test_run_bash_streams_logs_and_returns_the_exit_code(
     code = run_bash(script, tmp_path / "logs")
     assert code == 3
     (log,) = (tmp_path / "logs").glob("09-probe-stub-*.log")
-    assert log.read_text() == "hello\noops\n"
+    header, *output = log.read_text().splitlines()  # test_command_tags: the header
+    assert header.startswith("# ufs-chem-assay ")
+    assert output == ["hello", "oops"]
     assert "hello" in capsys.readouterr().out
 
 

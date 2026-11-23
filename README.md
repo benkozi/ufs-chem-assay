@@ -580,7 +580,13 @@ session, below; rendered by default, executed only when named). Each
 renders to `<root_dir>/scripts/<NN>-<stage>-<application>.sh` —
 `<NN>-<stage>-<application>-<session>.sh` for the harness and resume
 stages of a named session — and runs with bash where the CLI runs; logs
-land in `<root_dir>/logs/`. A run config naming several applications is a
+land in `<root_dir>/logs/`. Each log's first line says what wrote it —
+`# ufs-chem-assay run: 04-test-cece-oneapi.sh (run <ULID>, harness <version>
+<commit>, started <time>)`, or `watch` for a resume script — and every
+harness log line names its command in brackets
+(`INFO ufs-chem-assay.cli [watch]: ...`, `ufs-chem-assay.apptests
+[submit-tests]: ...` inside a test stage, `[pytest]` for the pytest
+session), so a captured `run ... && watch ...` reads apart. A run config naming several applications is a
 comprehensive run: the stages render per application in stage-major order
 (every `source`, then every `build`, ...) and the harness stage runs one
 pytest session per application, each under `<output_root>/<application>`;

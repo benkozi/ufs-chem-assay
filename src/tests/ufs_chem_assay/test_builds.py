@@ -573,7 +573,7 @@ def _run_lanes(
     failing (name -> exit code); the scripts that ran, and the status."""
     ran: list[str] = []
 
-    def bash(path: Path, _logs: Path) -> int:
+    def bash(path: Path, _logs: Path, **_kw: object) -> int:
         ran.append(path.name)
         return failing.get(path.name, 0)
 

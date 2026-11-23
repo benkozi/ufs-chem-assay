@@ -1489,6 +1489,8 @@ Harness-wide (`Settings`; `platform`, `runtime`, `launcher`, `sbatch_args`,
 | `application`    | `ASSAY_APPLICATION`   | unset → inferred from the selected suites; `--application` overrides |
 | `run_timeout_s`  | `ASSAY_RUN_TIMEOUT_S` | 300 — caps the suite's `timeout_s` when smaller |
 | `log_level`      | `ASSAY_LOG_LEVEL`     | `INFO`               |
+
+Every harness log line is `<time> <LEVEL> ufs-chem-assay.<module> [<command>]: <message>`: `cli/main.py` names the subcommand (`logs.set_command`) right after parsing and `src/tests/conftest.py` names `pytest`, and a filter on the one handler stamps it on every record of the namespace (since 2026-11-23). `cli/shell.run_bash` writes the stage log's header line before the script's output, to the log file only: `# ufs-chem-assay <command>: <script> ([run <ULID>, ]harness <version> <commit>, started <ISO time>)` — `run` passes its run ULID, `watch` (resume scripts) has none.
 | `baseline_root_dir` | `ASSAY_BASELINE_ROOT_DIR` | unset → cwd; baselines at `<root>/<ulid>/` |
 | `enable_baseline_comparisons` | `ASSAY_ENABLE_BASELINE_COMPARISONS` | `true`; false skips all comparison tests |
 | `baseline_store` | `ASSAY_BASELINE_STORE` | `s3://ufs-chem/baselines`; an `s3://bucket/prefix` (never a bucket root) or a local directory; `publish-baselines` writes `<store>/<ulid>/` |
@@ -1600,7 +1602,7 @@ All code under `src/`; the project is `uv`-managed with its own
                           #   from_yaml, overrides, derived values); the names re-exported
       override.py         # KEY:PATH=VALUE overrides applied before validation
       stages.py           # per-application / per-session stage scripts (ShellScript)
-      shell.py            # write_script, run_bash (tee to <root>/logs/)
+      shell.py            # write_script, run_bash (tee to <root>/logs/, after a header line naming the command)
       stage_outcomes.py   # the stage record (<root>/scripts/stages.yaml): StageOutcome per
                           #   script `run` executed or skipped, read by report and watch
       selectors.py        # the requested stages / sessions / applications / toolchains / build
@@ -1627,7 +1629,7 @@ All code under `src/`; the project is `uv`-managed with its own
     assertions.py         # generic post-run assertions (expectations passed in)
     combos.py             # Dimension, Combo, enumerate_combos, write_combos_csv
     comparison.py         # baseline resolution (via the adapter) + NetCDF comparison
-    logs.py               # namespace logger, level from ASSAY_LOG_LEVEL
+    logs.py               # namespace logger, level from ASSAY_LOG_LEVEL, the process's command on every line
     plotting.py           # session-end spatial plots + GIFs (cartopy/matplotlib)
     report.py             # test-report.csv: row model, outcome precedence, writer
     resolution.py         # pure path-resolution rules (suite discovery by *-suite.yaml, output roots)

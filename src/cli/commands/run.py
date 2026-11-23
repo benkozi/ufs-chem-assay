@@ -306,7 +306,7 @@ def _execute(
             )
             continue
         started = datetime.now(UTC)
-        code = run_bash(path, logs_dir)
+        code = run_bash(path, logs_dir, run_id=run_id)
         log = newest_stage_log(logs_dir, path.stem)
         state = StageState.PASSED if code == 0 else StageState.FAILED
         record_outcome(
