@@ -232,7 +232,9 @@ git -C $ROOT/ufs-chem-assay diff -- src/tests/config/cece/tests-benchmarks.csv
 ```
 
 The rows are appended to the committed per-application file; review the
-diff and commit it.
+diff and commit it. From a transfer directory (`ops/assay-transfer.sh`'s),
+`ops/assay-benchmarks.sh <transfer dir>` does this for every tests root it
+holds, on the laptop (see `ops/README.md`).
 
 ## 8. Gaea C7
 

@@ -1328,7 +1328,8 @@ tests' own durations summed).
 `ufs-chem-assay record-benchmarks --tests-root=<root_dir>/tests/<application>`
 appends those rows to the committed per-application file,
 `src/tests/config/<application>/tests-benchmarks.csv`, skipping runs
-already there. A tests root's file from before the `build` column still
+already there; `ops/assay-benchmarks.sh <transfer dir>` does it for every
+tests root of one transfer directory ([ops/](ops/README.md)). A tests root's file from before the `build` column still
 reads (the cell empty); the next evaluation there rewrites it with the
 current header, its rows kept, and says so. A regression shows in the whole-run numbers; the run's
 junit report in the tests root has the individual tests.

@@ -1,13 +1,15 @@
-# ops: the daily run and transfer
+# ops: the daily run, transfer and benchmarks
 
 Two scripts for running the harness on a machine and sending what the run
-left behind to the transfer repo, plus the environment both read.
+left behind to the transfer repo, plus the environment both read, and one
+for the laptop that records a transfer's test benchmarks.
 
 | File | What it does |
 |---|---|
 | `env.sh` | Every path and choice: the harness checkout, the root, the run config, the applications and stages, the transfer repo, `uv`'s cache and Python. Edit the values here. |
 | `assay-run.sh` | `module reset`, `git pull`, `ufs-chem-assay run`, then `ufs-chem-assay watch`, all shown and written to `<root>/logs/assay-run-<YYYYmmdd-HHMMSS>.log`. |
 | `assay-transfer.sh` | Copies the root's logs, rendered scripts and records, tests roots and CMake caches to `<transfer repo>/<name>`, adds the harness's `report`, then commits and pushes. |
+| `assay-benchmarks.sh` | On the laptop: appends the test runs of one transfer directory to this checkout's committed `src/tests/config/<application>/tests-benchmarks.csv`, and shows the diff. |
 
 ## The daily loop
 
@@ -20,6 +22,21 @@ ops/assay-transfer.sh
 
 Without the export both scripts use `env.sh`'s `ASSAY_ROOT`. Export it once
 per root, so the run and its transfer always name the same one.
+
+Then, on the laptop, once the transfer is synced:
+
+```bash
+cd /Users/bkoziol/sandbox/git-benkozi/ufs-chem-assay
+ops/assay-benchmarks.sh --dry-run ~/Library/CloudStorage/Dropbox/rlps/rsandbox/benkozi-work/transfer/assay-20261123-1405
+ops/assay-benchmarks.sh ~/Library/CloudStorage/Dropbox/rlps/rsandbox/benkozi-work/transfer/assay-20261123-1405
+```
+
+It runs `ufs-chem-assay record-benchmarks --tests-root` on each tests root
+the transfer holds (`<toolchain>/tests/<app>[/<build>]/`), skips runs
+already recorded, and ends with `git diff --stat` of the
+`tests-benchmarks.csv` files; review it and commit. It does not source
+`env.sh` (those are the run machine's values). One transfer directory per
+call; a directory `assay-transfer.sh` did not write is refused.
 
 ## Changing a value
 

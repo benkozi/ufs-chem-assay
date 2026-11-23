@@ -1537,7 +1537,9 @@ All code under `src/`; the project is `uv`-managed with its own
                           #   overridable default), assay-run.sh (module reset, git pull, run, then watch
                           #   whatever run returned; transcript <root>/logs/assay-run-<stamp>.log; exit: run's
                           #   when it failed, else watch's), assay-transfer.sh (logs, scripts, tests roots,
-                          #   CMake caches and report.txt to the transfer repo; commit and push), README.md
+                          #   CMake caches and report.txt to the transfer repo; commit and push),
+                          #   assay-benchmarks.sh (laptop: record-benchmarks --tests-root for each tests root of
+                          #   one transfer directory, then the diff; no commit, no env.sh), README.md
   config/                 # run-config templates: local.yaml (docker), ursa.yaml (native + slurm;
                           #   sessions: simple-maccity, gcafs-anthro, a commented exhaustive-maccity),
                           #   ursa-kokkos.yaml (toolchains oneapi + gnu; cece, catchem and

@@ -1,5 +1,5 @@
-"""ops/assay-run.sh and ops/assay-transfer.sh, run with bash against a
-scratch root and transfer repo, with `uv`, `git` and `module` replaced by
+"""ops/assay-run.sh, ops/assay-transfer.sh and ops/assay-benchmarks.sh, run
+with bash against a scratch root and transfer repo, with `uv`, `git` and `module` replaced by
 stubs on PATH that record their arguments (one line per call, in
 calls.log) and exit as the test tells them."""
 
@@ -13,18 +13,26 @@ from identity import HARNESS_ROOT
 
 _OPS = HARNESS_ROOT / "ops"
 
-# uv: `uv run [--no-sync] ufs-chem-assay <command> ...`. Exits with
-# STUB_<COMMAND>_EXIT (default 0); `run` writes the root's effective config
-# unless STUB_RUN_NO_CONFIG is set, as a run that got past loading does.
+# uv: `uv run [--no-sync] [--project <dir>] ufs-chem-assay <command> ...`.
+# Exits with STUB_<COMMAND>_EXIT (default 0); `run` writes the root's
+# effective config unless STUB_RUN_NO_CONFIG is set, as a run that got past
+# loading does; `record-benchmarks` fails for a --tests-root containing
+# STUB_RECORD_FAIL.
 _UV = """#!/bin/bash
 echo "uv $*" >> "$STUB_LOG"
 shift  # run
-[ "$1" = "--no-sync" ] && shift
+while [ "$1" != "ufs-chem-assay" ]; do
+  case "$1" in --project) shift ;; esac
+  shift
+done
 shift  # ufs-chem-assay
 command="$1"; shift
-root=""
+root=""; tests_root=""
 while [ $# -gt 0 ]; do
-  case "$1" in --root-dir) root="$2"; shift ;; --root-dir=*) root="${1#*=}" ;; esac
+  case "$1" in
+    --root-dir) root="$2"; shift ;; --root-dir=*) root="${1#*=}" ;;
+    --tests-root) tests_root="$2"; shift ;;
+  esac
   shift
 done
 echo "stub $command output"
@@ -33,6 +41,8 @@ case "$command" in
        exit "${STUB_RUN_EXIT:-0}" ;;
   watch) exit "${STUB_WATCH_EXIT:-0}" ;;
   report) exit "${STUB_REPORT_EXIT:-0}" ;;
+  record-benchmarks)
+    case "$tests_root" in *"${STUB_RECORD_FAIL:-//none//}"*) exit 1 ;; esac ;;
 esac
 """
 _RECORD = '#!/bin/bash\necho "{name} $*" >> "$STUB_LOG"\n'
@@ -245,3 +255,85 @@ def test_a_transfer_names_its_directory_by_the_time_by_default(
     (dst,) = Path(ops_env["ASSAY_TRANSFER_REPO"]).glob("assay-*")
     assert len(dst.name) == len("assay-20261123-1316")
     assert f"git add -f {dst.name}" in _calls(ops_env)
+
+
+# ── assay-benchmarks.sh ─────────────────────────────────────────────────────
+
+
+def _a_transfer(transfer: Path) -> None:
+    """A transfer directory as assay-transfer.sh writes it: CECE's and
+    CATChem's two variants' tests roots, and one without a ledger."""
+    _a_finished_root(transfer)  # the same tree, copied
+    for rel in ("cece", "catchem/compute", "catchem/musica"):
+        tests_root = transfer / "oneapi" / "tests" / rel
+        tests_root.mkdir(parents=True, exist_ok=True)
+        (tests_root / "tests.yaml").write_text("run_id: x\n")
+        (tests_root / "benchmarks.csv").write_text("h\nr\n")
+    lonely = transfer / "oneapi" / "tests" / "kokkos-smoke"
+    lonely.mkdir(parents=True)
+    (lonely / "benchmarks.csv").write_text("h\n")  # no tests.yaml: no test run
+
+
+def _records(env: dict[str, str]) -> list[str]:
+    return [c for c in _calls(env) if " record-benchmarks " in c]
+
+
+def test_benchmarks_are_recorded_from_each_tests_root_of_a_transfer(
+    ops_env: dict[str, str], tmp_path: Path
+) -> None:
+    transfer = tmp_path / "transfer" / "assay-20261123-1405"
+    _a_transfer(transfer)
+    done = _bash("assay-benchmarks.sh", ops_env, "--dry-run", str(transfer))
+    assert done.returncode == 0, done.stdout + done.stderr
+    tests = transfer / "oneapi" / "tests"
+    assert _records(ops_env) == [
+        f"uv run --project {HARNESS_ROOT} ufs-chem-assay record-benchmarks "
+        f"--tests-root {tests / rel} --dry-run"
+        for rel in ("catchem/compute", "catchem/musica", "cece")
+    ]
+    git = [c for c in _calls(ops_env) if c.startswith("git ")]
+    assert git == [
+        f"git -C {HARNESS_ROOT} diff --stat -- src/tests/config/*/tests-benchmarks.csv"
+    ]  # the diff to review, and no commit
+    # Without --dry-run, nothing else changes but the flag.
+    Path(ops_env["STUB_LOG"]).unlink()
+    assert _bash("assay-benchmarks.sh", ops_env, str(transfer)).returncode == 0
+    assert all(not c.endswith("--dry-run") for c in _records(ops_env))
+    assert len(_records(ops_env)) == 3
+
+
+def test_a_failing_tests_root_does_not_stop_the_others(
+    ops_env: dict[str, str], tmp_path: Path
+) -> None:
+    transfer = tmp_path / "transfer" / "assay-x"
+    _a_transfer(transfer)
+    done = _bash(
+        "assay-benchmarks.sh", ops_env, str(transfer), STUB_RECORD_FAIL="musica"
+    )
+    assert done.returncode == 1
+    assert len(_records(ops_env)) == 3
+    assert "assay-benchmarks: record-benchmarks failed for " in done.stdout
+
+
+def test_a_transfer_without_a_test_run_records_nothing(
+    ops_env: dict[str, str], tmp_path: Path
+) -> None:
+    transfer = tmp_path / "transfer" / "assay-build-only"
+    (transfer / "scripts").mkdir(parents=True)
+    (transfer / "scripts" / "run-config.yaml").write_text("root_dir: x\n")
+    done = _bash("assay-benchmarks.sh", ops_env, str(transfer))
+    assert done.returncode == 0
+    assert _records(ops_env) == []
+    assert f"assay-benchmarks: no test run in {transfer}" in done.stdout
+
+
+@pytest.mark.parametrize("args", [[], ["a", "b"], ["not-a-transfer"]])
+def test_benchmarks_take_exactly_one_transfer_directory(
+    ops_env: dict[str, str], tmp_path: Path, args: list[str]
+) -> None:
+    (tmp_path / "not-a-transfer").mkdir()  # no scripts/run-config.yaml
+    paths = [str(tmp_path / a) for a in args]
+    done = _bash("assay-benchmarks.sh", ops_env, *paths)
+    assert done.returncode == 2
+    assert "usage: ops/assay-benchmarks.sh [--dry-run] <transfer dir>" in done.stderr
+    assert _records(ops_env) == []
