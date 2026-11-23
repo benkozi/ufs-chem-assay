@@ -1001,7 +1001,12 @@ shell already suits both the harness and the driver; not Ursa, where the
 two environments conflict.
 
 The run config above assembles all of that; the same steps by hand are
-in [docs/ursa-runbook.md](docs/ursa-runbook.md). The gcafs-anthro
+in [docs/ursa-runbook.md](docs/ursa-runbook.md). For the everyday loop on
+an RDHPC machine, [ops/](ops/README.md) holds two scripts and the
+environment they share: `ops/assay-run.sh` (run, then watch, with a
+transcript in `<root>/logs`) and `ops/assay-transfer.sh` (the root's logs,
+records and report, committed to a transfer repo); edit `ops/env.sh` for
+the paths. The gcafs-anthro
 configuration is the `gcafs-anthro` session of `config/ursa.yaml` (an
 overlay with the suite, a raised timeout cap, and one task on one bound
 core with the single-thread exports and `--mem=0`; its inputs' Ursa

@@ -1533,6 +1533,11 @@ All code under `src/`; the project is `uv`-managed with its own
   docs/ursa-runbook.md    # manual native run on Ursa (what the CLI automates)
   docs/gcafs-anthro-runbook.md  # the global anthropogenic use case on top of it
   docs/kokkos-runbook.md  # config/ursa-kokkos.yaml: three applications, two toolchains, by hand
+  ops/                    # the daily loop on a machine (bash, bash 3.2-safe): env.sh (every path, each an
+                          #   overridable default), assay-run.sh (module reset, git pull, run, then watch
+                          #   whatever run returned; transcript <root>/logs/assay-run-<stamp>.log; exit: run's
+                          #   when it failed, else watch's), assay-transfer.sh (logs, scripts, tests roots,
+                          #   CMake caches and report.txt to the transfer repo; commit and push), README.md
   config/                 # run-config templates: local.yaml (docker), ursa.yaml (native + slurm;
                           #   sessions: simple-maccity, gcafs-anthro, a commented exhaustive-maccity),
                           #   ursa-kokkos.yaml (toolchains oneapi + gnu; cece, catchem and

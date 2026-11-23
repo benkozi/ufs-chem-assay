@@ -276,13 +276,19 @@ build on C7, count the `YAML::` symbols the environment's ESMF exports
 ( module reset; export esmf_ver=9.0.0b17 mapl_ver=2.69.1-esmf-9.0.0b17; module use $ROOT/ufs-chem-assay/modulefiles; module use /ncrc/proj/epic/spack-stack/c7/spack-stack-2.2.0/envs/ue-oneapi-2025.3.1/modules/Core; module load ufs_gaeac7.oneapi; L=$(dirname $ESMFMKFILE); ls $L/libesmf*; nm -DC --defined-only $L/libesmf.so 2>/dev/null | grep -c ' YAML::' )
 ```
 
+For the everyday loop, `ops/assay-run.sh` runs the source, build and
+test stages and then `watch`, with a transcript in `<root>/logs`, and
+`ops/assay-transfer.sh` sends the root's logs, records and report to the
+transfer repo; their values are in `ops/env.sh` (see `ops/README.md`).
+The same steps by hand:
+
 ```bash
 cd $ROOT/ufs-chem-assay
 C7=(--config-file=config/gaea-c7.yaml --application all)
 uv run ufs-chem-assay run "${C7[@]}" --stage source --stage build --stage test --dry-run
 uv run ufs-chem-assay run "${C7[@]}" --stage source --stage build --stage test
-uv run ufs-chem-assay watch --only tests
-uv run ufs-chem-assay report --only tests
+uv run ufs-chem-assay watch
+uv run ufs-chem-assay report
 ```
 
 To pull a newer commit of a ref into the existing clone and rebuild
