@@ -33,7 +33,7 @@ from cli.sessions import (
     tests_started,
 )
 from cli.stage_outcomes import read_stage_record
-from logs import get_logger
+from logs import as_command, get_logger, log_to_file
 from models.conventions import CONVENTIONS
 
 logger = get_logger("cli")
@@ -240,3 +240,14 @@ def handler(args: argparse.Namespace) -> int:
             yaml.safe_dump(report.model_dump(mode="json"), f, sort_keys=False)
         logger.info("wrote %s", args.write)
     return 0 if report.ok else 1
+
+
+def report_to(root_dir: Path, path: Path) -> int:
+    """`report` with its defaults over one root, under its own command tag,
+    its lines also written to `path`: what `transfer` writes as report.txt.
+    Returns report's exit status."""
+    parser = argparse.ArgumentParser(prog="report")
+    register(parser.add_subparsers(), "report")
+    args = parser.parse_args(["report", f"--root-dir={root_dir}"])
+    with as_command("report"), log_to_file(path):
+        return handler(args)

@@ -52,6 +52,17 @@ def register(subparsers: Subparsers, name: str) -> None:
             "benchmarks.csv holds one row per evaluated test run"
         ),
     )
+    roots.add_argument(
+        "--transfer",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help=(
+            "a transfer directory `ufs-chem-assay transfer` wrote: every tests "
+            "root it holds (<toolchain>/tests/<application>[/<build>] with its "
+            "ledger), recorded as --tests-root records one"
+        ),
+    )
     record.add_argument(
         "--application",
         default=None,
@@ -74,12 +85,12 @@ def register(subparsers: Subparsers, name: str) -> None:
     )
 
 
-def _record_tests(args: argparse.Namespace) -> int:
+def _record_tests(tests_root: Path, dry_run: bool) -> int:
     """A tests root's rows — one per evaluated run of the application's own
     tests — appended to the committed per-application file,
     <config dir>/<application>/tests-benchmarks.csv; runs already there are
     left alone."""
-    tests_root = args.tests_root.resolve()
+    tests_root = tests_root.resolve()
     per_root = tests_root / CONVENTIONS.benchmarks
     if not per_root.is_file():
         logger.error(
@@ -98,7 +109,7 @@ def _record_tests(args: argparse.Namespace) -> int:
     for application in sorted({row.application for row in rows}):
         mine = [row for row in rows if row.application == application]
         target = BUILTIN_CONFIG_DIR / application / CONVENTIONS.tests_benchmarks
-        if args.dry_run:
+        if dry_run:
             for row in mine:
                 logger.info(
                     "dry run: would append test run %s to %s", row.run_id, target
@@ -119,6 +130,46 @@ def _record_tests(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _record_transfer(transfer: Path, dry_run: bool) -> int:
+    """Every tests root of a transfer directory, in sorted order, each as
+    --tests-root records one; a failing root does not stop the others."""
+    transfer = transfer.resolve()
+    if not (transfer / "scripts" / CONVENTIONS.effective_config).is_file():
+        logger.error(
+            "%s is not a transfer directory (no scripts/%s): pass the directory "
+            "`ufs-chem-assay transfer` wrote",
+            transfer,
+            CONVENTIONS.effective_config,
+        )
+        return 1
+    roots = sorted(
+        ledger.parent
+        for pattern in (
+            "*/tests/*/" + CONVENTIONS.test_ledger,
+            "*/tests/*/*/" + CONVENTIONS.test_ledger,
+        )
+        for ledger in transfer.glob(pattern)
+        if (ledger.parent / CONVENTIONS.benchmarks).is_file()
+    )
+    if not roots:
+        logger.info("%s holds no test run (no tests root with a ledger)", transfer)
+        return 0
+    failed = 0
+    for root in roots:
+        logger.info("recording %s", root)
+        if _record_tests(root, dry_run) != 0:
+            failed += 1
+    if failed:
+        logger.error(
+            "record-benchmarks: %s of %s tests roots in %s failed",
+            failed,
+            len(roots),
+            transfer,
+        )
+        return 1
+    return 0
+
+
 def handler(args: argparse.Namespace) -> int:
     """Append a finished run's rows to the committed per-configuration
     files: run.yaml names the application and suites, the per-run
@@ -126,7 +177,9 @@ def handler(args: argparse.Namespace) -> int:
     <suite dir>/benchmarks.csv; rows already there are left alone. Every failure is
     one ERROR line and exit 1."""
     if args.tests_root is not None:
-        return _record_tests(args)
+        return _record_tests(args.tests_root, args.dry_run)
+    if args.transfer is not None:
+        return _record_transfer(args.transfer, args.dry_run)
     output_root = args.output_root.resolve()
     run_yaml = output_root / CONVENTIONS.run_manifest
     per_run = output_root / CONVENTIONS.benchmarks

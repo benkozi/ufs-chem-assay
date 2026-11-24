@@ -568,6 +568,36 @@ Every invocation, dry runs included, writes the effective configuration
 re-runs the same configuration with no override list, and it is the way
 to check that an override landed.
 
+**A run config may extend another, and select the run.** `extends:
+config/gaea-c7.yaml` reads that file first (a relative path is the
+harness checkout's) and merges this one over it — mappings key by key,
+scalars and lists replacing; a base may extend another. The `selected_*`
+keys (`selected_applications`, `selected_stages`, `selected_toolchains`,
+`selected_builds`) are the run's selection, each flag replacing only its
+own key, so `--application` is optional when the file selects (none
+anywhere: every application). `transfer_dir` is where `ufs-chem-assay
+transfer` sends the root. A personal file holds just those over the
+shared template, gitignored as `config/*.local.yaml`:
+
+```yaml
+extends: config/gaea-c7.yaml
+root_dir: /gpfs/f7/epic/proj-shared/<you>/sandbox/work-ufs-chem-assay
+transfer_dir: ~/l/c7-epic-proj-shared/git/<your work repo>/transfer
+selected_stages: [source, build, test]
+```
+
+The effective config is the merged result without `extends`, so passing
+it back as `--config-file` reruns that root's run. `run --watch` watches
+the root after the stages — whatever they returned — and exits with the
+stages' status when they failed, else watch's; every `run` writes its
+transcript to `<root_dir>/logs/assay-run-<YYYYmmdd-HHMMSS>.log`.
+`ufs-chem-assay transfer --config-file=<file> [--name NAME] [--dry-run]`
+copies the root's logs, rendered scripts and records, tests roots, CMake
+caches and report to `<transfer_dir>/<name>` (default
+`assay-<YYYYmmdd-HHMM>`; an existing one is refused), then runs `git pull`,
+`add -f`, `commit` and `push` in the transfer repo. The daily loop on a
+machine is in [ops/](ops/README.md).
+
 Stages (`--stage`, repeatable): `source` (clone or fast-forward the
 checkout), `build` (modules + cmake, or the application's container build
 script locally), `test` (the application's own test suite against that
@@ -1002,11 +1032,14 @@ two environments conflict.
 
 The run config above assembles all of that; the same steps by hand are
 in [docs/ursa-runbook.md](docs/ursa-runbook.md). For the everyday loop on
-an RDHPC machine, [ops/](ops/README.md) holds two scripts and the
-environment they share: `ops/assay-run.sh` (run, then watch, with a
-transcript in `<root>/logs`) and `ops/assay-transfer.sh` (the root's logs,
-records and report, committed to a transfer repo); edit `ops/env.sh` for
-the paths. The gcafs-anthro
+an RDHPC machine, one personal run config says everything about a run:
+it `extends:` the shared template and adds your `root_dir`,
+`transfer_dir` and `selected_*` keys (gitignored as `config/*.local.yaml`).
+`ops/assay-run.sh <run config>` is the bootstrap (`module reset`, `git
+pull`, then `run --watch`), and `ops/assay transfer --config-file <run
+config>` sends the root's logs, records and report to the transfer repo.
+`ops/assay` runs any harness command with uv's cache and Pythons in the
+checkout's `.uv/`, for the assay alone; see [ops/](ops/README.md). The gcafs-anthro
 configuration is the `gcafs-anthro` session of `config/ursa.yaml` (an
 overlay with the suite, a raised timeout cap, and one task on one bound
 core with the single-thread exports and `--mem=0`; its inputs' Ursa
@@ -1328,8 +1361,8 @@ tests' own durations summed).
 `ufs-chem-assay record-benchmarks --tests-root=<root_dir>/tests/<application>`
 appends those rows to the committed per-application file,
 `src/tests/config/<application>/tests-benchmarks.csv`, skipping runs
-already there; `ops/assay-benchmarks.sh <transfer dir>` does it for every
-tests root of one transfer directory ([ops/](ops/README.md)). A tests root's file from before the `build` column still
+already there; `record-benchmarks --transfer <dir>` does it for every
+tests root of one transfer directory `transfer` wrote ([ops/](ops/README.md)). A tests root's file from before the `build` column still
 reads (the cell empty); the next evaluation there rewrites it with the
 current header, its rows kept, and says so. A regression shows in the whole-run numbers; the run's
 junit report in the tests root has the individual tests.

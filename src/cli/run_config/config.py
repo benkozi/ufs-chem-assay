@@ -80,6 +80,16 @@ class RunConfig(StrictModel):
             "--root-dir > the file > the harness checkout's parent directory"
         )
     )
+    transfer_dir: Path | None = Field(
+        default=None,
+        description=(
+            "Where `ufs-chem-assay transfer` copies this root's evidence, as "
+            "<transfer_dir>/<name>, then commits and pushes it: a directory "
+            "inside a git repository; `~` is expanded. Per person, so it belongs "
+            "in a personal file that extends the shared template; unset, "
+            "`transfer` refuses"
+        ),
+    )
     # SerializeAsAny: each section dumps with its adapter's schema.
     applications: dict[str, SerializeAsAny[ApplicationRunSection]] = Field(
         description=(
@@ -118,34 +128,37 @@ class RunConfig(StrictModel):
     selected_toolchains: list[str] = Field(
         default_factory=list,
         description=(
-            "The toolchains the last `run` selected, recorded in the effective "
-            "config so `watch` and `report` cover the same ones by default; not "
-            "a key to write by hand"
+            "The toolchains this run selects (`run --toolchain` wins); empty "
+            "means every toolchain. `run` records what it ran here in the "
+            "effective config, so `watch` and `report` cover the same ones and "
+            "the effective config reruns the same run"
         ),
     )
     selected_applications: list[str] = Field(
         default_factory=list,
         description=(
-            "The applications the last `run` selected, recorded in the effective "
-            "config so `watch` and `report` cover the same ones by default; empty "
-            "means every application. Not a key to write by hand"
+            "The applications this run selects (`run --application` wins); "
+            "empty means every application. `run` records what it ran here in "
+            "the effective config, so `watch` and `report` cover the same ones "
+            "and the effective config reruns the same run"
         ),
     )
     selected_stages: list[Stage] = Field(
         default_factory=list,
         description=(
-            "The stages the last `run` selected, recorded in the effective "
-            "config so `watch` and `report` cover only the sessions and test "
-            "runs a run started (or the stage record or a ledger shows); empty "
-            "means every stage. Not a key to write by hand"
+            "The stages this run selects (`run --stage` wins); empty means "
+            "every stage but resume. `run` records what it ran here in the "
+            "effective config, so `watch` and `report` cover only the sessions "
+            "and test runs a run started (or the stage record or a ledger shows)"
         ),
     )
     selected_builds: list[str] = Field(
         default_factory=list,
         description=(
-            "The build variants the last `run` selected, recorded in the "
-            "effective config so `watch` and `report` cover the same ones by "
-            "default; empty means every variant. Not a key to write by hand"
+            "The build variants this run selects (`run --build` wins); empty "
+            "means every variant. `run` records what it ran here in the "
+            "effective config, so `watch` and `report` cover the same ones and "
+            "the effective config reruns the same run"
         ),
     )
     # The toolchain a derived config (for_toolchain) builds with; None for
@@ -314,7 +327,7 @@ class RunConfig(StrictModel):
                     raise ValueError(f"{prefix}{where}: {problems[0]}")
         return self
 
-    @field_validator("root_dir", mode="before")
+    @field_validator("root_dir", "transfer_dir", mode="before")
     @classmethod
     def _expand_root(cls, value: object) -> object:
         if isinstance(value, str | Path):
@@ -366,11 +379,9 @@ class RunConfig(StrictModel):
         the shipped templates run as-is from a checkout laid out like the
         runbook. `resolve_application` (the registry's get_application) turns
         each `applications:` key into its adapter, whose run-section model
-        validates that section."""
-        with open(path) as f:
-            loaded = yaml.safe_load(f)
-        if not isinstance(loaded, dict):
-            raise ValueError(f"run config {path} is not a mapping")
+        validates that section. A file may `extends:` another
+        (load_extended): the merged result is what the rest applies to."""
+        loaded, _ = load_extended(path)
         if platform is not None:
             loaded["platform"] = platform
         if root_dir is not None:
@@ -580,6 +591,57 @@ class RunConfig(StrictModel):
                 default_flow_style=False,
                 sort_keys=False,
             )
+
+
+EXTENDS = "extends"
+
+
+def _merged(base: dict[str, object], over: dict[str, object]) -> dict[str, object]:
+    """`over` deep-merged onto `base`: mappings key by key, anything else
+    (scalars, lists, null) replacing."""
+    merged = dict(base)
+    for key, value in over.items():
+        below = merged.get(key)
+        if isinstance(below, dict) and isinstance(value, dict):
+            merged[key] = _merged(below, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def load_extended(
+    path: Path, chain: tuple[Path, ...] = ()
+) -> tuple[dict[str, object], tuple[Path, ...]]:
+    """A run config file as one mapping, and the files read for it (this one
+    first, then each it extends). With `extends: <file>`, that file is
+    loaded first (relative paths against the harness checkout, where
+    config/ is; it may extend another in turn) and this one is merged over
+    it; the `extends` key itself is dropped, so the effective config is
+    complete without it. A cycle, a missing base or a non-mapping is a
+    ValueError naming the files."""
+    path = path.resolve()
+    if path in chain:
+        raise ValueError(
+            "run config extends cycle: " + " -> ".join(str(p) for p in (*chain, path))
+        )
+    if chain and not path.is_file():
+        raise ValueError(f"{chain[-1]}: extends {path}, which does not exist")
+    with open(path) as f:
+        loaded = yaml.safe_load(f)
+    if not isinstance(loaded, dict):
+        raise ValueError(f"run config {path} is not a mapping")
+    if EXTENDS not in loaded:
+        return loaded, (path,)
+    base = loaded.pop(EXTENDS)
+    if not isinstance(base, str) or not base.strip():
+        raise ValueError(
+            f"{EXTENDS}: {path} must name one run config file path, got {base!r}"
+        )
+    base_path = Path(base).expanduser()
+    if not base_path.is_absolute():
+        base_path = HARNESS_ROOT / base_path
+    below, files = load_extended(base_path, (*chain, path))
+    return _merged(below, loaded), (path, *files)
 
 
 def search_path_value(paths: list[Path]) -> str:

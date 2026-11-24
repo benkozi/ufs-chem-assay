@@ -14,7 +14,7 @@ from pytest_mock import MockerFixture
 
 import apptests
 from cli.main import main
-from cli.stage_outcomes import StageState, read_stage_record
+from cli.stage_outcomes import StageState, newest_stage_log, read_stage_record
 from jobs import TestProvenance
 from logs import LOGGER_NAME
 from platforms import Platform, Runtime
@@ -369,3 +369,9 @@ def test_an_unreadable_record_is_an_error_naming_it(
     code, lines = _report(root, caplog)
     assert code == 1
     assert any("not a stage record" in line for line in lines)
+
+
+def test_a_root_without_logs_has_no_stage_log(tmp_path: Path) -> None:
+    # run always creates logs/ now (its transcript); an older or hand-made
+    # root may still have none, and report reads it all the same.
+    assert newest_stage_log(tmp_path / "logs", "02-build-cece") is None

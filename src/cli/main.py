@@ -1,9 +1,11 @@
 """The harness CLI.
 
 `ufs-chem-assay run --config-file=X [--session NAME ...] [--override
-K:P=V ...]`: render the stage scripts for every configured application —
+K:P=V ...] [--watch]`: render the stage scripts for the selected
+applications (the flags, else the file's selected_* keys, else every one) —
 per session for the harness and resume stages — and run them in order
-with bash, on this node. Under the slurm runtime the harness stage's
+with bash, on this node; with --watch, then watch the root. A run config
+may `extends:` another. Under the slurm runtime the harness stage's
 pytest session submits every driver job at once and, with
 harness.submit_only, stops; the resume stage (rendered beside it,
 executed under --stage resume) evaluates the finished jobs.
@@ -33,7 +35,11 @@ pytest session would use; the run config's data stage calls it.
 [--suite-config SELECTOR] [--store s3://bucket/prefix] [--dry-run]
 [--no-suite-update]`: publish a finished run's compared combinations as
 new baselines in the store and repoint the suites at them (baselines.py;
-the pytest session's --publish-baselines does the same at session end)."""
+the pytest session's --publish-baselines does the same at session end).
+
+`ufs-chem-assay transfer --config-file=X [--name NAME] [--dry-run]`: copy
+the root's evidence and report to the config's transfer_dir, then git
+pull, add, commit and push there (cli/commands/transfer.py)."""
 
 from __future__ import annotations
 
@@ -53,6 +59,7 @@ from cli.commands import (
     report,
     run,
     submit_tests,
+    transfer,
     upload_output,
     watch,
 )
@@ -75,6 +82,7 @@ class Command(StrEnum):
     REPORT = "report"
     SUBMIT_TESTS = "submit-tests"
     EVALUATE_TESTS = "evaluate-tests"
+    TRANSFER = "transfer"
 
 
 class CommandModule(Protocol):
@@ -101,6 +109,7 @@ COMMANDS: dict[Command, CommandModule] = {
     Command.REPORT: report,
     Command.SUBMIT_TESTS: submit_tests,
     Command.EVALUATE_TESTS: evaluate_tests,
+    Command.TRANSFER: transfer,
 }
 
 

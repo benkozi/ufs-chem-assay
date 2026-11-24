@@ -3,6 +3,9 @@ the command that is logging (`run`, `watch`, `report`, ... or `pytest`) on
 every line, so a captured log says which part of the harness wrote it."""
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 
 from identity import HARNESS_NAME
 
@@ -29,6 +32,18 @@ def current_command() -> str:
     return _command
 
 
+@contextmanager
+def as_command(command: str) -> Iterator[None]:
+    """Name `command` on every line until the block ends, then the one
+    before: a command run in-process by another (`run --watch` watching)."""
+    previous = _command
+    set_command(command)
+    try:
+        yield
+    finally:
+        set_command(previous)
+
+
 class _CommandFilter(logging.Filter):
     """Stamp the process's command on every record the handler emits (a
     handler filter: it sees the records of every logger in the namespace)."""
@@ -50,3 +65,21 @@ def configure_logging(level: str, command: str | None = None) -> None:
         handler.setFormatter(logging.Formatter(_FORMAT))
         handler.addFilter(_CommandFilter())
         logger.addHandler(handler)
+
+
+@contextmanager
+def log_to_file(path: Path) -> Iterator[Path]:
+    """Also write every line of the namespace, in the terminal's format and
+    with its command, to `path` (its directory created) until the block
+    ends: a command's transcript."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(path)
+    handler.setFormatter(logging.Formatter(_FORMAT))
+    handler.addFilter(_CommandFilter())
+    logger = logging.getLogger(LOGGER_NAME)
+    logger.addHandler(handler)
+    try:
+        yield path
+    finally:
+        logger.removeHandler(handler)
+        handler.close()

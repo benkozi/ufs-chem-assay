@@ -232,9 +232,9 @@ git -C $ROOT/ufs-chem-assay diff -- src/tests/config/cece/tests-benchmarks.csv
 ```
 
 The rows are appended to the committed per-application file; review the
-diff and commit it. From a transfer directory (`ops/assay-transfer.sh`'s),
-`ops/assay-benchmarks.sh <transfer dir>` does this for every tests root it
-holds, on the laptop (see `ops/README.md`).
+diff and commit it. From a transfer directory (`ufs-chem-assay
+transfer`'s), `record-benchmarks --transfer <dir>` does this for every
+tests root it holds, on the laptop (see `ops/README.md`).
 
 ## 8. Gaea C7
 
@@ -278,10 +278,13 @@ build on C7, count the `YAML::` symbols the environment's ESMF exports
 ( module reset; export esmf_ver=9.0.0b17 mapl_ver=2.69.1-esmf-9.0.0b17; module use $ROOT/ufs-chem-assay/modulefiles; module use /ncrc/proj/epic/spack-stack/c7/spack-stack-2.2.0/envs/ue-oneapi-2025.3.1/modules/Core; module load ufs_gaeac7.oneapi; L=$(dirname $ESMFMKFILE); ls $L/libesmf*; nm -DC --defined-only $L/libesmf.so 2>/dev/null | grep -c ' YAML::' )
 ```
 
-For the everyday loop, `ops/assay-run.sh` runs the source, build and
-test stages and then `watch`, with a transcript in `<root>/logs`, and
-`ops/assay-transfer.sh` sends the root's logs, records and report to the
-transfer repo; their values are in `ops/env.sh` (see `ops/README.md`).
+For the everyday loop, a personal run config extending
+`config/gaea-c7.yaml` names the root, the selection and the transfer
+directory; `ops/assay-run.sh <run config>` runs it and then `watch`, with a
+transcript in `<root>/logs`, and `ops/assay transfer --config-file <run
+config>` sends the root's logs, records and report to the transfer repo
+(`ops/assay` keeps uv's cache and Pythons in the checkout's `.uv/`; see
+`ops/README.md` and `ops/c7-runbook.md`).
 The same steps by hand:
 
 ```bash

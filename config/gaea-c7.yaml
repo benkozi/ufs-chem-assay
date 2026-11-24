@@ -21,7 +21,8 @@
 # them: --override applications:cece:update_source=true slurm:qos=debug
 platform: gaea-c7  # optional: detected from the hostname (gaea7N) when absent; --platform wins
 # root_dir is derived: the parent of this harness checkout. Set it here, or pass --root-dir, only if your layout
-# differs.
+# differs. Per-person values (root_dir, transfer_dir, selected_stages, ...) belong in a gitignored
+# config/*.local.yaml that says `extends: config/gaea-c7.yaml` (ops/README.md).
 # toolchains: one entry per compiler suite, overlaid on every application section below. Under this map an
 # application section may not set modulefile, modulepath, module_env, toolchain_tools or clone_dir itself.
 toolchains:

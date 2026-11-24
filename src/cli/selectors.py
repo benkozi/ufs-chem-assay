@@ -9,9 +9,14 @@ from applications.registry import get_application
 from cli.run_config import ResolvedSession, RunConfig
 
 
-def selected_stages(requested: list[Stage] | None) -> list[Stage]:
-    """The requested stages in canonical order; all but resume when none
-    given — a plain `run` must not block on the evaluation it just deferred."""
+def selected_stages(
+    requested: list[Stage] | None, configured: list[Stage] | None = None
+) -> list[Stage]:
+    """The requested stages in canonical order; with none requested, the
+    config's selected_stages; with neither, all but resume — a plain `run`
+    must not block on the evaluation it just deferred."""
+    if requested is None:
+        requested = configured or None
     if requested is None:
         return [stage for stage in Stage if stage is not Stage.RESUME]
     return [stage for stage in Stage if stage in requested]
@@ -124,9 +129,10 @@ def check_builds(
 ) -> list[str]:
     """The --build names, validated against the selected applications'
     variants: every name must be one of them ('all' always is). Returns the
-    selection to record ([] for every variant)."""
+    selection to record ([] for every variant); with none requested, the
+    config's own selected_builds (validated when it loaded)."""
     if requested is None:
-        return []
+        return list(config.selected_builds)
     tokens = _tokens(requested)
     if not tokens:
         raise ValueError("--build requires at least one build name or 'all'")

@@ -65,7 +65,25 @@ the harness test package `src/tests/ufs_chem_assay/`. See
   key:path=value`, YAML-scalar values merged before validation; precedence
   override > `--platform`/`--root-dir` > file > derived defaults). Every
   invocation writes the effective configuration to
-  `<root_dir>/scripts/run-config.yaml`. Stages render per application as
+  `<root_dir>/scripts/run-config.yaml`. Since 2026-11-23 a run config may
+  `extends:` another (`cli/run_config/config.load_extended`: the named file
+  first, relative paths against the harness checkout, this one deep-merged
+  over it — mappings key by key, scalars and lists replacing; chains
+  allowed, a cycle an error; the effective config holds the merged result
+  without `extends`, so it reruns alone), carries `transfer_dir` (where
+  `ufs-chem-assay transfer` copies the root's evidence before committing
+  and pushing the transfer repo), and its `selected_*` keys are the run's
+  selection, a flag replacing only its own (`run --application` is then
+  optional and `--stage` falls back to `selected_stages`). A personal file
+  (`config/*.local.yaml`, gitignored) extends the shared template, so
+  `ops/assay-run.sh <run config>` — `module reset`, `git pull`, then
+  `run --watch` — takes one argument. `run --watch` watches the root
+  in-process after the stages (`watch.watch_root`, under the `[watch]` tag),
+  whatever they returned, the status the stages' when they failed, else
+  watch's; every `run` writes its transcript,
+  `<root_dir>/logs/assay-run-<YYYYmmdd-HHMMSS>.log` (`logs.log_to_file`),
+  opening with the host, the harness, the config chain and the library
+  paths. Stages render per application as
   `<NN>-<stage>-<application>.sh`; a run config naming several
   applications runs one pytest session per application. Since 2026-11-04
   a run config also describes several **sessions**: `sessions:` maps a
@@ -747,7 +765,9 @@ nothing kept is "nothing to watch", naming the recorded stages.
 line per run and, for a failed one, `tests-failed` (the failed tests'
 names from the junit, the output's tail) or `tests-job-failed` (no failed
 test to name). `cancel --tests-root` and `record-benchmarks --tests-root`
-are the per-root commands. Since 2026-11-20 the report also reads the
+are the per-root commands; `record-benchmarks --transfer <dir>` runs the
+latter for every tests root (with its ledger) of a transfer directory, a
+failing root not stopping the others. Since 2026-11-20 the report also reads the
 stage record (`cli/stage_outcomes`: `StageRecord` in
 `<root_dir>/scripts/stages.yaml`, script file name → `StageOutcome` —
 stage, application, toolchain, variant, session, `passed` / `failed` /
@@ -1533,13 +1553,14 @@ All code under `src/`; the project is `uv`-managed with its own
   docs/ursa-runbook.md    # manual native run on Ursa (what the CLI automates)
   docs/gcafs-anthro-runbook.md  # the global anthropogenic use case on top of it
   docs/kokkos-runbook.md  # config/ursa-kokkos.yaml: three applications, two toolchains, by hand
-  ops/                    # the daily loop on a machine (bash, bash 3.2-safe): env.sh (every path, each an
-                          #   overridable default), assay-run.sh (module reset, git pull, run, then watch
-                          #   whatever run returned; transcript <root>/logs/assay-run-<stamp>.log; exit: run's
-                          #   when it failed, else watch's), assay-transfer.sh (logs, scripts, tests roots,
-                          #   CMake caches and report.txt to the transfer repo; commit and push),
-                          #   assay-benchmarks.sh (laptop: record-benchmarks --tests-root for each tests root of
-                          #   one transfer directory, then the diff; no commit, no env.sh), README.md
+  ops/                    # bash 3.2-safe. assay <arguments>: the harness under `uv run --project`, with
+                          #   UV_CACHE_DIR and UV_PYTHON_INSTALL_DIR set to the checkout's .uv/ (gitignored)
+                          #   for that process only, so uv's directories serve the assay alone;
+                          #   assay-run.sh <run config>: the bootstrap (exactly one argument): module reset
+                          #   and git pull, which only a shell before the harness can do, then
+                          #   `assay run --watch --config-file`; README.md (a personal config/*.local.yaml
+                          #   that extends: the shared template, the loop with transfer and
+                          #   record-benchmarks --transfer), c7-runbook.md (the one file to create on C7)
   config/                 # run-config templates: local.yaml (docker), ursa.yaml (native + slurm;
                           #   sessions: simple-maccity, gcafs-anthro, a commented exhaustive-maccity),
                           #   ursa-kokkos.yaml (toolchains oneapi + gnu; cece, catchem and
@@ -1602,7 +1623,9 @@ All code under `src/`; the project is `uv`-managed with its own
                           #   + `handler(args)`: run, fetch, publish_baselines,
                           #   record_benchmarks, upload_output, download_output
                           #   (output_store.py shared by the last two), watch, cancel, report,
-                          #   submit_tests, evaluate_tests (the test stage's two calls)
+                          #   submit_tests, evaluate_tests (the test stage's two calls),
+                          #   transfer (a root's evidence and report.txt to <transfer_dir>/<name>,
+                          #   then git pull/add/commit/push there; an existing name is refused)
       run_config/         # the run config as a package: sections.py (data:, baselines:,
                           #   outputs:, harness:, slurm:, uv:), sessions.py (the overlay,
                           #   the resolved session, the overlay rule), config.py (RunConfig:

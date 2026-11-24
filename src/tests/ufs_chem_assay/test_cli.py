@@ -107,8 +107,11 @@ def test_dry_run_renders_every_script_and_executes_nothing(
     run_bash.assert_not_called()
     messages = [record.getMessage() for record in caplog.records]
     assert any("dry run" in m for m in messages)
-    # Nothing but scripts/ under the root; the effective config beside them.
-    assert sorted(p.name for p in (tmp_path / "root").iterdir()) == ["scripts"]
+    # Nothing but scripts/ under the root, the effective config beside them,
+    # and logs/ holding only run's transcript (no stage log: nothing ran).
+    assert sorted(p.name for p in (tmp_path / "root").iterdir()) == ["logs", "scripts"]
+    (transcript,) = (tmp_path / "root" / "logs").iterdir()
+    assert transcript.name.startswith("assay-run-")
     assert (tmp_path / "root" / "scripts" / "run-config.yaml").is_file()
 
 
@@ -282,7 +285,7 @@ def test_test_stage_renders_the_script_and_its_job_and_runs_after_the_build(
     assert "#SBATCH -n 4" in job
     assert "ctest --test-dir build" in job
     assert "submit-tests" in (scripts / "04-test-cece.sh").read_text()
-    assert sorted(p.name for p in (tmp_path / "root").iterdir()) == ["scripts"]
+    assert sorted(p.name for p in (tmp_path / "root").iterdir()) == ["logs", "scripts"]
 
     assert main(["run", f"--config-file={path}", "--application=cece"]) == 0
     ran = [call.args[0].name for call in run_bash.call_args_list]
@@ -607,10 +610,19 @@ def test_unconfigured_application_is_a_clean_error(
     assert "['cece']" in errors[0]
 
 
-def test_missing_application_is_a_usage_error(tmp_path: Path) -> None:
-    with pytest.raises(SystemExit) as excinfo:
-        main(["run", f"--config-file={_config(tmp_path)}", "--dry-run"])
-    assert excinfo.value.code == 2
+def test_without_application_every_configured_one_runs(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    # No --application and no selected_applications in the file: every
+    # application in the config's applications: map, as the file selects.
+    mocker.patch("cli.commands.run.run_bash")
+    path = _config(tmp_path)
+    assert main(["run", f"--config-file={path}", "--dry-run"]) == 0
+    effective = yaml.safe_load(
+        (tmp_path / "root" / "scripts" / "run-config.yaml").read_text()
+    )
+    configured = yaml.safe_load(path.read_text())["applications"]
+    assert effective["selected_applications"] == list(configured)
 
 
 def test_application_all_and_multi_selectors(

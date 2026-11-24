@@ -4,6 +4,9 @@ them in order with bash on this node."""
 from __future__ import annotations
 
 import argparse
+import os
+import socket
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,7 +15,9 @@ from ulid import ULID
 from applications.base import Application, Stage
 from applications.registry import get_application
 from cli.commands import Subparsers
+from cli.commands.watch import watch_root
 from cli.run_config import ResolvedSession, RunConfig
+from cli.run_config.config import load_extended
 from cli.selectors import (
     build_configs,
     check_builds,
@@ -29,13 +34,16 @@ from cli.stage_outcomes import (
     record_outcome,
 )
 from cli.stages import PER_SESSION, SCRIPT_INDEX, render_stage, tests_enabled
-from logs import get_logger
+from identity import harness_commit, harness_version
+from logs import get_logger, log_to_file
 from models.conventions import CONVENTIONS
 from platforms import Platform
 
 logger = get_logger("cli")
 
 _INDEX = SCRIPT_INDEX  # <NN>-<stage>-...: the fixed slots (cli/stages.py)
+# The stages that leave something for `run --watch` to wait for.
+_WAITED_FOR = frozenset({Stage.TEST, Stage.HARNESS, Stage.RESUME})
 _RESUME_NEEDS_SUBMIT_ONLY = "resume is rendered only with harness.submit_only: true"
 
 
@@ -67,12 +75,13 @@ def register(subparsers: Subparsers, name: str) -> None:
         "--application",
         action="extend",
         nargs="+",
-        required=True,
+        default=None,
         metavar="NAME",
         help=(
             "configured application(s) to run, or 'all' for every application in "
             "the config's applications: map (repeatable or space-separated, e.g. "
-            "--application cece, --application 'monetio cece', or --application all)"
+            "--application cece, --application 'monetio cece', or --application all); "
+            "default: the config's selected_applications, else every application"
         ),
     )
     run.add_argument(
@@ -123,7 +132,8 @@ def register(subparsers: Subparsers, name: str) -> None:
             f"one of {', '.join(stage.value for stage in Stage)}. test runs an "
             "application's own tests against its build, where its tests are "
             "enabled; resume (the evaluation of a submit-only session, which "
-            "`watch` runs) is rendered by default but executed only when named"
+            "`watch` runs) is rendered by default but executed only when named. "
+            "Default: the config's selected_stages, else every stage but resume"
         ),
     )
     run.add_argument(
@@ -144,6 +154,16 @@ def register(subparsers: Subparsers, name: str) -> None:
         "--dry-run",
         action="store_true",
         help="write every script under <root_dir>/scripts/ and stop: nothing executes",
+    )
+    run.add_argument(
+        "--watch",
+        action="store_true",
+        help=(
+            "after the stages — whatever they returned — watch this root as "
+            "`ufs-chem-assay watch` does with its defaults; the exit status is "
+            "the stages' when they failed, else watch's. Skipped under --dry-run "
+            "and when no test, harness or resume stage is selected"
+        ),
     )
 
 
@@ -351,6 +371,31 @@ def _refuse_driver_stages_with_builds(
 
 
 def handler(args: argparse.Namespace) -> int:
+    # The transcript, opened once the root is known, lasts until run returns.
+    with ExitStack() as transcript:
+        return _run(args, transcript)
+
+
+def _start_facts(config_file: Path) -> list[str]:
+    """What the transcript opens with: where and what ran (the file and each
+    one it extends), and the library paths the shell handed the harness
+    (after the bootstrap's module reset)."""
+    _, files = load_extended(config_file)  # it loaded once already
+    sources = [f"config {files[0]}", *(f"extends {path}" for path in files[1:])]
+    return [
+        (
+            f"assay-run on {socket.gethostname()}: harness {harness_version()} "
+            f"{harness_commit() or 'unknown'}"
+        ),
+        "; ".join(sources),
+        (
+            f"LD_LIBRARY_PATH=[{os.environ.get('LD_LIBRARY_PATH', '')}] "
+            f"PYTHONPATH=[{os.environ.get('PYTHONPATH', '')}]"
+        ),
+    ]
+
+
+def _run(args: argparse.Namespace, transcript: ExitStack) -> int:
     try:
         config = RunConfig.from_yaml(
             args.config_file,
@@ -361,7 +406,7 @@ def handler(args: argparse.Namespace) -> int:
         )
         applications = selected_applications(config, args.application)
         sessions = selected_sessions(config, args.session)
-        stages = selected_stages(args.stage)
+        stages = selected_stages(args.stage, config.selected_stages)
         # One build per selected toolchain; the config itself without any.
         builds = toolchain_configs(config, args.toolchain)
         selected_builds = check_builds(config, applications, args.build)
@@ -384,6 +429,22 @@ def handler(args: argparse.Namespace) -> int:
     toolchains = [build.toolchain for build in builds if build.toolchain is not None]
     scripts_dir = config.root_dir / "scripts"
     logs_dir = config.root_dir / "logs"
+
+    # A bad root_dir: say so instead of tracing back from mkdir.
+    try:
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.error(
+            "cannot create root_dir %s: %s (edit root_dir in the run config or pass --root-dir)",
+            config.root_dir,
+            exc.strerror,
+        )
+        return 1
+    stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")  # local, as `date`
+    transcript.enter_context(log_to_file(logs_dir / f"assay-run-{stamp}.log"))
+    for fact in _start_facts(args.config_file):
+        logger.info("%s", fact)
     logger.info(
         "platform %s / runtime %s; root %s; applications: %s; sessions: %s; stages: %s%s",
         config.platform.value,
@@ -396,17 +457,6 @@ def handler(args: argparse.Namespace) -> int:
     )
     if args.override:
         logger.info("overrides: %s", " ".join(args.override))
-
-    # A bad root_dir: say so instead of tracing back from mkdir.
-    try:
-        scripts_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        logger.error(
-            "cannot create root_dir %s: %s (edit root_dir in the run config or pass --root-dir)",
-            config.root_dir,
-            exc.strerror,
-        )
-        return 1
 
     # The effective configuration — the file plus every override, as
     # validated, and the toolchains this run selected — beside the scripts
@@ -448,6 +498,8 @@ def handler(args: argparse.Namespace) -> int:
     ]
     if args.dry_run:
         logger.info("dry run: nothing executed")
+        if args.watch:
+            logger.info("run: dry run, watch skipped")
         return 0
     # Toolchain-major: the whole stage list for one toolchain, then for the
     # next. A failure stops only what depends on it (_execute), inside its
@@ -477,4 +529,16 @@ def handler(args: argparse.Namespace) -> int:
                 toolchain,
                 ", ".join(f"{path.name} (exit {code})" for path, code in failures),
             )
-    return status
+    if not args.watch:
+        return status
+    # Watch whatever the stages returned: a failed build still leaves the
+    # other builds' test jobs submitted, and watch evaluates and reports them.
+    if not _WAITED_FOR & set(stages):
+        logger.info(
+            "run: stages exit %s, watch skipped: no test, harness or resume stage",
+            status,
+        )
+        return status
+    watch_status = watch_root(config.root_dir)
+    logger.info("run: stages exit %s, watch exit %s", status, watch_status)
+    return status or watch_status

@@ -1,70 +1,98 @@
 # ops: the daily run, transfer and benchmarks
 
-Two scripts for running the harness on a machine and sending what the run
-left behind to the transfer repo, plus the environment both read, and one
-for the laptop that records a transfer's test benchmarks.
+One run config file says everything about a run: its root, which
+applications and stages it runs, and where its transfer goes. A personal
+file `extends:` the shared template, so it holds only what is yours, and
+`config/*.local.yaml` is gitignored for it.
 
-| File | What it does |
+| What | Where |
 |---|---|
-| `env.sh` | Every path and choice: the harness checkout, the root, the run config, the applications and stages, the transfer repo, `uv`'s cache and Python. Edit the values here. |
-| `assay-run.sh` | `module reset`, `git pull`, `ufs-chem-assay run`, then `ufs-chem-assay watch`, all shown and written to `<root>/logs/assay-run-<YYYYmmdd-HHMMSS>.log`. |
-| `assay-transfer.sh` | Copies the root's logs, rendered scripts and records, tests roots and CMake caches to `<transfer repo>/<name>`, adds the harness's `report`, then commits and pushes. |
-| `assay-benchmarks.sh` | On the laptop: appends the test runs of one transfer directory to this checkout's committed `src/tests/config/<application>/tests-benchmarks.csv`, and shows the diff. |
+| `ops/assay <arguments>` | The harness (`ufs-chem-assay <arguments>`), with uv's cache and managed Pythons in this checkout's `.uv/` (gitignored) and nowhere else: set for that process only, never in your shell, so other uv projects keep their own. Use it for every harness command on a machine, from the checkout (relative paths and `.env` are read from the current directory). |
+| `ops/assay-run.sh <run config>` | The bootstrap: `module reset` and `git pull`, which only a shell can do before the harness starts, then `ops/assay run --watch --config-file <run config>`. One argument, nothing else. |
+| `ops/assay transfer --config-file <run config>` | Copies the root's logs, rendered scripts and records, tests roots, CMake caches and report to `<transfer_dir>/<name>`, then `git pull`, `add`, `commit` and `push` in the transfer repo. |
+| `ops/assay record-benchmarks --transfer <dir>` | On the laptop: appends every test run a transfer directory holds to this checkout's committed `src/tests/config/<application>/tests-benchmarks.csv`. |
+
+## Setting up (a new machine, or a new person)
+
+1. Your own checkout of the harness (`git pull`, `.venv` and your run config
+   live in it; a shared checkout changes under someone else's run).
+2. Your run config, e.g. `config/c7.local.yaml`:
+
+   ```yaml
+   # config/c7.local.yaml (gitignored): the daily C7 run
+   extends: config/gaea-c7.yaml   # relative to the checkout; chains are allowed
+   root_dir: /gpfs/f7/epic/proj-shared/<you>/sandbox/work-ufs-chem-assay
+   transfer_dir: ~/l/c7-epic-proj-shared/git/<your work repo>/transfer
+   selected_stages: [source, build, test]  # selected_applications omitted: every application
+   ```
+
+3. Nothing for uv: `ops/assay` puts its cache and Pythons in the
+   checkout's `.uv/` (on C7 the checkout is on GPFS, so `$HOME`'s small
+   quota is untouched), and they serve the assay alone. Do not export
+   `UV_CACHE_DIR` or `UV_PYTHON_INSTALL_DIR` in your profile for it: that
+   would point every uv project at them (`ops/assay` sets its own over
+   them anyway). The stage scripts call `uv run --no-sync` on the venv
+   `ops/assay` built, so they download nothing; their `UV_CACHE_DIR` is
+   the run config's `uv.cache_dir` (default `<root>/uv-cache`).
+
+Step by step on Gaea C7, with the exact files: [c7-runbook.md](c7-runbook.md).
+
+Roots must be distinct, and one root runs one `run` at a time: two runs in a
+root overwrite each other's scripts and records.
 
 ## The daily loop
 
 ```bash
 cd /gpfs/f7/epic/proj-shared/Benjamin.Koziol/git/ufs-chem-assay
-export ASSAY_ROOT=/gpfs/f7/epic/proj-shared/Benjamin.Koziol/sandbox/work-ufs-chem-assay-20261123a  # a fresh root
-ops/assay-run.sh
-ops/assay-transfer.sh
+ops/assay-run.sh config/c7.local.yaml
+ops/assay transfer --config-file config/c7.local.yaml
 ```
-
-Without the export both scripts use `env.sh`'s `ASSAY_ROOT`. Export it once
-per root, so the run and its transfer always name the same one.
 
 Then, on the laptop, once the transfer is synced:
 
 ```bash
 cd /Users/bkoziol/sandbox/git-benkozi/ufs-chem-assay
-ops/assay-benchmarks.sh --dry-run ~/Library/CloudStorage/Dropbox/rlps/rsandbox/benkozi-work/transfer/assay-20261123-1405
-ops/assay-benchmarks.sh ~/Library/CloudStorage/Dropbox/rlps/rsandbox/benkozi-work/transfer/assay-20261123-1405
+ops/assay record-benchmarks --transfer ~/Library/CloudStorage/Dropbox/rlps/rsandbox/benkozi-work/transfer/assay-20261123-1405 --dry-run
+ops/assay record-benchmarks --transfer ~/Library/CloudStorage/Dropbox/rlps/rsandbox/benkozi-work/transfer/assay-20261123-1405
 ```
 
-It runs `ufs-chem-assay record-benchmarks --tests-root` on each tests root
-the transfer holds (`<toolchain>/tests/<app>[/<build>]/`), skips runs
-already recorded, and ends with `git diff --stat` of the
-`tests-benchmarks.csv` files; review it and commit. It does not source
-`env.sh` (those are the run machine's values). One transfer directory per
-call; a directory `assay-transfer.sh` did not write is refused.
+Runs already recorded are skipped; review `git diff -- 'src/tests/config/*/tests-benchmarks.csv'` and commit.
 
-## Changing a value
+## Changing what runs
 
-Every value in `env.sh` is a default, and an exported variable wins, for one
-command or for the shell:
+The file is the run. A variation is another small file that extends yours:
 
-```bash
-ASSAY_STAGES="build test" ops/assay-run.sh               # rebuild and retest, no clone
-ASSAY_APPLICATIONS="catchem" ops/assay-run.sh --build musica
-ops/assay-transfer.sh assay-20261123-musica-retry         # name the transfer directory
+```yaml
+# config/c7-musica.local.yaml: rebuild and retest CATChem's musica build only
+extends: config/c7.local.yaml
+selected_applications: [catchem]
+selected_builds: [musica]
+selected_stages: [build, test]
 ```
 
-Arguments after `assay-run.sh` go to `ufs-chem-assay run` (`--toolchain`,
-`--build`, `--override ...`).
+A fresh root is one line: edit `root_dir`. For a one-off without the
+bootstrap (no `module reset` or `git pull`), the harness's flags are
+overrides on the file, each replacing only its own key:
+`ops/assay run --config-file config/c7.local.yaml --build musica --watch`.
 
-## What `assay-run.sh` does about failures
+`<root>/scripts/run-config.yaml`, which `run` writes, is the run merged,
+selected and complete: `ops/assay-run.sh <root>/scripts/run-config.yaml`
+reruns exactly what that root ran, and every transfer carries it.
 
-- `watch` runs whatever `run` returned: after a failed build `run` has still
-  submitted the other builds' test jobs, and `watch` evaluates and reports
+## What `run --watch` does
+
+- `watch` runs whatever the stages returned: after a failed build the other
+  builds' test jobs are still submitted, and `watch` evaluates and reports
   them.
-- `watch` is skipped when `run` wrote no `scripts/run-config.yaml` (a config
-  error) or when no stage selected leaves anything to wait for (no `test`,
-  `harness` or `resume`).
-- The last line says both: `assay-run: run exit N, watch exit M; transcript
-  <path>`. The exit status is `run`'s when it failed, else `watch`'s.
+- `watch` is skipped under `--dry-run` and when no selected stage leaves
+  anything to wait for (no `test`, `harness` or `resume`).
+- The last line says both: `run: stages exit N, watch exit M`. The exit
+  status is the stages' when they failed, else watch's.
 
-Every harness line in the transcript names its command (`[run]`, `[watch]`),
-and every stage log in `<root>/logs` starts with a header naming the command
-and the run.
+Every `run` writes its transcript, `<root>/logs/assay-run-<YYYYmmdd-HHMMSS>.log`:
+the harness's lines (`[run]`, then `[watch]`), opening with the host, the
+harness's version and commit, the config file and each one it extends, and
+`LD_LIBRARY_PATH`/`PYTHONPATH`. The stage scripts' output is in their own
+stage logs, each starting with a header naming the command and the run.
 
-Design: `design/feat/20261113-1348-build-test-kokkos/20261123-1123-scripts-to-run-post-logs.md`.
+Design: `design/feat/20261113-1348-build-test-kokkos/20261123-1550-ops-as-python.md`.

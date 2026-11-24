@@ -42,7 +42,7 @@ from cli.sessions import (
     tick_tests,
 )
 from cli.stage_outcomes import read_stage_record
-from logs import get_logger
+from logs import as_command, get_logger
 
 logger = get_logger("cli")
 
@@ -141,6 +141,16 @@ def register(subparsers: Subparsers, name: str) -> None:
         action="store_true",
         help="report every session's state once and exit 0; evaluate nothing",
     )
+
+
+def watch_root(root_dir: Path) -> int:
+    """`watch` with its defaults over one root, under its own command tag:
+    what `run --watch` calls after its stages."""
+    parser = argparse.ArgumentParser(prog="watch")
+    register(parser.add_subparsers(), "watch")
+    args = parser.parse_args(["watch", f"--root-dir={root_dir}"])
+    with as_command("watch"):
+        return handler(args)
 
 
 def _give_up(
