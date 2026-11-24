@@ -182,7 +182,7 @@ def test_build_config_applies_to_named_non_first_stream(
     )
     streams = {stream.name: stream for stream in config.cece_data.streams}
     assert streams["AUXDATA"].mapalgo is Mapalgo.nn
-    assert streams["MACCITY"].mapalgo is Mapalgo.consd  # base value untouched
+    assert streams["MACCITY"].mapalgo is Mapalgo.bilinear  # base value untouched
 
 
 def test_stream_targets_sorted_lexicographically(two_stream_config_path: Path) -> None:
@@ -363,7 +363,7 @@ def test_write_combos_csv_covers_sweep_less_combos(
     assert len(frame) == 6
     assert not frame["swept"].any()
     mapalgo = frame[(frame["target"] == "MACCITY") & (frame["field"] == "mapalgo")]
-    assert mapalgo["value"].iloc[0] == "consd"  # the base-config value
+    assert mapalgo["value"].iloc[0] == "bilinear"  # the base-config value
 
 
 def test_apply_to_a_missing_stream_is_an_error(cece_config_path: Path) -> None:

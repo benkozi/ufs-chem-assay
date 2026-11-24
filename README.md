@@ -80,7 +80,7 @@ uv run pytest --application=cece   # only this application's suites (the default
 ASSAY_RUNTIME=native uv run pytest --application=monetio  # runs monetio's default aeronet-suite.yaml natively
 uv run pytest -vs                  # show each driver's output as it runs
 uv run pytest -x                   # fail fast: stop at the first failure
-uv run pytest -k map-consd         # run a subset by combo name
+uv run pytest -k map-bilinear      # run a subset by combo name
 uv run pytest --combo-clean-root   # delete an existing output root first
 
 uv run pytest src/tests/ufs_chem_assay                  # harness only: fast, no docker
@@ -1233,7 +1233,7 @@ directory per combination:
     *.nc                         #   driver NetCDF output
 ```
 
-Test ids stay human-readable (`MACCITY.map-consd`, target-qualified;
+Test ids stay human-readable (`MACCITY.map-bilinear`, target-qualified;
 `<suite>/<combo>` in multi-suite sessions); directories are runtime ULIDs —
 minted per combo per run, time-ordered (directories list in creation order),
 never derived from content. The output root stays flat however many suites

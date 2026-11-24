@@ -96,10 +96,10 @@ def test_dry_run_generates_everything_but_never_executes(tmp_path: Path) -> None
     assert list(combos.columns)[:4] == ["run_id", "combo_id", "application", "suite"]
     assert set(combos["application"]) == {"cece"}
     combo_ids = set(combos["combo_id"])
-    assert len(combo_ids) == 3  # simple-maccity: mapalgo x 3
+    assert len(combo_ids) == 2  # simple-maccity: mapalgo x 2
     # Effective-parameter table: every sweepable dimension of every combo
     # (co: 3 fields + MACCITY: 3 fields), swept flagged, suite stamped.
-    assert len(combos) == 6 * 3
+    assert len(combos) == 6 * 2
     assert set(combos["suite"]) == {"simple-maccity"}
     swept = combos[combos["swept"]]
     assert set(zip(swept["target"], swept["field"], strict=False)) == {
@@ -132,7 +132,7 @@ def test_dry_run_generates_everything_but_never_executes(tmp_path: Path) -> None
     # Seven combo-parameterized tests per combination (execution, file count,
     # filenames, dimensions, species attributes for co, baseline comparison,
     # stats).
-    assert len(report) == 7 * 3
+    assert len(report) == 7 * 2
 
 
 def test_run_yaml_records_the_application_commit_sha(tmp_path: Path) -> None:
@@ -241,7 +241,7 @@ def test_slurm_dry_run_writes_a_job_script_per_combo(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     root = tmp_path / "combo_runs"
     combo_dirs = [p for p in root.iterdir() if p.is_dir()]
-    assert len(combo_dirs) == 3
+    assert len(combo_dirs) == 2
     for combo_dir in combo_dirs:
         script = combo_dir / f"{combo_dir.name}.sbatch"
         assert script.is_file()
@@ -295,7 +295,7 @@ def test_slurm_dry_run_without_a_checkout_writes_no_job_scripts(tmp_path: Path) 
         timeout=300,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "21 skipped" in result.stdout
+    assert "14 skipped" in result.stdout
     assert not list((tmp_path / "bt").rglob("*.sbatch"))
     manifest = yaml.safe_load(next((tmp_path / "bt").rglob("run.yaml")).read_text())
     assert manifest["runtime"] == "slurm"
@@ -339,7 +339,7 @@ def test_application_switch_selects_the_cece_default_suite(
         timeout=300,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "21 skipped" in result.stdout  # simple-maccity, the default
+    assert "14 skipped" in result.stdout  # simple-maccity, the default
     manifest = yaml.safe_load(next((tmp_path / "bt").rglob("run.yaml")).read_text())
     assert manifest["application"] == "cece"
 
@@ -479,7 +479,7 @@ def test_dry_run_with_publish_baselines_publishes_nothing(tmp_path: Path) -> Non
     result = _pytest(tmp_path, env, "--publish-baselines")
     assert result.returncode == 0, result.stdout + result.stderr
     output = result.stdout + result.stderr
-    assert "publish summary: 3 skipped" in output
+    assert "publish summary: 2 skipped" in output
     assert "aws s3 sync" not in output
     assert suite.read_text() == before
     assert not list((tmp_path / "combo_runs").rglob("baseline.yaml"))
@@ -591,6 +591,6 @@ def test_dry_run_records_baseline_states_without_syncing(tmp_path: Path) -> None
     result = _pytest(tmp_path, env)
     assert result.returncode == 0, result.stdout + result.stderr
     manifest = yaml.safe_load((tmp_path / "combo_runs" / "run.yaml").read_text())
-    assert [b["state"] for b in manifest["baselines"]] == ["would-sync"] * 3
+    assert [b["state"] for b in manifest["baselines"]] == ["would-sync"] * 2
     assert sorted(b["ulid"] for b in manifest["baselines"]) == sorted(_pinned_ulids())
     assert not (tmp_path / "baseline-root").exists()

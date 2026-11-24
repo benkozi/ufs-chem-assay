@@ -57,8 +57,8 @@ def test_checked_in_maccity_suite_pins_a_relative_tolerance() -> None:
         Path(__file__).resolve().parents[1]
         / "config/cece/maccity/simple-maccity-suite.yaml"
     )
-    assert [e.rtol for e in suite.baseline_comparisons] == [1e-15] * 3
-    assert [e.atol for e in suite.baseline_comparisons] == [0.0] * 3
+    assert [e.rtol for e in suite.baseline_comparisons] == [1e-15] * 2
+    assert [e.atol for e in suite.baseline_comparisons] == [0.0] * 2
 
 
 def test_config_path_resolves_relative_to_suite_file(suite_path: Path) -> None:
@@ -260,7 +260,6 @@ def test_run_manifest_round_trips_through_yaml(
     # is present (the base SuiteConfig type alone would drop it).
     assert dumped["suites"][0]["sweep"]["cece_data"]["streams"][0]["mapalgo"] == [
         "bilinear",
-        "consd",
         "passthrough",
     ]
     assert dumped["suites"][0]["baseline_comparisons"][0]["sweep_selector"]["cece_data"]

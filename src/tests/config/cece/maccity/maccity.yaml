@@ -24,7 +24,7 @@ cece_data:
       yearAlign: 2020
       taxmode: cycle
       tintalgo: linear
-      mapalgo: consd
+      mapalgo: bilinear  # not consd: the file has no cell bounds (ufs-community/CECE#124)
       variables:
         - file: MACCity
           model: co

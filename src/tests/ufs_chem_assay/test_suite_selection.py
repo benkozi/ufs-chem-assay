@@ -69,7 +69,7 @@ def test_multi_match_runs_every_selected_suite(tmp_path: Path) -> None:
         tmp_path,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "1461 skipped" in result.stdout
+    assert "1454 skipped" in result.stdout
 
 
 def test_application_switch_filters_the_selection(tmp_path: Path) -> None:
@@ -84,7 +84,7 @@ def test_application_switch_filters_the_selection(tmp_path: Path) -> None:
         tmp_path,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "1461 skipped" in result.stdout
+    assert "1454 skipped" in result.stdout
 
 
 def test_suite_of_an_unknown_application_is_a_usage_error(tmp_path: Path) -> None:

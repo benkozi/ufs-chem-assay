@@ -33,7 +33,6 @@ def test_maccity_pipeline_runs_all_combos_mocked(
     combos = enumerate_combos(app.dimensions(suite.sweep, base_config))
     assert [combo.name for combo in combos] == [
         "MACCITY.map-bilinear",
-        "MACCITY.map-consd",
         "MACCITY.map-passthrough",
     ]
 
@@ -106,7 +105,7 @@ def test_maccity_pipeline_runs_all_combos_mocked(
         assert suite.assertions.validate_filenames
         assert_nc_filenames(combo_dir, app.expected_output_filenames(config))
 
-    assert check_output.call_count == 3
+    assert check_output.call_count == 2
     for call in check_output.call_args_list:
         command = call.args[0]
         assert command[:3] == ["docker", "run", "--rm"]
