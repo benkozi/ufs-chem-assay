@@ -37,8 +37,8 @@ pytest session would use; the run config's data stage calls it.
 new baselines in the store and repoint the suites at them (baselines.py;
 the pytest session's --publish-baselines does the same at session end).
 
-`ufs-chem-assay transfer --config-file=X [--name NAME] [--dry-run]`: copy
-the root's evidence and report to the config's transfer_dir, then git
+`ufs-chem-assay transfer --config-file=X [--name NAME] [--dry-run]`: zip
+the root's evidence and report into <transfer_dir>/<name>.zip, then git
 pull, add, commit and push there (cli/commands/transfer.py)."""
 
 from __future__ import annotations

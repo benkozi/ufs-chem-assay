@@ -71,8 +71,8 @@ the harness test package `src/tests/ufs_chem_assay/`. See
   over it — mappings key by key, scalars and lists replacing; chains
   allowed, a cycle an error; the effective config holds the merged result
   without `extends`, so it reruns alone), carries `transfer_dir` (where
-  `ufs-chem-assay transfer` copies the root's evidence before committing
-  and pushing the transfer repo), and its `selected_*` keys are the run's
+  `ufs-chem-assay transfer` zips the root's evidence into one payload,
+  `<name>.zip`, before committing and pushing the transfer repo), and its `selected_*` keys are the run's
   selection, a flag replacing only its own (`run --application` is then
   optional and `--stage` falls back to `selected_stages`). A personal file
   (`config/*.local.yaml`, gitignored) extends the shared template, so
@@ -765,8 +765,9 @@ nothing kept is "nothing to watch", naming the recorded stages.
 line per run and, for a failed one, `tests-failed` (the failed tests'
 names from the junit, the output's tail) or `tests-job-failed` (no failed
 test to name). `cancel --tests-root` and `record-benchmarks --tests-root`
-are the per-root commands; `record-benchmarks --transfer <dir>` runs the
-latter for every tests root (with its ledger) of a transfer directory, a
+are the per-root commands; `record-benchmarks --transfer <payload>` runs the
+latter for every tests root (with its ledger) of a transfer — its zip,
+unpacked to scratch and only read, or the directory it unzips to — a
 failing root not stopping the others. Since 2026-11-20 the report also reads the
 stage record (`cli/stage_outcomes`: `StageRecord` in
 `<root_dir>/scripts/stages.yaml`, script file name → `StageOutcome` —
@@ -1624,8 +1625,10 @@ All code under `src/`; the project is `uv`-managed with its own
                           #   record_benchmarks, upload_output, download_output
                           #   (output_store.py shared by the last two), watch, cancel, report,
                           #   submit_tests, evaluate_tests (the test stage's two calls),
-                          #   transfer (a root's evidence and report.txt to <transfer_dir>/<name>,
-                          #   then git pull/add/commit/push there; an existing name is refused)
+                          #   transfer (a root's evidence and report.txt zipped into one payload,
+                          #   <transfer_dir>/<name>.zip unzipping to <name>/, written beside its name and
+                          #   renamed when complete; then git pull/add/commit/push there; an existing
+                          #   zip or directory of that name is refused)
       run_config/         # the run config as a package: sections.py (data:, baselines:,
                           #   outputs:, harness:, slurm:, uv:), sessions.py (the overlay,
                           #   the resolved session, the overlay rule), config.py (RunConfig:

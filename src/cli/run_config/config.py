@@ -83,8 +83,8 @@ class RunConfig(StrictModel):
     transfer_dir: Path | None = Field(
         default=None,
         description=(
-            "Where `ufs-chem-assay transfer` copies this root's evidence, as "
-            "<transfer_dir>/<name>, then commits and pushes it: a directory "
+            "Where `ufs-chem-assay transfer` writes this root's evidence, zipped "
+            "as <transfer_dir>/<name>.zip, then commits and pushes it: a directory "
             "inside a git repository; `~` is expanded. Per person, so it belongs "
             "in a personal file that extends the shared template; unset, "
             "`transfer` refuses"

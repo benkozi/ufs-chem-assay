@@ -9,8 +9,8 @@ file `extends:` the shared template, so it holds only what is yours, and
 |---|---|
 | `ops/assay <arguments>` | The harness (`ufs-chem-assay <arguments>`), with uv's cache and managed Pythons in this checkout's `.uv/` (gitignored) and nowhere else: set for that process only, never in your shell, so other uv projects keep their own. Use it for every harness command on a machine, from the checkout (relative paths and `.env` are read from the current directory). |
 | `ops/assay-run.sh <run config>` | The bootstrap: `module reset` and `git pull`, which only a shell can do before the harness starts, then `ops/assay run --watch --config-file <run config>`. One argument, nothing else. |
-| `ops/assay transfer --config-file <run config>` | Copies the root's logs, rendered scripts and records, tests roots, CMake caches and report to `<transfer_dir>/<name>`, then `git pull`, `add`, `commit` and `push` in the transfer repo. |
-| `ops/assay record-benchmarks --transfer <dir>` | On the laptop: appends every test run a transfer directory holds to this checkout's committed `src/tests/config/<application>/tests-benchmarks.csv`. |
+| `ops/assay transfer --config-file <run config>` | Zips the root's logs, rendered scripts and records, tests roots, CMake caches and report into one payload, `<transfer_dir>/<name>.zip` (unzipping to `<name>/`), then `git pull`, `add`, `commit` and `push` in the transfer repo. Only the zip is committed. |
+| `ops/assay record-benchmarks --transfer <payload>` | On the laptop: appends every test run a transfer holds (its `.zip`, read in place, or the directory it unzips to) to this checkout's committed `src/tests/config/<application>/tests-benchmarks.csv`. |
 
 ## Setting up (a new machine, or a new person)
 
@@ -52,8 +52,8 @@ Then, on the laptop, once the transfer is synced:
 
 ```bash
 cd /Users/bkoziol/sandbox/git-benkozi/ufs-chem-assay
-ops/assay record-benchmarks --transfer ~/Library/CloudStorage/Dropbox/rlps/rsandbox/benkozi-work/transfer/assay-20261123-1405 --dry-run
-ops/assay record-benchmarks --transfer ~/Library/CloudStorage/Dropbox/rlps/rsandbox/benkozi-work/transfer/assay-20261123-1405
+ops/assay record-benchmarks --transfer ~/Library/CloudStorage/Dropbox/rlps/rsandbox/benkozi-work/transfer/assay-<YYYYmmdd-HHMM>.zip --dry-run
+ops/assay record-benchmarks --transfer ~/Library/CloudStorage/Dropbox/rlps/rsandbox/benkozi-work/transfer/assay-<YYYYmmdd-HHMM>.zip
 ```
 
 Runs already recorded are skipped; review `git diff -- 'src/tests/config/*/tests-benchmarks.csv'` and commit.

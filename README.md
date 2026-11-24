@@ -592,10 +592,11 @@ the root after the stages — whatever they returned — and exits with the
 stages' status when they failed, else watch's; every `run` writes its
 transcript to `<root_dir>/logs/assay-run-<YYYYmmdd-HHMMSS>.log`.
 `ufs-chem-assay transfer --config-file=<file> [--name NAME] [--dry-run]`
-copies the root's logs, rendered scripts and records, tests roots, CMake
-caches and report to `<transfer_dir>/<name>` (default
-`assay-<YYYYmmdd-HHMM>`; an existing one is refused), then runs `git pull`,
-`add -f`, `commit` and `push` in the transfer repo. The daily loop on a
+zips the root's logs, rendered scripts and records, tests roots, CMake
+caches and report into one payload, `<transfer_dir>/<name>.zip`, which
+unzips to `<name>/` (default `assay-<YYYYmmdd-HHMM>`; an existing zip or
+directory of that name is refused), then runs `git pull`, `add -f`,
+`commit` and `push` in the transfer repo. The daily loop on a
 machine is in [ops/](ops/README.md).
 
 Stages (`--stage`, repeatable): `source` (clone or fast-forward the
@@ -1361,8 +1362,9 @@ tests' own durations summed).
 `ufs-chem-assay record-benchmarks --tests-root=<root_dir>/tests/<application>`
 appends those rows to the committed per-application file,
 `src/tests/config/<application>/tests-benchmarks.csv`, skipping runs
-already there; `record-benchmarks --transfer <dir>` does it for every
-tests root of one transfer directory `transfer` wrote ([ops/](ops/README.md)). A tests root's file from before the `build` column still
+already there; `record-benchmarks --transfer <payload>` does it for every
+tests root of one transfer `transfer` wrote (its `.zip`, read in place, or
+the directory it unzips to) ([ops/](ops/README.md)). A tests root's file from before the `build` column still
 reads (the cell empty); the next evaluation there rewrites it with the
 current header, its rows kept, and says so. A regression shows in the whole-run numbers; the run's
 junit report in the tests root has the individual tests.

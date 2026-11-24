@@ -1,10 +1,13 @@
 """`record-benchmarks --transfer DIR`: every tests root a transfer directory
 holds (<toolchain>/tests/<application>[/<build>] with its ledger and its
 benchmarks.csv), in sorted order, recorded as --tests-root records one — on
-the laptop, from what `transfer` copied. One root failing does not stop the
-others."""
+the laptop, from what `transfer` copied. The transfer is its zipped payload
+(<name>.zip, unzipping to <name>/) or that directory unzipped. One root
+failing does not stop the others."""
 
 import logging
+import shutil
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -129,3 +132,64 @@ def test_transfer_excludes_the_other_roots() -> None:
     with pytest.raises(SystemExit) as usage:
         main(["record-benchmarks", "--transfer=a", "--tests-root=b"])
     assert usage.value.code == 2
+
+
+def _zipped(top: Path) -> Path:
+    """The payload `transfer` writes: top's files under <top name>/."""
+    archive = top.with_suffix(".zip")
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(top.rglob("*")):
+            if path.is_file():
+                zf.write(path, f"{top.name}/{path.relative_to(top)}")
+    shutil.rmtree(top)
+    return archive
+
+
+def test_the_zipped_payload_is_read_as_its_directory(
+    transfer: Path, committed: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    archive = _zipped(transfer)
+    code, messages = _record(caplog, f"--transfer={archive}")
+    assert code == 0
+    recorded = [m for m in messages if m.startswith("recording ")]
+    assert recorded == [
+        f"recording {archive}:assay-x/oneapi/tests/catchem/compute",
+        f"recording {archive}:assay-x/oneapi/tests/catchem/musica",
+        f"recording {archive}:assay-x/oneapi/tests/cece",
+    ]
+    assert (
+        len(read_test_benchmarks_csv(committed / "catchem" / "tests-benchmarks.csv"))
+        == 2
+    )
+    assert (
+        len(read_test_benchmarks_csv(committed / "cece" / "tests-benchmarks.csv")) == 1
+    )
+    assert archive.is_file()  # read, never changed or left unpacked beside it
+    assert sorted(p.name for p in archive.parent.iterdir()) == ["assay-x.zip"]
+
+
+@pytest.mark.usefixtures("committed")
+def test_a_zip_that_is_not_one_payload_is_refused(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    archive = tmp_path / "two.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("a/scripts/run-config.yaml", "{}\n")
+        zf.writestr("b/scripts/run-config.yaml", "{}\n")
+    code, messages = _record(caplog, f"--transfer={archive}")
+    assert code == 1
+    assert messages[-1] == (
+        f"{archive} is not a transfer payload: it must hold one top directory "
+        "(it holds a, b)"
+    )
+
+
+@pytest.mark.usefixtures("committed")
+def test_a_file_that_is_not_a_zip_is_refused(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    archive = tmp_path / "broken.zip"
+    archive.write_text("not a zip\n")
+    code, messages = _record(caplog, f"--transfer={archive}")
+    assert code == 1
+    assert messages[-1] == f"{archive} is not a zip file"

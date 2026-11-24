@@ -84,9 +84,9 @@ The last line is `run: stages exit N, watch exit M`. The transcript is
 `<root>/logs/assay-run-<YYYYmmdd-HHMMSS>.log`; each stage's own output is in
 its stage log beside it.
 
-Send it to the transfer repo (copies the logs, scripts, records, tests roots,
-CMake caches and `report.txt` to `transfer/assay-<YYYYmmdd-HHMM>`, then
-pull, add, commit, push):
+Send it to the transfer repo (zips the logs, scripts, records, tests roots,
+CMake caches and `report.txt` into one payload, `transfer/assay-<YYYYmmdd-HHMM>.zip`,
+then pull, add, commit, push; only the zip is committed):
 
 ```bash
 ops/assay transfer --config-file config/c7.local.yaml
@@ -101,10 +101,10 @@ Once the transfer has synced:
 
 ```bash
 cd /Users/bkoziol/sandbox/git-benkozi/ufs-chem-assay
-ops/assay record-benchmarks --transfer ~/Library/CloudStorage/Dropbox/rlps/rsandbox/benkozi-work/transfer/assay-<YYYYmmdd-HHMM> --dry-run
+ops/assay record-benchmarks --transfer ~/Library/CloudStorage/Dropbox/rlps/rsandbox/benkozi-work/transfer/assay-<YYYYmmdd-HHMM>.zip --dry-run
 ```
 
-Drop `--dry-run` to append, then review `git diff -- 'src/tests/config/*/tests-benchmarks.csv'` and commit. (Plain `uv run ufs-chem-assay ...` works on the laptop too; `ops/assay` keeps its uv apart there as well.)
+It reads the zip in place (no need to unzip it; the unzipped `assay-<...>/` directory works too). To look at the run, `unzip assay-<YYYYmmdd-HHMM>.zip` gives `assay-<YYYYmmdd-HHMM>/`, with `report.txt` at its top. Drop `--dry-run` to append, then review `git diff -- 'src/tests/config/*/tests-benchmarks.csv'` and commit. (Plain `uv run ufs-chem-assay ...` works on the laptop too; `ops/assay` keeps its uv apart there as well.)
 
 ## Other runs
 

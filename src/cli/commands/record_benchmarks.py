@@ -4,6 +4,8 @@ to each suite's committed configuration file."""
 from __future__ import annotations
 
 import argparse
+import tempfile
+import zipfile
 from pathlib import Path
 
 import yaml
@@ -56,10 +58,11 @@ def register(subparsers: Subparsers, name: str) -> None:
         "--transfer",
         type=Path,
         default=None,
-        metavar="DIR",
+        metavar="PAYLOAD",
         help=(
-            "a transfer directory `ufs-chem-assay transfer` wrote: every tests "
-            "root it holds (<toolchain>/tests/<application>[/<build>] with its "
+            "a transfer `ufs-chem-assay transfer` wrote — its <name>.zip, read "
+            "in place, or the <name>/ directory it unzips to: every tests root "
+            "it holds (<toolchain>/tests/<application>[/<build>] with its "
             "ledger), recorded as --tests-root records one"
         ),
     )
@@ -130,15 +133,44 @@ def _record_tests(tests_root: Path, dry_run: bool) -> int:
     return 1 if failed else 0
 
 
-def _record_transfer(transfer: Path, dry_run: bool) -> int:
+def _record_payload(archive: Path, dry_run: bool) -> int:
+    """A transfer's zipped payload: unpacked into a scratch directory that is
+    removed afterwards (the archive is only read), then recorded as its
+    directory, the logged paths naming <archive>:<name>/..."""
+    archive = archive.resolve()
+    try:
+        zf = zipfile.ZipFile(archive)
+    except zipfile.BadZipFile:
+        logger.error("%s is not a zip file", archive)
+        return 1
+    with zf, tempfile.TemporaryDirectory() as scratch:
+        tops = sorted({name.split("/", 1)[0] for name in zf.namelist()})
+        if len(tops) != 1:
+            logger.error(
+                "%s is not a transfer payload: it must hold one top directory "
+                "(it holds %s)",
+                archive,
+                ", ".join(tops),
+            )
+            return 1
+        zf.extractall(scratch)  # strips absolute paths and `..`
+        return _record_transfer(
+            Path(scratch) / tops[0], dry_run, shown=f"{archive}:{tops[0]}"
+        )
+
+
+def _record_transfer(transfer: Path, dry_run: bool, shown: str | None = None) -> int:
     """Every tests root of a transfer directory, in sorted order, each as
-    --tests-root records one; a failing root does not stop the others."""
+    --tests-root records one; a failing root does not stop the others.
+    `shown` names the directory in the log in place of its path (a payload
+    unpacked to scratch)."""
     transfer = transfer.resolve()
+    label = shown or str(transfer)
     if not (transfer / "scripts" / CONVENTIONS.effective_config).is_file():
         logger.error(
-            "%s is not a transfer directory (no scripts/%s): pass the directory "
-            "`ufs-chem-assay transfer` wrote",
-            transfer,
+            "%s is not a transfer directory (no scripts/%s): pass the payload "
+            "`ufs-chem-assay transfer` wrote, or the directory it unzips to",
+            label,
             CONVENTIONS.effective_config,
         )
         return 1
@@ -152,11 +184,11 @@ def _record_transfer(transfer: Path, dry_run: bool) -> int:
         if (ledger.parent / CONVENTIONS.benchmarks).is_file()
     )
     if not roots:
-        logger.info("%s holds no test run (no tests root with a ledger)", transfer)
+        logger.info("%s holds no test run (no tests root with a ledger)", label)
         return 0
     failed = 0
     for root in roots:
-        logger.info("recording %s", root)
+        logger.info("recording %s/%s", label, root.relative_to(transfer).as_posix())
         if _record_tests(root, dry_run) != 0:
             failed += 1
     if failed:
@@ -164,7 +196,7 @@ def _record_transfer(transfer: Path, dry_run: bool) -> int:
             "record-benchmarks: %s of %s tests roots in %s failed",
             failed,
             len(roots),
-            transfer,
+            label,
         )
         return 1
     return 0
@@ -179,6 +211,8 @@ def handler(args: argparse.Namespace) -> int:
     if args.tests_root is not None:
         return _record_tests(args.tests_root, args.dry_run)
     if args.transfer is not None:
+        if args.transfer.suffix == ".zip" and args.transfer.is_file():
+            return _record_payload(args.transfer, args.dry_run)
         return _record_transfer(args.transfer, args.dry_run)
     output_root = args.output_root.resolve()
     run_yaml = output_root / CONVENTIONS.run_manifest
