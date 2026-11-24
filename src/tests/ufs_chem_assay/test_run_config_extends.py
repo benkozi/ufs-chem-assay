@@ -175,3 +175,41 @@ def test_transfer_dir_defaults_to_none_and_expands_the_home(tmp_path: Path) -> N
         {"extends": "config/gaea-c7.yaml", "transfer_dir": "~/transfer"},
     )
     assert load_run_config(daily).transfer_dir == Path.home() / "transfer"
+
+
+def test_a_missing_file_is_an_error_naming_it(tmp_path: Path) -> None:
+    # A ValueError like every other bad config, so the commands report it.
+    missing = tmp_path / "no-such.yaml"
+    with pytest.raises(ValueError, match="does not exist") as info:
+        load_run_config(missing)
+    assert not isinstance(info.value, FileNotFoundError)
+    assert str(missing) in str(info.value)
+
+
+@pytest.mark.parametrize("which", ["file", "base"])
+def test_malformed_yaml_is_an_error_naming_the_file(tmp_path: Path, which: str) -> None:
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("platform: [ursa\n")
+    path = bad
+    if which == "base":
+        path = _write(tmp_path / "daily.yaml", {"extends": str(bad)})
+    with pytest.raises(ValueError, match="is not valid YAML") as info:
+        load_run_config(path)
+    assert str(bad) in str(info.value)
+
+
+def test_a_run_config_is_yaml_1_2_like_an_override(tmp_path: Path) -> None:
+    # An unquoted `on` is the word, as it is in --override, so a string
+    # field keeps what was written (YAML 1.1 made it a boolean, which the
+    # field then refused); a boolean field still reads `no` as false.
+    daily = tmp_path / "daily.yaml"
+    daily.write_text(
+        f"extends: {TEMPLATES_DIR / 'ursa.yaml'}\n"
+        f"root_dir: {tmp_path}\n"
+        "slurm:\n  qos: on\n"
+        "harness:\n  submit_only: no\n"
+    )
+    config = load_run_config(daily)
+    assert config.slurm is not None
+    assert config.slurm.qos == "on"
+    assert config.harness.submit_only is False

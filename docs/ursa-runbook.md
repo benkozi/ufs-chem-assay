@@ -94,9 +94,6 @@ harness suite never looks at one, and a dry run records
 exported but not yet cloned) — only a real run requires the configured
 root to be a git checkout.
 
-Python 3.13 rather than 3.14: every dependency has Linux wheels for
-3.13 (cartopy included), so nothing compiles during the sync.
-
 ## 3. CECE source
 
 ```bash

@@ -114,6 +114,8 @@ class SessionReport(StrictModel):
             return f"not submitted ({self.detail})" if self.detail else "not submitted"
         if self.state is SessionState.EVALUATED:
             return f"evaluated (exit {self.exit_status})"
+        if self.state is SessionState.FAILED:
+            return f"evaluation failed (exit {self.exit_status})"
         total = self.queued + self.running + self.done
         return (
             f"{total} job(s): {self.queued} queued, {self.running} running, "
@@ -339,10 +341,25 @@ def configured_tests(
     ]
 
 
-def read_tests_ledger(watched: WatchedTests) -> TestLedger | None:
-    if not path_of_test_ledger(watched.root).is_file():
-        return None
-    return read_test_ledger(watched.root)
+def read_tests_ledgers(
+    tests: list[WatchedTests],
+) -> tuple[dict[Path, TestLedger | None], dict[Path, TestsReport]]:
+    """Each test run's ledger by root (None before a submit), and a failed
+    report for each root whose ledger is there but cannot be read: that is
+    not "not submitted", and nothing a later check would change."""
+    ledgers: dict[Path, TestLedger | None] = {}
+    unreadable: dict[Path, TestsReport] = {}
+    for watched in tests:
+        ledgers[watched.root] = None
+        if not path_of_test_ledger(watched.root).is_file():
+            continue
+        try:
+            ledgers[watched.root] = read_test_ledger(watched.root)
+        except ValueError as exc:
+            unreadable[watched.root] = TestsReport(
+                state=TestsState.FAILED, exit_status=1, detail=str(exc)
+            )
+    return ledgers, unreadable
 
 
 def _evaluated(ledger: TestLedger) -> TestsReport:

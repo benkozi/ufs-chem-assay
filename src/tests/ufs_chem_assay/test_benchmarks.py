@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import os
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,6 +36,7 @@ from benchmarks import (
 from models.conventions import CONVENTIONS
 from models.suite_config import LaunchRecord, RunManifest
 from platforms import Platform, Runtime
+from selection import BUILTIN_CONFIG_DIR
 
 _RECORDED = datetime(2026, 10, 23, 15, 0, tzinfo=UTC)
 _RUN = RunManifest(
@@ -309,6 +311,50 @@ def test_append_creates_appends_and_skips_duplicates(tmp_path: Path) -> None:
     assert repo.read_text() == after
 
 
+def test_append_writes_a_key_once_per_batch(tmp_path: Path) -> None:
+    repo = tmp_path / CONVENTIONS.benchmarks
+    first, second = _row(), _row(run_id="01JRUN2RUN2RUN2RUN2RUN2RUN")
+    result = append_benchmarks(repo, [first, first])  # the file's first rows
+    assert result == AppendResult(appended=1, skipped=1)
+    result = append_benchmarks(repo, [second, first, second])
+    assert result == AppendResult(appended=1, skipped=2)
+    assert read_benchmarks_csv(repo) == [first, second]
+
+
+def test_an_append_of_nothing_new_does_not_write(tmp_path: Path) -> None:
+    repo = tmp_path / CONVENTIONS.benchmarks
+    append_benchmarks(repo, [_row()])
+    os.utime(repo, ns=(1_000, 1_000))
+    assert append_benchmarks(repo, [_row()]) == AppendResult(appended=0, skipped=1)
+    assert repo.stat().st_mtime_ns == 1_000
+
+
+def test_rows_end_with_a_line_feed_and_existing_lines_are_left_alone(
+    tmp_path: Path,
+) -> None:
+    # One line ending for what the harness writes, on every machine; lines
+    # already in the file are appended after, never rewritten.
+    repo = tmp_path / CONVENTIONS.benchmarks
+    write_benchmarks_csv([_row()], repo)
+    assert b"\r" not in repo.read_bytes()
+    append_benchmarks(repo, [_row(run_id="01JRUN2RUN2RUN2RUN2RUN2RUN")])
+    assert b"\r" not in repo.read_bytes()
+    earlier = repo.read_bytes().replace(b"\n", b"\r\n")  # as an older harness wrote it
+    repo.write_bytes(earlier)
+    append_benchmarks(repo, [_row(run_id="01JRUN3RUN3RUN3RUN3RUN3RUN")])
+    after = repo.read_bytes()
+    assert after.startswith(earlier)
+    assert b"\r" not in after[len(earlier) :]
+    assert len(read_benchmarks_csv(repo)) == 3
+
+
+def test_no_committed_benchmarks_file_has_a_carriage_return() -> None:
+    committed = sorted(BUILTIN_CONFIG_DIR.rglob("*benchmarks.csv"))
+    assert committed
+    for path in committed:
+        assert b"\r" not in path.read_bytes(), path
+
+
 def test_append_to_a_file_without_a_trailing_newline(tmp_path: Path) -> None:
     repo = tmp_path / CONVENTIONS.benchmarks
     write_benchmarks_csv([_row()], repo)
@@ -316,6 +362,19 @@ def test_append_to_a_file_without_a_trailing_newline(tmp_path: Path) -> None:
     result = append_benchmarks(repo, [_row(run_id="01JRUN2RUN2RUN2RUN2RUN2RUN")])
     assert result.appended == 1
     assert len(read_benchmarks_csv(repo)) == 2
+
+
+def test_a_failed_reload_takes_the_file_back_to_exactly_what_it_was(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    repo = tmp_path / CONVENTIONS.benchmarks
+    write_benchmarks_csv([_row()], repo)
+    repo.write_bytes(repo.read_bytes().rstrip(b"\n"))  # no final newline either
+    original = repo.read_bytes()
+    mocker.patch("benchmarks._read_csv", side_effect=[[_row()], ValueError("bad")])
+    with pytest.raises(ValueError, match="restored"):
+        append_benchmarks(repo, [_row(run_id="01JRUN2RUN2RUN2RUN2RUN2RUN")])
+    assert repo.read_bytes() == original
 
 
 def test_append_refuses_a_foreign_header_and_restores_on_a_bad_reload(
@@ -604,7 +663,6 @@ def test_a_file_older_than_build_type_still_reads(tmp_path: Path) -> None:
 
 
 def test_the_committed_files_carry_the_current_header() -> None:
-    from selection import BUILTIN_CONFIG_DIR
 
     committed = sorted(BUILTIN_CONFIG_DIR.rglob(CONVENTIONS.benchmarks))
     assert committed  # maccity and gcafs-anthro at least

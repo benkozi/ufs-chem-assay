@@ -16,7 +16,13 @@ from pytest_mock import MockerFixture
 
 from cli.main import main
 from cli.run_report import RunReport
-from cli.sessions import PendingState, SessionState, WatchedSession, tick
+from cli.sessions import (
+    PendingState,
+    SessionReport,
+    SessionState,
+    WatchedSession,
+    tick,
+)
 from jobs import JobLedger, SubmittedJob, read_ledger, write_ledger
 from logs import LOGGER_NAME
 from models.conventions import CONVENTIONS
@@ -510,3 +516,9 @@ def test_cancel_without_a_ledger_or_live_jobs_is_a_no_op(
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert main(["cancel", f"--output-root={root}"]) == 0
     assert "no job in the queue" in caplog.records[-1].getMessage()
+
+
+def test_a_failed_evaluation_has_its_own_line() -> None:
+    # `watch` logs a final report's line on every later check.
+    report = SessionReport(state=SessionState.FAILED, exit_status=2)
+    assert report.line() == "evaluation failed (exit 2)"

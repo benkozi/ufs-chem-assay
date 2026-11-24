@@ -12,10 +12,10 @@ from pydantic import Field
 from applications.base import (
     ApplicationRunSection,
     BuildNode,
+    CMakeRunSection,
     RunConfigView,
     Stage,
     TestPlan,
-    ToolchainSection,
 )
 from cli.stages import (
     cmake_stage,
@@ -27,14 +27,16 @@ from cli.stages import (
 from platforms import Runtime
 
 # What CATChem's unit tests are built and run against.
-_DEBUG = "-DCMAKE_BUILD_TYPE=Debug"
+_BUILD_TYPE = "CMAKE_BUILD_TYPE"
+_DEBUG = f"-D{_BUILD_TYPE}=Debug"
 # With Kokkos on, the configure must have found the module environment's:
 # CATChem logs this line then, and fetches its own Kokkos otherwise.
-_KOKKOS_ON = "-DCATCHEM_ENABLE_KOKKOS=ON"
+_KOKKOS = "CATCHEM_ENABLE_KOKKOS"
+_KOKKOS_ON = f"-D{_KOKKOS}=ON"
 _KOKKOS_GATE = "Using system Kokkos"
 # MUSICA fetches its own dependencies (micm, tuv-x, MechanismConfiguration)
 # at configure time: a MUSICA build is the login node's.
-_MUSICA = "-DCATCHEM_BUILD_MUSICA"
+_MUSICA = "-DCATCHEM_BUILD_MUSICA"  # as written in cmake_args, without a value
 _MUSICA_SUBMODULE = "src/external/musica/CMakeLists.txt"
 # With this on, CATChem's NUOPC build takes an installed yaml-cpp instead of
 # its vendored, namespaced copy. It prints nothing when it finds one, and this
@@ -43,14 +45,7 @@ _SYSTEM_YAML_CPP = "-DCATCHEM_USE_SYSTEM_YAML_CPP"
 _YAML_CPP_FALLBACK = "yaml-cpp not found on system, using internal version"
 
 
-def _flag_on(cmake_args: list[str], flag: str) -> bool:
-    """Whether `flag` (-DNAME) is ON in `cmake_args`: the last definition is
-    the one CMake keeps."""
-    values = [arg.split("=", 1)[1] for arg in cmake_args if arg.startswith(f"{flag}=")]
-    return bool(values) and values[-1].upper() in {"ON", "TRUE", "YES", "1"}
-
-
-class CatchemRunSection(ApplicationRunSection):
+class CatchemRunSection(CMakeRunSection):
     cmake_args: list[str] = Field(
         default_factory=lambda: [
             _DEBUG,
@@ -63,21 +58,10 @@ class CatchemRunSection(ApplicationRunSection):
             "tests need) with Kokkos, MUSICA and NUOPC on"
         ),
     )
-    build_jobs: int = Field(default=8, gt=0, description="cmake --build --parallel N")
     targets: list[str] = Field(
         default_factory=lambda: ["all"],
         description="CMake targets to build; `all` includes CATChem's test stack",
     )
-
-    def build_flags(self) -> list[str]:
-        return list(self.cmake_args)
-
-    def toolchain_updates(self, toolchain: ToolchainSection) -> dict[str, object]:
-        # The application's configure arguments first, then the toolchain's.
-        return {
-            **super().toolchain_updates(toolchain),
-            "cmake_args": [*self.cmake_args, *toolchain.cmake_args],
-        }
 
     def runtime_problems(self, runtime: Runtime) -> list[str]:
         """CATChem's rules: no container build; Kokkos always on; MUSICA,
@@ -90,19 +74,20 @@ class CatchemRunSection(ApplicationRunSection):
                 "or slurm runtime), not the docker runtime: there is no container "
                 "build for it"
             )
-        if not _flag_on(self.cmake_args, _KOKKOS_ON.split("=")[0]):
+        if not self.cmake_on(_KOKKOS):
             problems.append(
                 f"every CATChem build needs {_KOKKOS_ON} in cmake_args: the "
                 "harness builds it against the environment's Kokkos (and MUSICA "
                 "requires it)"
             )
-        if _flag_on(self.cmake_args, _MUSICA) and self.build_node is BuildNode.COMPUTE:
+        musica = self.cmake_on(_MUSICA.removeprefix("-D"))
+        if musica and self.build_node is BuildNode.COMPUTE:
             problems.append(
                 f"{_MUSICA}=ON needs the network at configure time: build it on "
                 "the login node (build_node: login), or turn MUSICA off for a "
                 "compute-node build"
             )
-        if self.tests.enabled and _DEBUG not in self.cmake_args:
+        if self.tests.enabled and self.cmake_value(_BUILD_TYPE) != "Debug":
             problems.append(
                 f"tests.enabled requires {_DEBUG} in cmake_args (missing: {_DEBUG}): "
                 "CATChem's unit tests are built and run against a Debug build"
@@ -144,7 +129,7 @@ def _build(
 ) -> list[str]:
     build = checkout / section.build_dirname
     log = build / "configure.log"
-    system_yaml_cpp = _flag_on(section.cmake_args, _SYSTEM_YAML_CPP)
+    system_yaml_cpp = section.cmake_on(_SYSTEM_YAML_CPP.removeprefix("-D"))
     return cmake_stage(
         config,
         section,
@@ -183,7 +168,6 @@ def stage_lines(
 ) -> list[str]:
     catchem = _as_catchem(section)
     if stage is Stage.SOURCE:
-        clone = q(checkout)
         return source_lines(
             checkout,
             catchem,
@@ -191,8 +175,8 @@ def stage_lines(
             extra_checks=[
                 # An uninitialized submodule shows up much later as a confusing
                 # configure error — fail fast instead.
-                f"if [ ! -e {clone}/{_MUSICA_SUBMODULE} ]; then",
-                f'  echo "musica submodule not initialized in {clone}" >&2; exit 1',
+                f"if [ ! -e {q(checkout / _MUSICA_SUBMODULE)} ]; then",
+                f"  echo {q(f'musica submodule not initialized in {checkout}')} >&2; exit 1",
                 "fi",
             ],
         )

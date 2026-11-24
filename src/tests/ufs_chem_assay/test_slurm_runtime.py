@@ -372,6 +372,37 @@ def test_finish_driver_job_without_an_exit_code_judges_by_state(
     assert finish_driver_job(job, _slurm(slurm_poll_s=1)).job_id == "12345"
 
 
+@pytest.mark.parametrize("state", ["OUT_OF_MEMORY", "NODE_FAIL", "FAILED", "RUNNING"])
+def test_finish_driver_job_fails_a_job_that_did_not_complete_whatever_its_exit_code(
+    mocker: MockerFixture, tmp_path: Path, state: str
+) -> None:
+    # ExitCode is <status>:<signal>: a job Slurm killed (out of memory, a
+    # lost node, a signal) can carry status 0. The state is the verdict.
+    mocker.patch("runner.wait_for_job", return_value=_accounting(state, 0))
+    job = _submitted(tmp_path)
+    job.out_path.write_bytes(b"killed\n")
+    with pytest.raises(SlurmJobError) as excinfo:
+        finish_driver_job(job, _slurm(slurm_poll_s=1))
+    assert excinfo.value.returncode == 1
+    assert excinfo.value.output == b"killed\n"
+
+
+@pytest.mark.parametrize(
+    ("state", "completed"),
+    [
+        ("COMPLETED", True),
+        ("OUT_OF_MEMORY", False),
+        ("CANCELLED by 1234", False),
+        (None, False),
+    ],
+)
+def test_accounting_says_whether_the_job_completed(
+    state: str | None, completed: bool
+) -> None:
+    accounting = _accounting("x", 0).model_copy(update={"state": state})
+    assert accounting.completed is completed
+
+
 @pytest.mark.parametrize("state", ["TIMEOUT", "CANCELLED by 1234"])
 def test_finish_driver_job_timeout_and_cancelled_are_timeouts(
     mocker: MockerFixture, tmp_path: Path, state: str

@@ -17,6 +17,6 @@ if [ ! -f "$1" ]; then
   echo "assay-transfer: no run config $1" >&2
   exit 2
 fi
-config="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")" # absolute, before the cd below
-cd "$(dirname "${BASH_SOURCE[0]}")/.."                   # the harness checkout (its .env)
+config="$(cd -- "$(dirname -- "$1")" && pwd)/$(basename -- "$1")" # absolute, before the cd below
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."                      # the harness checkout (its .env)
 exec ops/assay transfer --config-file "$config"

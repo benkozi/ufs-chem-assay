@@ -68,7 +68,10 @@ less $ROOT/scripts/02-build-cece-oneapi.sh $ROOT/scripts/04-test-cece-gnu.sbatch
 A dry run writes every script of every toolchain and executes nothing.
 Per toolchain there is a source script for CECE and CATChem, a build
 script for all three, and a test script with its job script
-(`04-test-<application>-<toolchain>.sbatch`) for all three.
+(`04-test-<application>-<toolchain>.sbatch`) for all three. CATChem's two
+builds each get their own, the variant last:
+`02-build-catchem-<toolchain>-compute.sh`,
+`04-test-catchem-<toolchain>-musica.sbatch`.
 
 ## 3. Run, watch, report
 
@@ -83,7 +86,7 @@ then for `gnu`. A failed stage stops only what depends on it — a failed
 build skips its own tests, a failed clone the rest of that application —
 and everything else still runs, so the test jobs of the builds that
 succeeded are submitted; `run` ends with one line per toolchain
-(`oneapi: ok`, `gnu: failed at 02-build-catchem-gnu.sh (exit 1)`) and
+(`oneapi: ok`, `gnu: failed at 02-build-catchem-gnu-musica.sh (exit 1)`) and
 the first failure's exit status. `--toolchain gnu` runs one of them;
 `--application cece` one application; `--stage test` one stage, against
 the build that is already there.

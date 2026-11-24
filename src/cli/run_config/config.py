@@ -46,6 +46,7 @@ from cli.run_config.sessions import (
 from identity import HARNESS_ROOT
 from models.base import StrictModel
 from models.conventions import CONVENTIONS
+from models.strict_yaml import load_yaml
 from platforms import (
     ModuleInit,
     Platform,
@@ -325,6 +326,27 @@ class RunConfig(StrictModel):
                 problems = section.runtime_problems(self.runtime)
                 if problems:
                     raise ValueError(f"{prefix}{where}: {problems[0]}")
+        return self
+
+    @model_validator(mode="after")
+    def _the_slurm_runtime_has_its_section(self) -> RunConfig:
+        # Every job script (a driver's, a test run's) is rendered from the
+        # slurm: section; every field of it has a default.
+        needs = [("", self.runtime)]
+        needs += [
+            (
+                "" if session.name is None else f"sessions.{session.name}: ",
+                session.harness.effective_runtime(self.runtime),
+            )
+            for session in self.resolved_sessions()
+        ]
+        for where, runtime in needs:
+            if runtime is Runtime.SLURM and self.slurm is None:
+                raise ValueError(
+                    f"{where}the slurm runtime needs a slurm: section (the "
+                    "account, QOS and partition of its jobs); `slurm: {}` takes "
+                    "every default"
+                )
         return self
 
     @field_validator("root_dir", "transfer_dir", mode="before")
@@ -617,17 +639,22 @@ def load_extended(
     loaded first (relative paths against the harness checkout, where
     config/ is; it may extend another in turn) and this one is merged over
     it; the `extends` key itself is dropped, so the effective config is
-    complete without it. A cycle, a missing base or a non-mapping is a
-    ValueError naming the files."""
+    complete without it. A cycle, a missing file, text that is not YAML or
+    not a mapping is a ValueError naming the files."""
     path = path.resolve()
     if path in chain:
         raise ValueError(
             "run config extends cycle: " + " -> ".join(str(p) for p in (*chain, path))
         )
-    if chain and not path.is_file():
-        raise ValueError(f"{chain[-1]}: extends {path}, which does not exist")
-    with open(path) as f:
-        loaded = yaml.safe_load(f)
+    if not path.is_file():
+        if chain:
+            raise ValueError(f"{chain[-1]}: extends {path}, which does not exist")
+        raise ValueError(f"run config {path} does not exist")
+    try:
+        # YAML 1.2 booleans, as --override values are read (cli/override).
+        loaded = load_yaml(path.read_text())
+    except yaml.YAMLError as exc:
+        raise ValueError(f"run config {path} is not valid YAML ({exc})") from exc
     if not isinstance(loaded, dict):
         raise ValueError(f"run config {path} is not a mapping")
     if EXTENDS not in loaded:

@@ -596,3 +596,23 @@ def test_a_variants_run_records_the_variant(tmp_path: Path) -> None:
     )
     assert started.build == "compute"
     assert _submit(tmp_path / "plain").build is None
+
+
+@pytest.mark.parametrize("time", ["NaN", "inf", "-0.5", "soon"])
+def test_a_test_without_a_usable_duration_is_still_counted(
+    tmp_path: Path, time: str
+) -> None:
+    # float() takes NaN, inf and a negative number: none is a duration, and
+    # one of them must not cost the run its counts.
+    report = tmp_path / "junit.xml"
+    report.write_text(
+        "<testsuite>"
+        f'<testcase name="a" time="{time}"/>'
+        '<testcase name="b" time="1.5"/>'
+        '<testcase name="c" time="0.5"><failure message=""/></testcase>'
+        "</testsuite>"
+    )
+    counts, failed = parse_junit(report)
+    assert (counts.total, counts.passed, counts.failed) == (3, 2, 1)
+    assert counts.ctest_s == 2.0
+    assert failed == ["c"]

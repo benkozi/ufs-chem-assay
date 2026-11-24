@@ -32,7 +32,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from models.base import StrictModel
 from platforms import ModuleInit, Runtime
-from settings import parse_env_pairs
+from settings import SHELL_NAME, parse_env_pairs
 
 if TYPE_CHECKING:
     from combos import Combo, Dimension, ParameterRow
@@ -71,9 +71,6 @@ class BuildNode(StrEnum):
     COMPUTE = "compute"  # behind srun: the offline compile probe
 
 
-_SHELL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-
-
 def _as_exports(value: object, key: str) -> object:
     """A run-config mapping rendered as `export NAME=value` lines: the names
     must be shell identifiers, and a YAML number (kokkos_ver: 4.5,
@@ -82,7 +79,7 @@ def _as_exports(value: object, key: str) -> object:
         return value
     exports: dict[object, object] = {}
     for name, item in value.items():
-        if not isinstance(name, str) or not _SHELL_NAME.fullmatch(name):
+        if not isinstance(name, str) or not SHELL_NAME.fullmatch(name):
             raise ValueError(
                 f"{key}: {name!r} is not a shell variable name "
                 "(letters, digits and underscores, not starting with a digit)"
@@ -701,6 +698,45 @@ class ApplicationRunSection(StrictModel):
         adapter's section overrides it."""
         _ = runtime
         return []
+
+
+_CMAKE_ON = frozenset({"ON", "TRUE", "YES", "Y", "1"})
+
+
+class CMakeRunSection(ApplicationRunSection):
+    """The section of an application built with CMake: its configure
+    arguments and build parallelism, the toolchain's arguments after its
+    own, and what CMake makes of the arguments — the last definition of a
+    name is the one it keeps."""
+
+    cmake_args: list[str] = Field(
+        default_factory=list, description="cmake configure arguments"
+    )
+    build_jobs: int = Field(default=8, gt=0, description="cmake --build --parallel N")
+
+    def build_flags(self) -> list[str]:
+        return list(self.cmake_args)
+
+    def toolchain_updates(self, toolchain: ToolchainSection) -> dict[str, object]:
+        # The application's configure arguments first, then the toolchain's.
+        return {
+            **super().toolchain_updates(toolchain),
+            "cmake_args": [*self.cmake_args, *toolchain.cmake_args],
+        }
+
+    def cmake_value(self, name: str) -> str | None:
+        """The value CMake keeps for cache variable `name`: that of the last
+        `-D<name>[:<type>]=<value>` in cmake_args; None when none sets it."""
+        value: str | None = None
+        for arg in self.cmake_args:
+            definition, sep, given = arg.partition("=")
+            if sep and definition.partition(":")[0] == f"-D{name}":
+                value = given
+        return value
+
+    def cmake_on(self, name: str) -> bool:
+        """Whether CMake reads `name` as true (ON, TRUE, YES, Y, 1; any case)."""
+        return (self.cmake_value(name) or "").upper() in _CMAKE_ON
 
 
 class Application(ABC):

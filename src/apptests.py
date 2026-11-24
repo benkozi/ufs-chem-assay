@@ -18,6 +18,7 @@ rows are every evaluated one. `ufs-chem-assay submit-tests`, `evaluate-tests`,
 from __future__ import annotations
 
 import contextlib
+import math
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -98,7 +99,9 @@ def parse_junit(path: Path) -> tuple[TestCounts, list[str]]:
             passed += 1
         # A report without a usable duration for a test still counts it.
         with contextlib.suppress(ValueError):
-            seconds += float(case.get("time", "0"))
+            elapsed = float(case.get("time", "0"))
+            if math.isfinite(elapsed) and elapsed >= 0:
+                seconds += elapsed
     counts = TestCounts(
         total=passed + skipped + len(failed),
         passed=passed,
@@ -256,7 +259,7 @@ def _job_verdict(accounting: SlurmAccounting | None, counts: TestCounts | None) 
         return 0 if counts is not None and counts.failed == 0 else 1
     if accounting.exit_code:
         return accounting.exit_code
-    if not (accounting.state or "").startswith("COMPLETED"):
+    if not accounting.completed:
         return 1
     return 1 if counts is not None and counts.failed else 0
 

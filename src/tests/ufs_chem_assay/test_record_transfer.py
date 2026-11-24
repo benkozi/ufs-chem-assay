@@ -193,3 +193,27 @@ def test_a_file_that_is_not_a_zip_is_refused(
     code, messages = _record(caplog, f"--transfer={archive}")
     assert code == 1
     assert messages[-1] == f"{archive} is not a zip file"
+
+
+def test_a_transfer_of_a_root_without_toolchains_is_recorded(
+    tmp_path: Path, committed: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Without toolchains the tests roots are tests/<application>[/<build>],
+    # with no toolchain directory above them.
+    top = tmp_path / "transfer" / "assay-y"
+    (top / "scripts").mkdir(parents=True)
+    (top / "scripts" / CONVENTIONS.effective_config).write_text("{}\n")
+    (top / "tests" / "cece").mkdir(parents=True)
+    _evaluated(top / "tests" / "cece", "cece")
+    (top / "tests" / "catchem" / "compute").mkdir(parents=True)
+    _evaluated(top / "tests" / "catchem" / "compute", "catchem", "compute")
+    code, messages = _record(caplog, f"--transfer={top}")
+    assert code == 0
+    tests = top / "tests"
+    assert [m for m in messages if m.startswith("recording ")] == [
+        f"recording {tests / 'catchem' / 'compute'}",
+        f"recording {tests / 'cece'}",
+    ]
+    assert (
+        len(read_test_benchmarks_csv(committed / "cece" / "tests-benchmarks.csv")) == 1
+    )

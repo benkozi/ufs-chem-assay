@@ -176,6 +176,7 @@ _PER_BUILD = frozenset({Stage.BUILD, Stage.TEST})
 # script of) and the stage — and the session of a per-session stage. A
 # failure stops only its lane (_execute).
 _Step = tuple[Path, str, str | None, Stage, str | None]
+_Failure = tuple[Path, int]  # a failed script and its exit code
 
 
 def _render(
@@ -290,22 +291,32 @@ def _execute(
     toolchain: str | None,
     scripts_dir: Path,
     run_id: str,
-) -> list[tuple[Path, int]]:
+) -> list[_Failure]:
     """Run one toolchain's scripts in order and return its failures (script,
-    exit code), in order. A failure stops only what depends on it: a failed
-    source stage every later script of that application; any other failed
-    stage the later scripts of the same application and build variant (a
-    failed build its tests, a failed data stage its sessions). Every other
+    exit code), in order. A failure stops only what depends on it, within
+    its application (the dependencies `watch` reports by: cli/sessions'
+    tests_cause and session_cause): a failed source stage every later
+    script; a failed build its variant's tests and, for an application
+    without variants, its data stage and sessions; a failed data stage every
+    session; a session's failed harness stage that session's resume. A
+    failed test or resume stage stops nothing: no session depends on the
+    application's own tests, nor on another session. Every other
     application and variant runs on, so one broken build cannot keep the
     others' test jobs from being submitted. Every script's outcome — run or
     skipped — goes into the stage record as soon as it is known
     (cli/stage_outcomes), for `report` and `watch`."""
-    failures: list[tuple[Path, int]] = []
-    sources: dict[str, tuple[Path, int]] = {}
-    lanes: dict[tuple[str, str | None], tuple[Path, int]] = {}
+    failures: list[_Failure] = []
+    sources: dict[str, _Failure] = {}
+    built: dict[tuple[str, str | None], _Failure] = {}
+    data: dict[str, _Failure] = {}
+    submitted: dict[tuple[str, str | None], _Failure] = {}
     for step in to_run:
-        path, app, build, stage, _session = step
-        cause = sources.get(app) or lanes.get((app, build))
+        path, app, build, stage, session = step
+        cause = sources.get(app) or built.get((app, build))
+        if cause is None and stage in (Stage.HARNESS, Stage.RESUME):
+            cause = data.get(app)
+        if cause is None and stage is Stage.RESUME:
+            cause = submitted.get((app, session))
         if cause is not None:
             logger.warning(
                 "skipped %s: %s failed (exit %s)", path.name, cause[0].name, cause[1]
@@ -348,8 +359,12 @@ def _execute(
         failures.append((path, code))
         if stage is Stage.SOURCE:
             sources[app] = (path, code)
-        else:
-            lanes[(app, build)] = (path, code)
+        elif stage is Stage.BUILD:
+            built[(app, build)] = (path, code)
+        elif stage is Stage.DATA:
+            data[app] = (path, code)
+        elif stage is Stage.HARNESS:
+            submitted[(app, session)] = (path, code)
     return failures
 
 

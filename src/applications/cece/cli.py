@@ -12,10 +12,10 @@ from pydantic import Field
 
 from applications.base import (
     ApplicationRunSection,
+    CMakeRunSection,
     RunConfigView,
     Stage,
     TestPlan,
-    ToolchainSection,
 )
 from cli.stages import (
     OfflineBuild,
@@ -28,8 +28,10 @@ from cli.stages import (
 from platforms import Runtime
 
 # What CECE's unit tests are built and run against.
-_DEBUG = "-DCMAKE_BUILD_TYPE=Debug"
-_ESMF_ON = "-DENABLE_ESMF=ON"
+_BUILD_TYPE = "CMAKE_BUILD_TYPE"
+_DEBUG = f"-D{_BUILD_TYPE}=Debug"
+_ESMF = "ENABLE_ESMF"
+_ESMF_ON = f"-D{_ESMF}=ON"
 # CECE logs each dependency's provider at configure time: `system <version>`
 # for one found in the environment, `FetchContent (...)` for one it fetched.
 _ESMF_GATE = "CECE dependency ESMF: system"
@@ -37,12 +39,11 @@ _ESMF_GATE = "CECE dependency ESMF: system"
 _TESTING = "-DCECE_BUILD_TESTING"
 
 
-class CeceRunSection(ApplicationRunSection):
+class CeceRunSection(CMakeRunSection):
     cmake_args: list[str] = Field(
         default_factory=lambda: ["-DCMAKE_BUILD_TYPE=Release"],
         description="Extra cmake configure arguments (native build only)",
     )
-    build_jobs: int = Field(default=8, gt=0, description="cmake --build --parallel N")
     targets: list[str] = Field(
         default_factory=lambda: ["cece_standalone_driver"],
         description=(
@@ -51,16 +52,6 @@ class CeceRunSection(ApplicationRunSection):
         ),
     )
 
-    def build_flags(self) -> list[str]:
-        return list(self.cmake_args)
-
-    def toolchain_updates(self, toolchain: ToolchainSection) -> dict[str, object]:
-        # The application's configure arguments first, then the toolchain's.
-        return {
-            **super().toolchain_updates(toolchain),
-            "cmake_args": [*self.cmake_args, *toolchain.cmake_args],
-        }
-
     def runtime_problems(self, runtime: Runtime) -> list[str]:
         """The rules of CECE's own tests. Under docker the container build
         script owns the configure, so the flags are not this section's to
@@ -68,7 +59,15 @@ class CeceRunSection(ApplicationRunSection):
         if not self.tests.enabled:
             return []
         problems: list[str] = []
-        missing = [flag for flag in (_DEBUG, _ESMF_ON) if flag not in self.cmake_args]
+        # As CMake reads the arguments: the last definition of each.
+        missing = [
+            flag
+            for flag, met in (
+                (_DEBUG, self.cmake_value(_BUILD_TYPE) == "Debug"),
+                (_ESMF_ON, self.cmake_on(_ESMF)),
+            )
+            if not met
+        ]
         if missing and runtime is not Runtime.DOCKER:
             problems.append(
                 f"tests.enabled requires {_DEBUG} and {_ESMF_ON} in cmake_args "
@@ -116,7 +115,7 @@ def _build(config: RunConfigView, checkout: Path, section: CeceRunSection) -> li
             f'grep -q "Found MPI" {q(log)} || {{ echo "configure did not find MPI" >&2; exit 1; }}',
             f'grep -qi "netcdf" {q(log)} || {{ echo "configure did not mention netCDF" >&2; exit 1; }}',
             # With ESMF on, it must be the environment's, never a fetched one.
-            *gate_lines(log, [_ESMF_GATE] if _ESMF_ON in section.cmake_args else []),
+            *gate_lines(log, [_ESMF_GATE] if section.cmake_on(_ESMF) else []),
             # The run config's gates: what this module environment claims to supply.
             *gate_lines(log, section.configure_gates),
         ],
@@ -151,7 +150,6 @@ def stage_lines(
     module never names the adapter, so the registry is not needed here."""
     cece = _as_cece(section)
     if stage is Stage.SOURCE:
-        clone = q(checkout)
         return source_lines(
             checkout,
             cece,
@@ -159,8 +157,8 @@ def stage_lines(
             extra_checks=[
                 # An uninitialized submodule shows up much later as a confusing
                 # configure error — fail fast instead.
-                f"if [ ! -e {clone}/extern/helm/libs ]; then",
-                f'  echo "extern/helm submodule not initialized in {clone}" >&2; exit 1',
+                f"if [ ! -e {q(checkout / 'extern/helm/libs')} ]; then",
+                f"  echo {q(f'extern/helm submodule not initialized in {checkout}')} >&2; exit 1",
                 "fi",
             ],
         )

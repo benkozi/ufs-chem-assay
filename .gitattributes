@@ -1,0 +1,4 @@
+# The benchmark files are appended to on several machines, and compared and
+# committed line by line: LF in the repository and in every checkout,
+# whatever a machine's core.autocrlf says.
+*.csv text eol=lf

@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from platforms import Platform, Runtime
-from settings import CONVENTIONS, Settings
+from settings import CONVENTIONS, Settings, parse_env_pairs
 
 _SCRUBBED = (
     "APPLICATION",
@@ -256,3 +256,18 @@ def test_baseline_store_accepts_a_directory(
     assert Settings(baseline_store="~/baselines").baseline_store == str(
         real_home / "baselines"
     )
+
+
+@pytest.mark.parametrize("entry", ["1BAD=x", "A;id=1", "A-B=1", "=x", "NOVALUE"])
+def test_env_pairs_take_shell_variable_names_only(entry: str) -> None:
+    # The names are written into `export NAME=...` lines of generated scripts.
+    with pytest.raises(ValueError, match="ASSAY_JOB_ENV entries must be NAME=VALUE"):
+        parse_env_pairs(f"OK=1 {entry}", variable="ASSAY_JOB_ENV")
+
+
+def test_env_pairs_keep_order_and_quoted_values() -> None:
+    assert parse_env_pairs('_A1=x B="y z" C=', variable="V") == {
+        "_A1": "x",
+        "B": "y z",
+        "C": "",
+    }

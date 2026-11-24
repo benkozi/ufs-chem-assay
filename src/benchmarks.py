@@ -14,6 +14,7 @@ lines in the `.out` give a runtime-independent wall time.
 from __future__ import annotations
 
 import csv
+import os
 import re
 import subprocess
 import time
@@ -99,6 +100,13 @@ class SlurmAccounting(StrictModel):
         description="State as printed (COMPLETED, TIMEOUT, CANCELLED by …)"
     )
     exit_code: int | None = Field(description="The first number of ExitCode (N:M)")
+
+    @property
+    def completed(self) -> bool:
+        """Whether Slurm says the job ran to its end (COMPLETED). ExitCode's
+        first number alone does not: a job Slurm ended itself (out of
+        memory, a lost node, a signal) can carry 0 there."""
+        return (self.state or "").startswith("COMPLETED")
 
 
 def _parse_clock(text: str) -> datetime | None:
@@ -429,7 +437,7 @@ def _write_csv(
     model: type[StrictModel], rows: Sequence[StrictModel], path: Path
 ) -> None:
     with open(path, "w", newline="") as f:
-        writer = csv.writer(f)
+        writer = csv.writer(f, lineterminator="\n")
         writer.writerow(list(model.model_fields))
         for row in rows:
             writer.writerow(_cells(row))
@@ -511,10 +519,20 @@ def _append_locked(
     repo_csv: Path,
     rows: Sequence[RowT],
 ) -> AppendResult:
+    """The append, under the file's lock. New rows are written after what
+    is there (append mode: the lock is on this file, so it is never
+    replaced, and existing lines are never rewritten); nothing is written
+    when nothing is new. A batch may repeat a key: the first row of each is
+    the one kept."""
+    offered = len(rows)
+    first_of: dict[tuple[str, ...], RowT] = {}
+    for row in rows:
+        first_of.setdefault(key(row), row)
+    rows = list(first_of.values())
     if not repo_csv.is_file() or repo_csv.stat().st_size == 0:
         _write_csv(model, rows, repo_csv)
         logger.info("wrote %s %s row(s) to %s", len(rows), _KINDS[model], repo_csv)
-        return AppendResult(appended=len(rows), skipped=0)
+        return AppendResult(appended=len(rows), skipped=offered - len(rows))
     if model.__name__ in _MIGRATED_ON_APPEND and _header(repo_csv) == _older_columns(
         model
     ):
@@ -528,25 +546,24 @@ def _append_locked(
             "" if len(added) == 1 else "s",
             len(rows_before),
         )
-    original = repo_csv.read_text()
     keys = {key(row) for row in _read_csv(model, repo_csv)}  # validates the header
     to_append = [row for row in rows if key(row) not in keys]
-    text = original
-    if text and not text.endswith("\n"):
-        text += "\n"
-    with open(repo_csv, "w", newline="") as f:
-        f.write(text)
-        writer = csv.writer(f)
-        for row in to_append:
-            writer.writerow(_cells(row))
-    try:
-        _read_csv(model, repo_csv)
-    except (ValueError, OSError) as exc:
-        repo_csv.write_text(original)
-        raise ValueError(
-            f"{repo_csv}: reload after the append failed ({exc}); restored"
-        ) from exc
-    result = AppendResult(appended=len(to_append), skipped=len(rows) - len(to_append))
+    result = AppendResult(appended=len(to_append), skipped=offered - len(to_append))
+    if to_append:
+        original = repo_csv.read_bytes()
+        with open(repo_csv, "a", newline="") as f:
+            if not original.endswith(b"\n"):
+                f.write("\n")
+            writer = csv.writer(f, lineterminator="\n")
+            for row in to_append:
+                writer.writerow(_cells(row))
+        try:
+            _read_csv(model, repo_csv)
+        except (ValueError, OSError) as exc:
+            os.truncate(repo_csv, len(original))
+            raise ValueError(
+                f"{repo_csv}: reload after the append failed ({exc}); restored"
+            ) from exc
     logger.info(
         "%s: %s row(s) appended, %s skipped (already recorded)",
         repo_csv,

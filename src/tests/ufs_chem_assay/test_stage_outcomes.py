@@ -375,3 +375,33 @@ def test_a_root_without_logs_has_no_stage_log(tmp_path: Path) -> None:
     # run always creates logs/ now (its transcript); an older or hand-made
     # root may still have none, and report reads it all the same.
     assert newest_stage_log(tmp_path / "logs", "02-build-cece") is None
+
+
+@pytest.mark.parametrize("command", ["report", "watch"])
+def test_an_unknown_build_is_refused(
+    tmp_path: Path,
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
+    command: str,
+) -> None:
+    # A mistyped --build selected nothing, and nothing is a clean report.
+    root = tmp_path / "root"
+    _run(root, mocker, {}, "--stage=build")
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main([command, f"--root-dir={root}", "--build", "nonexistent"])
+    assert code == 1
+    message = caplog.records[-1].getMessage()
+    assert "--build ['nonexistent'] is no build of the selected applications" in message
+    assert "compute, musica" in message
+
+
+def test_output_root_takes_no_build(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(["report", f"--output-root={tmp_path}", "--build=compute"])
+    assert code == 1
+    message = caplog.records[-1].getMessage()
+    assert "--output-root takes one root" in message
+    assert "--build" in message

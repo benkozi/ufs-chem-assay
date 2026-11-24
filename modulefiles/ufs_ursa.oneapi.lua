@@ -21,12 +21,24 @@
 --   4. arborx loaded tolerantly at the end (pin via arborx_ver, else
 --      try_load): present in some environments, absent in others —
 --      consumers' find_package falls back gracefully when absent.
--- Every <name>_ver variable is read from the environment, so a run config
+-- Every <name>_ver variable is read from the environment (an empty value
+-- counts as unset: pin, below), so a run config
 -- pins a version through applications.<name>.module_env.
 
 help([[
 loads UFS Model prerequisites for Ursa/Intel LLVM
 ]])
+
+-- Local addition (see header): a version pin read from the environment.
+-- Unset and empty both mean "no pin": a run config that extends another can
+-- only clear a pin its base sets by setting it to the empty string.
+local function pin(name)
+  local value = os.getenv(name)
+  if value ~= nil and value ~= "" then
+    return value
+  end
+  return nil
+end
 
 -- Optional (see header): unset or empty, the caller has already
 -- `module use`d the environment's modules/Core.
@@ -35,13 +47,13 @@ if env_root and env_root ~= "" then
   prepend_path("MODULEPATH", pathJoin(env_root, "modules/Core"))
 end
 
-stack_oneapi_ver=os.getenv("stack_oneapi_ver") or "2025.3.1"
+local stack_oneapi_ver = pin("stack_oneapi_ver") or "2025.3.1"
 load(pathJoin("stack-intel-oneapi-compilers", stack_oneapi_ver))
 
-stack_impi_ver=os.getenv("stack_impi_ver") or "2021.17"
+local stack_impi_ver = pin("stack_impi_ver") or "2021.17"
 load(pathJoin("stack-intel-oneapi-mpi", stack_impi_ver))
 
-cmake_ver=os.getenv("cmake_ver")
+local cmake_ver = pin("cmake_ver")
 if cmake_ver then
   load(pathJoin("cmake", cmake_ver))
 else
@@ -50,7 +62,7 @@ end
 
 load("ufs_common")
 
-nccmp_ver=os.getenv("nccmp_ver")
+local nccmp_ver = pin("nccmp_ver")
 if nccmp_ver then
   load(pathJoin("nccmp", nccmp_ver))
 else
@@ -72,14 +84,14 @@ whatis("Description: UFS build environment")
 -- JCSDA/spack-stack#2081. TODO(ursa): pin versions once known
 -- (`module avail kokkos kokkos-kernels`); unversioned loads take the
 -- environment's default version.
-kokkos_ver=os.getenv("kokkos_ver")
+local kokkos_ver = pin("kokkos_ver")
 if kokkos_ver then
   load(pathJoin("kokkos", kokkos_ver))
 else
   load("kokkos")
 end
 
-kokkos_kernels_ver=os.getenv("kokkos_kernels_ver")
+local kokkos_kernels_ver = pin("kokkos_kernels_ver")
 if kokkos_kernels_ver then
   load(pathJoin("kokkos-kernels", kokkos_kernels_ver))
 else
@@ -89,7 +101,7 @@ end
 -- Local addition (see header): arborx, tolerantly — only some envs carry it
 -- (e.g. ue-oneapi-2025.3.1-cuda-arborx). try_load is a silent no-op when the
 -- module doesn't exist, letting consumers' find_package(ArborX) fall back.
-arborx_ver=os.getenv("arborx_ver")
+local arborx_ver = pin("arborx_ver")
 if arborx_ver then
   load(pathJoin("arborx", arborx_ver))
 else

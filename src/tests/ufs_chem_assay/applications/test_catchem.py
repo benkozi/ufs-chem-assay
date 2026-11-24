@@ -15,6 +15,7 @@ from applications.catchem.settings import CatchemSettings
 from applications.registry import get_application
 from cli.run_config import HARNESS_ROOT, RunConfig
 from cli.stages import HARNESS_VENV_OFF, render_stage
+from platforms import Runtime
 from tests.ufs_chem_assay.run_configs import load_run_config, run_config_file
 
 # The first body line of a build or test stage script: after the shebang, strict
@@ -126,6 +127,46 @@ def test_source_stage_clones_with_submodules_and_guards_musica(
     assert f"if [ ! -e {_CLONE}/src/external/musica/CMakeLists.txt ]; then" in lines
     assert any("musica submodule not initialized" in line for line in lines)
     assert lines[-1] == f"git -C {_CLONE} log -1 --oneline"
+
+
+def test_tests_need_the_build_type_cmake_keeps() -> None:
+    # Debug, then a later Release (a toolchain's): the build is Release.
+    section = CatchemRunSection.model_validate(
+        {
+            **_SECTION,
+            "cmake_args": [
+                "-DCMAKE_BUILD_TYPE=Debug",
+                "-DCATCHEM_ENABLE_KOKKOS=ON",
+                "-DCMAKE_BUILD_TYPE=Release",
+            ],
+            "tests": {"enabled": True},
+        }
+    )
+    (problem,) = section.runtime_problems(Runtime.SLURM)
+    assert "missing: -DCMAKE_BUILD_TYPE=Debug" in problem
+
+
+def test_source_stage_quotes_a_checkout_path_whole(
+    app: Application, tmp_path: Path
+) -> None:
+    # A root with a space and a `$`: each word is quoted once, as a whole,
+    # so the path neither splits nor expands, in the test and in the message.
+    root = Path("/scratch/my run/$HOME")
+    config = load_run_config(
+        run_config_file(
+            tmp_path, overrides={"applications.catchem": _SECTION}, root_dir=root
+        )
+    )
+    lines = _lines(config, Stage.SOURCE, app)
+    clone = root / "CATChem"
+    assert (
+        f"if [ ! -e {shlex.quote(str(clone / 'src/external/musica/CMakeLists.txt'))} ]; then"
+        in lines
+    )
+    message = shlex.quote(f"musica submodule not initialized in {clone}")
+    assert f"  echo {message} >&2; exit 1" in lines
+    assert f"  echo {shlex.quote(f'using existing clone at {clone} as-is')}" in lines
+    assert not any('"' in line and "$HOME" in line for line in lines)
 
 
 def test_login_build_configures_gates_on_system_kokkos_and_builds(

@@ -109,7 +109,7 @@ def test_it_resets_modules_pulls_then_runs_and_watches_the_one_config(
     assert done.returncode == 0, done.stderr
     assert _calls(env) == [
         f"module reset (in {harness})",
-        f"git pull (in {harness})",
+        f"git pull --ff-only (in {harness})",  # never a merge nobody watched
         (
             f"uv run --project {harness} ufs-chem-assay run --watch "
             f"--config-file {config} (in {harness})"
@@ -159,8 +159,34 @@ def test_without_a_module_command_it_says_so_and_goes_on(
     (Path(env["PATH"].split(":")[0]) / "module").unlink()
     done = _bash(harness, env, str(_config(tmp_path)))
     assert done.returncode == 0, done.stderr
-    assert "no module command; no module reset" in done.stdout
+    assert "no module command; no module reset" in done.stderr
+    assert "no module command" not in done.stdout
     assert [c.split()[0] for c in _calls(env)] == ["git", "uv"]
+
+
+def test_the_bootstrap_is_read_whole_before_it_pulls() -> None:
+    # bash reads a script as it runs it, and the pull may replace this very
+    # file: the body is one function, called on the last line, so everything
+    # after the pull is already in memory.
+    lines = (_OPS / "assay-run.sh").read_text().splitlines()
+    assert lines[-1] == 'main "$@"'
+    assert "main() {" in lines
+    body = [line for line in lines[lines.index("main() {") : -1] if line]
+    assert body[-1] == "}"
+    assert any(line.strip() == "git pull --ff-only" for line in body)
+    assert not any(line.startswith(("git ", "exec ")) for line in lines)
+
+
+@pytest.mark.parametrize("script", ["assay-run.sh", "assay-transfer.sh"])
+def test_a_config_named_like_an_option_is_a_path(
+    tmp_path: Path, harness: Path, env: dict[str, str], script: str
+) -> None:
+    config = tmp_path / "mine" / "-c.yaml"
+    config.parent.mkdir()
+    config.write_text("extends: config/gaea-c7.yaml\n")
+    done = _bash(harness, env, "-c.yaml", cwd=config.parent, script=script)
+    assert done.returncode == 0, done.stderr
+    assert f"--config-file {config} (in {harness})" in _calls(env)[-1]
 
 
 # ── ops/assay ───────────────────────────────────────────────────────────────

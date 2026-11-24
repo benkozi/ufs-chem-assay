@@ -67,7 +67,7 @@ def test_platform_files_load_the_common_set_and_pin_the_packages_under_test(
     assert 'try_load("arborx")' in text  # tolerant: not every environment has it
     # The pins stay overridable from the run config's module_env.
     for pin in ("kokkos_ver", "kokkos_kernels_ver", "arborx_ver", "cmake_ver"):
-        assert f'os.getenv("{pin}")' in text, pin
+        assert f'local {pin} = pin("{pin}")' in text, pin
     assert f'load(pathJoin("{package}", {package.replace("-", "_")}_ver))' in text
 
 
@@ -93,16 +93,19 @@ def test_the_gaea_c7_file_is_the_weather_models_recipe() -> None:
     # compilers are Intel's own (C7 has no Cray wrappers), and the versions
     # stay overridable from the run config's module_env.
     text = (_MODULEFILES / _GAEA_C7).read_text()
-    assert _loads(text, 'unload("cray-mpich/9.2.0")')
+    # No version on the unload: Lmod unloads only the version named, and
+    # the site's default moves.
+    assert _loads(text, 'unload("cray-mpich")')
+    assert 'unload("cray-mpich/' not in text
     assert _loads(text, 'unload("oneapi")')
     assert _loads(text, 'load(pathJoin("oneapi", oneapi_ver))')
-    assert 'oneapi_ver=os.getenv("oneapi_ver") or "2025.3.1"' in text
-    assert 'stack_intel_ver=os.getenv("stack_intel_ver") or "2025.3.1"' in text
-    assert 'stack_cray_mpich_ver=os.getenv("stack_cray_mpich_ver") or "9.2.0"' in text
+    assert 'local oneapi_ver = pin("oneapi_ver") or "2025.3.1"' in text
+    assert 'local stack_intel_ver = pin("stack_intel_ver") or "2025.3.1"' in text
+    assert 'local stack_cray_mpich_ver = pin("stack_cray_mpich_ver") or "9.2.0"' in text
     ordered = [
         text.index(needle)
         for needle in (
-            'unload("cray-mpich/9.2.0")',
+            'unload("cray-mpich")',
             'load(pathJoin("oneapi", oneapi_ver))',
             'load(pathJoin("stack-intel-oneapi-compilers", stack_intel_ver))',
             'load(pathJoin("stack-cray-mpich", stack_cray_mpich_ver))',
@@ -121,9 +124,42 @@ def test_the_gaea_c7_file_loads_the_environments_yaml_cpp() -> None:
     # has one (yaml-cpp/0.8.0), and loading its module is what lets
     # find_package see it. Pinnable like every other load.
     text = (_MODULEFILES / _GAEA_C7).read_text()
-    assert 'yaml_cpp_ver=os.getenv("yaml_cpp_ver")' in text
+    assert 'local yaml_cpp_ver = pin("yaml_cpp_ver")' in text
     assert _loads(text, 'load(pathJoin("yaml-cpp", yaml_cpp_ver))')
     assert _loads(text, 'load("yaml-cpp")')
     assert text.index('load("yaml-cpp")') > text.index(
         'load(pathJoin("stack-cray-mpich"'
     )
+
+
+_PIN_HELPER = """local function pin(name)
+  local value = os.getenv(name)
+  if value ~= nil and value ~= "" then
+    return value
+  end
+  return nil
+end
+"""
+
+
+@pytest.mark.parametrize("name", ["ufs_common.lua", *_PLATFORM_FILES])
+def test_an_empty_version_pin_is_no_pin(name: str) -> None:
+    # In Lua the empty string is true: `if x_ver then` would load "<name>/"
+    # and `os.getenv(...) or "<default>"` would keep "". A run config that
+    # extends another can only clear a pin by setting it empty, so every
+    # <name>_ver is read through one helper that maps empty to unset.
+    text = (_MODULEFILES / name).read_text()
+    assert text.count(_PIN_HELPER) == 1
+    reads = re.findall(r"os\.getenv\(([^)]*)\)", text)
+    assert sorted(reads) == sorted(
+        ["name", *(['"ASSAY_SPACK_ENV_ROOT"'] if name != "ufs_common.lua" else [])]
+    )
+    # Defined before its first use, and nothing leaks into Lmod's globals.
+    assert text.index(_PIN_HELPER) < text.index("pin(", text.index(_PIN_HELPER) + 20)
+    assert not re.search(r"^\w+_ver\s*=", text, re.MULTILINE)
+    pins = re.findall(r"^local (\w+_ver) = pin\(\"(\w+)\"\)", text, re.MULTILINE)
+    assert all(variable == read for variable, read in pins)
+    if name == "ufs_common.lua":
+        assert "  local ver = pin(env_version_name)\n" in text
+    else:
+        assert len(pins) >= 7

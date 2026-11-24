@@ -21,7 +21,12 @@ from cli.run_report import (
     summarize_session,
     summarize_tests,
 )
-from cli.selectors import selected_applications, selected_sessions, toolchain_configs
+from cli.selectors import (
+    check_builds,
+    selected_applications,
+    selected_sessions,
+    toolchain_configs,
+)
 from cli.sessions import (
     configured_lanes,
     configured_sessions,
@@ -147,10 +152,16 @@ def handler(args: argparse.Namespace) -> int:
     summaries: list[SessionSummary] = []
     stages: list[StageSummary] = []
     if args.output_root is not None:
-        if args.application or args.session or args.only or args.toolchain:
+        if (
+            args.application
+            or args.session
+            or args.only
+            or args.toolchain
+            or args.build
+        ):
             logger.error(
                 "--output-root takes one root; --application/--session/--only/"
-                "--toolchain select from the effective config (use --root-dir)"
+                "--toolchain/--build select from the effective config (use --root-dir)"
             )
             return 1
         root = args.output_root.resolve()
@@ -173,6 +184,7 @@ def handler(args: argparse.Namespace) -> int:
             applications = selected_applications(config, args.application)
             sessions = selected_sessions(config, args.session)
             builds = toolchain_configs(config, args.toolchain)
+            check_builds(config, applications, args.build)
             record = read_stage_record(root_dir / "scripts")
             stages = stage_summaries(
                 record,

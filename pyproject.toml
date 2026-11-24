@@ -120,7 +120,7 @@ exclude_also = [
 # Spelling (pre-commit): code, docs, templates. design/ holds records,
 # not maintained text; uv.lock is generated.
 [tool.codespell]
-skip = "./design,./uv.lock,./.venv,./.git,*.nc"
+skip = "./uv.lock,./.venv,./.uv,./.git,*.nc"
 ignore-words-list = "siz,notin"  # notin: ast.NotIn
 
 # Dead-code detection (pre-commit, whole tree). Names bound by frameworks

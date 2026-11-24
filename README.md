@@ -22,7 +22,7 @@ steps, 32 streams over seven placed inputs; Ursa only, see
 [docs/gcafs-anthro-runbook.md](docs/gcafs-anthro-runbook.md)), and
 `monetio/aeronet/` (a native Python CLI configuration reading AERONET
 direct-sun AOD and inversion datasets into CF-1.8 / UGRID-1.0 `(time, node)`
-NetCDF files). Design rationale lives in [design/design.md](design/design.md).
+NetCDF files).
 
 ## Prerequisites
 
@@ -513,7 +513,8 @@ They carry no environment of their own — name it in the run config:
 
 (`ASSAY_SPACK_ENV_ROOT: /path/to/spack-stack/envs/<env>` in `module_env`
 is the one-variable alternative to the second path: the modulefiles turn
-it into the same `modules/Core` entry.)
+it into the same `modules/Core` entry. An empty pin, `kokkos_ver: ''`, is
+no pin — the way a file that `extends:` another clears one its base sets.)
 
 **Where the build runs is a key too.** `build_node: login` (the default)
 configures and builds where the CLI runs, with network access.
@@ -571,7 +572,10 @@ to check that an override landed.
 **A run config may extend another, and select the run.** `extends:
 config/gaea-c7.yaml` reads that file first (a relative path is the
 harness checkout's) and merges this one over it — mappings key by key,
-scalars and lists replacing; a base may extend another. The `selected_*`
+scalars and lists replacing; a base may extend another. A run config is
+read as YAML 1.2, like an `--override` value: only `true` and `false` are
+booleans, so an unquoted `on` or `no` is that word. A file that is
+missing, is not YAML or is not a mapping is an error naming it. The `selected_*`
 keys (`selected_applications`, `selected_stages`, `selected_toolchains`,
 `selected_builds`) are the run's selection, each flag replacing only its
 own key, so `--application` is optional when the file selects (none
@@ -594,9 +598,14 @@ transcript to `<root_dir>/logs/assay-run-<YYYYmmdd-HHMMSS>.log`.
 `ufs-chem-assay transfer --config-file=<file> [--name NAME] [--dry-run]`
 zips the root's logs, rendered scripts and records, tests roots, CMake
 caches and report into one payload, `<transfer_dir>/<name>.zip`, which
-unzips to `<name>/` (default `assay-<YYYYmmdd-HHMM>`; an existing zip or
-directory of that name is refused), then runs `git pull`, `add -f`,
-`commit` and `push` in the transfer repo. The daily loop on a
+unzips to `<name>/` (default `assay-<YYYYmmdd-HHMM>`; a plain file name
+of letters, digits, `.`, `_` and `-`; an existing zip or directory of
+that name is refused). It runs `git pull --ff-only` in the transfer repo
+first, so a repository that cannot be brought up to date gets no payload
+left in it, then writes the zip and runs `add -f`, `commit` and `push`.
+The tests roots and caches are found from the config: under each
+toolchain's directory, or directly under the root without toolchains.
+The daily loop on a
 machine is in [ops/](ops/README.md).
 
 Stages (`--stage`, repeatable): `source` (clone or fast-forward the
@@ -794,9 +803,12 @@ share anything but the harness checkout, `scripts/`, `logs/` and the uv
 cache. With several selected, the run is toolchain-major — every script
 of every toolchain is rendered first, then the whole stage list runs for
 one toolchain, then for the next. A failed stage stops only what
-depends on it: a failed source stage skips the rest of that
-application, any other failed stage skips the later stages of the same
-application and build variant (a failed build its tests), and every
+depends on it, within its application: a failed source stage skips
+everything after it; a failed build its variant's tests and, for an
+application without variants, its data stage and sessions; a failed data
+stage every session; a session's failed harness stage that session's
+resume. A failed test or resume stage skips nothing: no session depends
+on the application's own tests, or on another session. Every
 other application, variant and toolchain runs on, each skipped script
 logged with the failure that skipped it. The run exits with the first
 failure's status after one line per toolchain (`oneapi: failed at
@@ -884,7 +896,7 @@ variant); the build and test stages run once per variant, in the map's
 order. `--build NAME [NAME ...]` (or `all`) on `run`, `watch` and
 `report` selects variants, every one by default; an application
 without `builds:` keeps its one build either way, and a name no selected
-application has is an error. `run` records the selection
+application has is an error on all three. `run` records the selection
 (`selected_builds`, empty for every variant) for `watch` and `report`;
 `submit-tests` and `evaluate-tests` take `--build` the way they take
 `--toolchain`. An application with variants takes no data or harness
@@ -996,8 +1008,11 @@ RDHPCS machines have no docker, so the target driver is built natively
 against the application's own modulefiles (`<checkout>/modulefiles/cece_ursa.*.lua`
 for CECE), and the harness runs on a **login node** submitting **one
 Slurm job per driver call — all of a session's at once**, then waiting
-for each by polling `squeue` and judging it by `sacct` — the **slurm
-runtime**, selected by `ASSAY_RUNTIME=slurm` (the default once
+for each by polling `squeue` and judging it by `sacct` (a job passes
+only when its state is `COMPLETED` and its exit code 0: a job Slurm ended
+itself, out of memory or on a lost node, can carry exit code 0) — the **slurm
+runtime**, which needs the run config's `slurm:` section (`slurm: {}`
+takes every default), selected by `ASSAY_RUNTIME=slurm` (the default once
 `ASSAY_PLATFORM` is anything but `local`; the platform is detected from
 the hostname and overridable). The jobs are recorded in `<output
 root>/jobs.yaml` as they are submitted; `pytest --submit-only` ends the
@@ -1338,8 +1353,8 @@ column: a row never changes once written.
 The committed copy lives beside each configuration's suites,
 `src/tests/config/<application>/<configuration>/benchmarks.csv`, and grows
 by rows: `pytest --record-benchmarks` (the run config's
-`harness.record_benchmarks`, **true in the Ursa templates**, false in
-`local.yaml`) appends the run's rows at session end, and
+`harness.record_benchmarks`, **true in `config/ursa.yaml`**, false in
+the other templates) appends the run's rows at session end, and
 `ufs-chem-assay record-benchmarks --output-root=<root>` does the same for a
 finished run (`--dry-run` lists what it would append). A row already
 present — same `run_id` and `combo_id` — is skipped; existing lines are
@@ -1396,7 +1411,7 @@ Harness-wide:
 | `ASSAY_SRUN_ARGS`               | slurm runtime: options of the `srun` that launches the driver inside each job (the run config renders `--ntasks=<slurm.ntasks> <slurm.srun_args>`) | `--ntasks=1` |
 | `ASSAY_SLURM_QUEUE_WAIT_S`      | slurm runtime: seconds a driver job may wait in the queue before the harness cancels it (the run config's `slurm.queue_wait_s`) | `3600` |
 | `ASSAY_SLURM_POLL_S`            | slurm runtime: seconds between `squeue` polls while a driver job is queued or running (the run config's `slurm.poll_s`) | `30` |
-| `ASSAY_JOB_ENV`                 | slurm runtime: `NAME=VALUE` pairs exported inside each driver job | empty |
+| `ASSAY_JOB_ENV`                 | slurm runtime: `NAME=VALUE` pairs exported inside each driver job; each name a shell variable name; values are written as given, so `$VAR` expands in the job | empty |
 | `ASSAY_RUN_TIMEOUT_S`           | caps the suite `timeout_s` when smaller        | `300`                            |
 | `ASSAY_LOG_LEVEL`               | runner log level (`DEBUG`, `INFO`, ...)        | `INFO`                           |
 | `ASSAY_DASK_NWORKERS`           | dask workers for the stats cluster (int > 0)   | unset → all available cores      |

@@ -2,6 +2,7 @@
 parsing, the one-call queue poll, the deadline, the accounting verdict, and
 cancellation. Every Slurm command is mocked at subprocess.run."""
 
+import logging
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,9 +17,11 @@ from jobs import (
     JobLedger,
     JobRef,
     SlurmAccountingMissing,
+    SlurmJob,
     SlurmJobTimeout,
     SlurmSubmissionError,
     SubmittedJob,
+    TestJob,
     cancel_jobs,
     ledger_path,
     queue_states,
@@ -305,10 +308,72 @@ def test_cancel_jobs_cancels_only_the_queued_ones(mocker: MockerFixture) -> None
     run.assert_not_called()
 
 
-def test_scancel_is_one_call_and_never_raises(mocker: MockerFixture) -> None:
+def test_scancel_is_one_call_and_never_raises(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
     run = mocker.patch("jobs.subprocess.run")
     scancel(["10", "11"])
-    run.assert_called_once_with(["scancel", "10", "11"], check=False)
+    # Bounded and quiet: it runs when the controller is already slow.
+    run.assert_called_once_with(
+        ["scancel", "10", "11"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    for error in (
+        FileNotFoundError("scancel"),
+        subprocess.TimeoutExpired(["scancel"], 60),
+    ):
+        mocker.patch("jobs.subprocess.run", side_effect=error)
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            scancel(["10", "11"])  # logged, never raised
+        assert "scancel 10 11 did not run" in caplog.records[-1].getMessage()
+
+
+def test_scancel_of_nothing_runs_nothing(mocker: MockerFixture) -> None:
+    run = mocker.patch("jobs.subprocess.run")
+    scancel([])
+    run.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [FileNotFoundError("sbatch"), subprocess.TimeoutExpired(["sbatch"], 60)],
+    ids=["missing", "timed-out"],
+)
+def test_submit_job_that_cannot_run_is_a_submission_error(
+    mocker: MockerFixture, error: Exception
+) -> None:
+    # One error for both callers, whatever stopped sbatch; a timed-out
+    # sbatch may still have queued the job, and the message says to look.
+    run = mocker.patch("jobs.subprocess.run", side_effect=error)
+    with pytest.raises(SlurmSubmissionError) as excinfo:
+        submit_job(Path("/o/x.sbatch"))
+    assert run.call_args.kwargs["timeout"] == 60
+    assert excinfo.value.cmd == ["sbatch", "--parsable", "/o/x.sbatch"]
+    assert "squeue --me" in excinfo.value.stderr
+
+
+def test_both_job_models_share_the_slurm_fields() -> None:
+    shared = set(SlurmJob.model_fields)
+    assert shared == {
+        "job_id",
+        "cluster",
+        "script",
+        "timeout_s",
+        "queue_wait_s",
+        "submitted_at",
+    }
+    assert issubclass(SubmittedJob, SlurmJob)
+    assert issubclass(TestJob, SlurmJob)
+    assert set(TestJob.model_fields) == shared
+    assert all(field.description for field in SlurmJob.model_fields.values())
+    job = _job()
+    assert job.deadline == job.submitted_at + timedelta(
+        seconds=job.timeout_s + job.queue_wait_s
+    )
 
 
 # ── a named cluster (multi-cluster Slurm: Gaea's c6, c7) ─────────────────────
@@ -345,7 +410,7 @@ def test_queue_states_names_the_cluster(mocker: MockerFixture) -> None:
 def test_scancel_names_the_cluster(mocker: MockerFixture) -> None:
     run = mocker.patch("jobs.subprocess.run")
     scancel(["10", "11"], clusters="c7")
-    run.assert_called_once_with(["scancel", "-M", "c7", "10", "11"], check=False)
+    assert run.call_args.args[0] == ["scancel", "-M", "c7", "10", "11"]
 
 
 def test_wait_for_job_asks_the_jobs_own_cluster(mocker: MockerFixture) -> None:
@@ -360,7 +425,8 @@ def test_wait_for_job_asks_the_jobs_own_cluster(mocker: MockerFixture) -> None:
     run = mocker.patch("jobs.subprocess.run")
     with pytest.raises(SlurmJobTimeout):
         wait_for_job(job, poll_s=1, now=lambda: job.deadline, sleep=lambda _s: None)
-    run.assert_called_once_with(["scancel", "-M", "c7", "123"], check=False)
+    run.assert_called_once()
+    assert run.call_args.args[0] == ["scancel", "-M", "c7", "123"]
 
 
 def test_cancel_jobs_cancels_each_cluster_with_its_own_jobs(

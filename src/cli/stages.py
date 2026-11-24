@@ -318,7 +318,7 @@ def source_lines(
         if recurse_submodules:
             lines.append(f"  git -C {clone} submodule update --init --recursive")
     else:
-        lines += ["else", f'  echo "using existing clone at {clone} as-is"']
+        lines += ["else", f"  echo {q(f'using existing clone at {checkout} as-is')}"]
     lines.append("fi")
     if extra_checks:
         lines += extra_checks

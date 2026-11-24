@@ -177,6 +177,10 @@ def _record_transfer(transfer: Path, dry_run: bool, shown: str | None = None) ->
     roots = sorted(
         ledger.parent
         for pattern in (
+            # A root without toolchains, then one with: [<toolchain>/]tests/
+            # <application>[/<build>].
+            "tests/*/" + CONVENTIONS.test_ledger,
+            "tests/*/*/" + CONVENTIONS.test_ledger,
             "*/tests/*/" + CONVENTIONS.test_ledger,
             "*/tests/*/*/" + CONVENTIONS.test_ledger,
         )

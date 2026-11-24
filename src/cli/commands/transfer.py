@@ -1,8 +1,8 @@
 """`ufs-chem-assay transfer`: a root's evidence — its logs, rendered scripts
 and records, tests roots, CMake caches, and the report — zipped into one
-payload, <transfer_dir>/<name>.zip (unzipping it gives <name>/), then
-pulled, added, committed and pushed in the transfer repository, for reading
-on another machine. Logs compress well, and one file is one object to push.
+payload, <transfer_dir>/<name>.zip (unzipping it gives <name>/) — the
+transfer repository pulled first (fast-forward only), the payload then
+added, committed and pushed — for reading on another machine. Logs compress well, and one file is one object to push.
 The root and the destination come from the run config (`root_dir`,
 `transfer_dir`)."""
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import tempfile
 import zipfile
@@ -25,18 +26,26 @@ from models.conventions import CONVENTIONS
 
 logger = get_logger("cli")
 
-# What is archived: each glob under the root, as <name>/<prefix>/<the match's
-# path under the root>. The evidence a run leaves, and nothing it checked out
-# or built.
+# What is archived, as <name>/<prefix>/<the match's path under the root>: the
+# evidence a run leaves, and nothing it checked out or built. COPIES are
+# globs under the root; BUILD_COPIES are globs under each build root — the
+# root itself, or each toolchain's directory under it (_build_roots) — named
+# from the run config, never by a wildcard: without toolchains a checkout
+# sits directly under the root, and `*/tests` would be its source tree's.
 COPIES: tuple[tuple[str, str], ...] = (
     ("logs", "."),  # stage logs and run transcripts
     ("scripts/*.yaml", "."),  # stages.yaml, run-config.yaml
     ("scripts/*.sh", "."),  # the rendered scripts
     ("scripts/*.sbatch", "."),
-    ("*/tests", "."),  # every toolchain's tests roots
-    ("*/*/build*/CMakeCache.txt", "cmake"),  # each build's configured options
+)
+BUILD_COPIES: tuple[tuple[str, str], ...] = (
+    (CONVENTIONS.tests_dirname, "."),  # the tests roots
+    ("*/build*/CMakeCache.txt", "cmake"),  # each build's configured options
 )
 REPORT = "report.txt"
+# A payload's name: a plain file name. It is a path in the transfer
+# repository, the top directory in the zip and an argument to git.
+_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def register(subparsers: Subparsers, name: str) -> None:
@@ -59,7 +68,8 @@ def register(subparsers: Subparsers, name: str) -> None:
         default=None,
         help=(
             "the payload's name, <name>.zip holding <name>/ (default: "
-            "assay-<YYYYmmdd-HHMM>); neither may exist in transfer_dir"
+            "assay-<YYYYmmdd-HHMM>): a plain file name (letters, digits, `.`, "
+            "`_`, `-`); neither may exist in transfer_dir"
         ),
     )
     transfer.add_argument(
@@ -69,15 +79,27 @@ def register(subparsers: Subparsers, name: str) -> None:
     )
 
 
-def _files(root: Path) -> list[tuple[Path, Path]]:
+def _build_roots(config: RunConfig) -> list[Path]:
+    """Where the config's builds keep their checkouts and tests roots: each
+    toolchain's directory under the root, or the root itself without any."""
+    return [config.root_dir / name for name in config.toolchains] or [config.root_dir]
+
+
+def _files(root: Path, build_roots: list[Path]) -> list[tuple[Path, Path]]:
     """(file, path under the payload's top directory) for every file COPIES
-    names, a matched directory contributing every file under it."""
+    names under the root and BUILD_COPIES names under each build root, a
+    matched directory contributing every file under it."""
     found: list[tuple[Path, Path]] = []
-    for pattern, prefix in COPIES:
-        for source in sorted(root.glob(pattern)):
-            sources = sorted(p for p in source.rglob("*") if p.is_file())
-            for path in sources if source.is_dir() else [source]:
-                found.append((path, Path(prefix) / path.relative_to(root)))
+    globs = [
+        (root, COPIES),
+        *((build_root, BUILD_COPIES) for build_root in build_roots),
+    ]
+    for base, copies in globs:
+        for pattern, prefix in copies:
+            for source in sorted(base.glob(pattern)):
+                sources = sorted(p for p in source.rglob("*") if p.is_file())
+                for path in sources if source.is_dir() else [source]:
+                    found.append((path, Path(prefix) / path.relative_to(root)))
     return found
 
 
@@ -130,21 +152,45 @@ def handler(args: argparse.Namespace) -> int:
             CONVENTIONS.effective_config,
         )
         return 1
-    name = args.name or f"assay-{datetime.now().astimezone().strftime('%Y%m%d-%H%M')}"
+    name = args.name
+    if name is None:
+        name = f"assay-{datetime.now().astimezone().strftime('%Y%m%d-%H%M')}"
+    if not _NAME.fullmatch(name):
+        logger.error(
+            "transfer: --name %r is not a plain file name (letters, digits, "
+            "`.`, `_` and `-`, starting with a letter or digit)",
+            name,
+        )
+        return 1
     repo = config.transfer_dir
     archive = repo / f"{name}.zip"
+    pull = ["pull", "--ff-only"]
+    git = [
+        ["add", "-f", "--", archive.name],
+        ["commit", "-m", name],
+        ["push"],
+    ]
+    if not args.dry_run:
+        # First, before anything is written: what the pull brings in may
+        # hold the name, and a repository that cannot be brought up to date
+        # gets no untracked payload left in it.
+        shown = " ".join(["git", *pull])
+        logger.info("transfer: %s", shown)
+        result = subprocess.run(["git", *pull], cwd=repo, check=False)
+        if result.returncode != 0:
+            logger.error(
+                "transfer: `%s` failed (exit %s) in %s; nothing archived",
+                shown,
+                result.returncode,
+                repo,
+            )
+            return 1
     # The directory too: unzipping the payload would land on it.
     for taken in (archive, repo / name):
         if taken.exists():
             logger.error("transfer: %s already exists: pass another --name", taken)
             return 1
-    git = [
-        ["pull"],
-        ["add", "-f", archive.name],
-        ["commit", "-m", name],
-        ["push"],
-    ]
-    files = _files(root)
+    files = _files(root, _build_roots(config))
     if args.dry_run:
         for path, under in files:
             logger.info(
@@ -152,7 +198,7 @@ def handler(args: argparse.Namespace) -> int:
             )
         logger.info("dry run: would archive the report as %s/%s", name, REPORT)
         logger.info("dry run: would write %s", archive)
-        for command in git:
+        for command in (pull, *git):
             logger.info("dry run: would run `git %s`", " ".join(command))
         logger.info("transfer: dry run; nothing archived or pushed")
         return 0

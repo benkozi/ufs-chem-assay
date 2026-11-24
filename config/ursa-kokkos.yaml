@@ -80,7 +80,8 @@ applications:  # one section per application in the run, keyed by adapter name
       ntasks: 4  # the largest MPI rank count a test asks for
       cpus: 8
       minutes: 5
-      env: {}
+      env:
+        PIP_NO_INDEX: '1'  # no network on a compute node: CECE's pip fixtures return at once instead of retrying
   catchem:
     git_url: git@github.com:benkozi/CATChem.git  # the coupling-protos branch, as on Gaea C7
     ref: feature/cece-coupling-proto
@@ -103,7 +104,11 @@ applications:  # one section per application in the run, keyed by adapter name
       ntasks: 1  # every CATChem test is single-rank
       cpus: 8  # for its OpenMP Kokkos tests
       minutes: 5
-      env: {}
+      env:
+        # Kokkos's OpenMP backend warns in every test when unset. false (unpinned) silences it without
+        # pinning threads: pinning buys nothing for short tests, and parallel ctest processes would pin onto
+        # the same CPUs.
+        OMP_PROC_BIND: 'false'
     builds:  # two builds of the one checkout, each with its own build-<name> directory and test job
       compute:  # MUSICA off: nothing is fetched, so the whole build, tests included, runs on a compute node
         cmake_args:

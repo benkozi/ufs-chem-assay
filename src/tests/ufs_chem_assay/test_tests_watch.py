@@ -296,6 +296,39 @@ def test_watch_reports_an_evaluation_that_failed(
     assert "evaluation failed: tests cece" in messages
 
 
+def test_watch_reports_an_unreadable_ledger_instead_of_raising(
+    rendered: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A ledger that is there but does not parse is not "not submitted": it
+    # is final at once, with the reason, and the watch goes on to its end.
+    root = _tests_root(rendered)
+    root.mkdir(parents=True)
+    (root / CONVENTIONS.test_ledger).write_text("jobs: [\n")
+    queue = mocker.patch("cli.sessions.queue_states", return_value={})
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert _watch(rendered, "--only", "tests") == 1
+    messages = _messages(caplog)
+    assert any(
+        m.startswith("tests cece: evaluation failed (") and "not a test ledger" in m
+        for m in messages
+    )
+    assert "evaluation failed: tests cece" in messages
+    queue.assert_not_called()  # nothing to ask the queue about
+
+
+def test_report_survives_an_unreadable_ledger(rendered: Path) -> None:
+    root = _tests_root(rendered)
+    root.mkdir(parents=True)
+    (root / CONVENTIONS.test_ledger).write_text("jobs: []\n")
+    summary = summarize_tests(root, application="cece")
+    assert summary.state is SessionState.NOT_EVALUATED
+    assert (summary.run_id, summary.exit_status, summary.job_id) == (None, None, None)
+    (issue,) = summary.issues
+    assert issue.kind is IssueKind.NOT_EVALUATED
+    assert "not a test ledger" in issue.detail
+    assert _report(rendered, "--only", "tests") == 1
+
+
 def test_watch_gives_up_on_a_test_job_queued_past_its_deadline(
     rendered: Path, mocker: MockerFixture
 ) -> None:

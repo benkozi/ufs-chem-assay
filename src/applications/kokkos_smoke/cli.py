@@ -12,10 +12,10 @@ from pydantic import Field
 
 from applications.base import (
     ApplicationRunSection,
+    CMakeRunSection,
     RunConfigView,
     Stage,
     TestPlan,
-    ToolchainSection,
 )
 from cli.stages import cmake_stage, gate_lines
 from platforms import Runtime
@@ -29,7 +29,7 @@ _GATES = ["Found Kokkos ", "Found KokkosKernels "]
 _PASSED = "SMOKE TEST PASSED"
 
 
-class KokkosSmokeRunSection(ApplicationRunSection):
+class KokkosSmokeRunSection(CMakeRunSection):
     git_url: str = Field(
         default="", description="Unused: the project ships with the harness"
     )
@@ -48,17 +48,6 @@ class KokkosSmokeRunSection(ApplicationRunSection):
         default_factory=lambda: ["-DCMAKE_BUILD_TYPE=Release"],
         description="cmake configure arguments",
     )
-    build_jobs: int = Field(default=8, gt=0, description="cmake --build --parallel N")
-
-    def build_flags(self) -> list[str]:
-        return list(self.cmake_args)
-
-    def toolchain_updates(self, toolchain: ToolchainSection) -> dict[str, object]:
-        # The application's configure arguments first, then the toolchain's.
-        return {
-            **super().toolchain_updates(toolchain),
-            "cmake_args": [*self.cmake_args, *toolchain.cmake_args],
-        }
 
     def runtime_problems(self, runtime: Runtime) -> list[str]:
         if runtime is Runtime.DOCKER:

@@ -35,7 +35,7 @@ from platforms import Platform, Runtime
 
 logger = get_logger("jobs")
 
-_SQUEUE_TIMEOUT_S = 60
+_SLURM_CLIENT_TIMEOUT_S = 60
 
 # The states squeue reports while a job still occupies the queue; anything a
 # poll cannot classify is treated as queued so the next poll decides.
@@ -63,13 +63,10 @@ def _on(clusters: str | None) -> list[str]:
     return [] if clusters is None else ["-M", clusters]
 
 
-class SubmittedJob(StrictModel):
-    """One combination's Slurm job as the session submitted it: enough to
-    wait for it, judge it, and cancel it from any later process."""
+class SlurmJob(StrictModel):
+    """A Slurm job the harness submitted: enough to wait for it, judge it
+    and cancel it from any later process."""
 
-    suite: str = Field(description="The suite the combination belongs to")
-    combo: str = Field(description="The combination's canonical name")
-    combo_id: str = Field(description="The combination's runtime ULID")
     job_id: str = Field(description="The Slurm job id sbatch returned")
     cluster: str | None = Field(
         default=None,
@@ -79,13 +76,18 @@ class SubmittedJob(StrictModel):
             "a single-cluster machine and in older ledgers"
         ),
     )
-    script: Path = Field(description="The submitted job script (<combo_id>.sbatch)")
-    out_path: Path = Field(
-        description="Where Slurm writes the job's output (<combo_id>.out)"
+    script: Path = Field(
+        description=(
+            "The submitted job script (<combo_id>.sbatch for a combination, "
+            "04-test-<application>.sbatch for a test run)"
+        )
     )
     timeout_s: int = Field(
         gt=0,
-        description="The job's own time limit in seconds (the suite timeout, capped)",
+        description=(
+            "The job's own time limit in seconds (the suite timeout, capped, "
+            "for a combination; tests.minutes for a test run)"
+        ),
     )
     queue_wait_s: int = Field(
         gt=0,
@@ -100,6 +102,17 @@ class SubmittedJob(StrictModel):
         """When the harness gives up on the job: submission plus its time
         limit plus its queue allowance."""
         return self.submitted_at + timedelta(seconds=self.timeout_s + self.queue_wait_s)
+
+
+class SubmittedJob(SlurmJob):
+    """One combination's Slurm job as the session submitted it."""
+
+    suite: str = Field(description="The suite the combination belongs to")
+    combo: str = Field(description="The combination's canonical name")
+    combo_id: str = Field(description="The combination's runtime ULID")
+    out_path: Path = Field(
+        description="Where Slurm writes the job's output (<combo_id>.out)"
+    )
 
 
 class JobLedger(StrictModel):
@@ -167,40 +180,10 @@ class TestProvenance(StrictModel):
     )
 
 
-class TestJob(StrictModel):
-    """The Slurm job of one test run: enough to wait for it, judge it and
-    cancel it from any later process."""
+class TestJob(SlurmJob):
+    """The Slurm job of one test run: the shared fields, nothing more."""
 
     __test__ = False
-
-    job_id: str = Field(description="The Slurm job id sbatch returned")
-    cluster: str | None = Field(
-        default=None,
-        description=(
-            "The cluster sbatch said the job went to (multi-cluster Slurm), "
-            "named in every later squeue, sacct and scancel about it; null on "
-            "a single-cluster machine"
-        ),
-    )
-    script: Path = Field(
-        description="The submitted job script (04-test-<application>.sbatch)"
-    )
-    timeout_s: int = Field(
-        gt=0, description="The job's own time limit in seconds (tests.minutes)"
-    )
-    queue_wait_s: int = Field(
-        gt=0,
-        description="Seconds the job may wait in the queue before the harness cancels it",
-    )
-    submitted_at: datetime = Field(
-        description="When sbatch accepted the job (UTC); the deadline counts from here"
-    )
-
-    @property
-    def deadline(self) -> datetime:
-        """When the harness gives up on the job: submission plus its time
-        limit plus its queue allowance."""
-        return self.submitted_at + timedelta(seconds=self.timeout_s + self.queue_wait_s)
 
 
 class TestLedger(StrictModel):
@@ -367,9 +350,28 @@ def submit_job(script: Path) -> JobRef:
     """Submit a job script; returns the job's id and cluster — the two
     `;`-separated fields of --parsable's line, the second present only when
     the job went to a named cluster. A nonzero exit or an empty id raises
-    SlurmSubmissionError carrying what sbatch said."""
+    SlurmSubmissionError carrying what sbatch said; so does an sbatch that
+    cannot be run or does not answer in time (the controller unreachable),
+    which may still have queued the job."""
     command = submission_command(script)
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_SLURM_CLIENT_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SlurmSubmissionError(
+            1,
+            command,
+            output="",
+            stderr=(
+                f"sbatch did not run ({exc}); it may still have queued the job: "
+                "check `squeue --me` before submitting again"
+            ),
+        ) from exc
     job_id, _, cluster = (completed.stdout or "").strip().partition(";")
     job_id, cluster = job_id.strip(), cluster.strip()
     if completed.returncode != 0 or not job_id:
@@ -400,7 +402,11 @@ def queue_states(job_ids: Iterable[str], clusters: str | None = None) -> dict[st
     argv = ["squeue", "-h", *_on(clusters), "-j", ",".join(ids), "-o", "%i %T"]
     try:
         completed = subprocess.run(
-            argv, capture_output=True, text=True, check=False, timeout=_SQUEUE_TIMEOUT_S
+            argv,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_SLURM_CLIENT_TIMEOUT_S,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         logger.warning(
@@ -467,8 +473,22 @@ def wait_for_job(
 
 def scancel(job_ids: list[str], clusters: str | None = None) -> None:
     """`scancel [-M <clusters>] <ids>` in one call; a job already gone is
-    not an error."""
-    subprocess.run(["scancel", *_on(clusters), *job_ids], check=False)
+    not an error, and neither is an scancel that cannot be run or does not
+    answer in time — it is called when a job is already overdue, often
+    because the controller is slow: logged, never raised, never waited for
+    without bound."""
+    if not job_ids:
+        return
+    try:
+        subprocess.run(
+            ["scancel", *_on(clusters), *job_ids],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_SLURM_CLIENT_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("scancel %s did not run: %s", " ".join(job_ids), exc)
 
 
 def by_cluster(jobs: Iterable[tuple[str, str | None]]) -> dict[str | None, list[str]]:

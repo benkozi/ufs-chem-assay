@@ -776,11 +776,18 @@ def test_the_kokkos_template_loads_as_shipped() -> None:
         assert cece.tests.ntasks == 4
         assert build.applications["catchem"].tests.ntasks == 1
         catchem = build.applications["catchem"]
-        # The CATChem branch the C7 template builds too (the coupling work).
-        assert (catchem.git_url, catchem.ref) == (
-            "git@github.com:benkozi/CATChem.git",
-            "feature/cece-coupling-proto",
-        )
+        # The CATChem the C7 template builds too: one source for both
+        # machines, whichever repository and branch that currently is.
+        on_c7 = load_run_config(_GAEA_C7).applications["catchem"]
+        assert (catchem.git_url, catchem.ref) == (on_c7.git_url, on_c7.ref)
+        # Compute nodes have no network (CECE's pip fixtures must not wait
+        # for one), and Kokkos's OpenMP backend warns in every CATChem test
+        # unless OMP_PROC_BIND is set: as on Gaea C7.
+        # (A toolchain adds its own tests_env to these.)
+        assert cece.tests.env["PIP_NO_INDEX"] == "1"
+        for name, section in built:
+            if name == "catchem":
+                assert section.tests.env["OMP_PROC_BIND"] == "false"
         # Ursa's modulefiles load no yaml-cpp: CATChem keeps its vendored copy.
         assert not any(
             "CATCHEM_USE_SYSTEM_YAML_CPP" in flag
@@ -882,10 +889,10 @@ def test_the_gaea_c7_template_loads_as_shipped() -> None:
     assert toolchain.configure_gates == []  # the ArborX gate is CECE's (below)
     # The environment builds its UFS stack against one ESMF; its default
     # esmf module is a later beta, which the mapl module does not match.
-    assert toolchain.module_env == {
-        "esmf_ver": "9.0.0b17",
-        "mapl_ver": "2.69.1-esmf-9.0.0b17",
-    }
+    assert set(toolchain.module_env) == {"esmf_ver", "mapl_ver"}
+    assert toolchain.module_env["mapl_ver"].endswith(
+        f"-esmf-{toolchain.module_env['esmf_ver']}"
+    )
     (build,) = toolchain_configs(config, ["all"])
     cece = build.applications["cece"]
     assert cece.modulefile == "ufs_gaeac7.oneapi"
@@ -895,12 +902,6 @@ def test_the_gaea_c7_template_loads_as_shipped() -> None:
     ]
     assert cece.toolchain_tools == ["icx", "icpx", "ifx", "cmake", "ctest"]
     assert {"-DCMAKE_BUILD_TYPE=Debug", "-DENABLE_ESMF=ON"} <= set(cece.build_flags())
-    # The ref that builds against the environment's ESMF 9 (a FindESMF fix
-    # not yet upstream); the template says when it goes back to develop.
-    assert (cece.git_url, cece.ref) == (
-        "git@github.com:benkozi/CECE.git",
-        "feature/multi-tile-host-decomp",
-    )
     # The environment's Kokkos, never a fetched one; built as the offline
     # compile probe on a compute node, then finished on the login node.
     assert cece.configure_gates == [
@@ -962,13 +963,15 @@ def test_the_gaea_c7_template_renders_the_build_and_test_stages(
         "04-test-cece-oneapi.sh",
     ]
     build = (scripts / "02-build-cece-oneapi.sh").read_text().splitlines()
+    pins = load_run_config(_GAEA_C7).toolchains["oneapi"].module_env
+    assert pins
     module_lines = [
         line for line in build if line.startswith(("module ", "export ", "which "))
     ]
     assert module_lines == [
         "module reset",  # never purge on Gaea
-        "export esmf_ver=9.0.0b17",
-        "export mapl_ver=2.69.1-esmf-9.0.0b17",
+        # The toolchain's pins, whatever they currently are, before the load.
+        *(f"export {name}={value}" for name, value in pins.items()),
         f"module use {HARNESS_ROOT / 'modulefiles'}",
         f"module use {_C7_ENVIRONMENT}/modules/Core",
         "module load ufs_gaeac7.oneapi",
@@ -1039,11 +1042,6 @@ def test_the_gaea_c7_template_builds_catchem_twice(
     config = load_run_config(_GAEA_C7)
     (oneapi,) = toolchain_configs(config, None)
     catchem = get_application("catchem")
-    section = oneapi.applications["catchem"]
-    assert (section.git_url, section.ref) == (
-        "git@github.com:benkozi/CATChem.git",
-        "feature/cece-coupling-proto",
-    )
     compute, musica = build_configs(oneapi, catchem, None)
     c, m = compute.applications["catchem"], musica.applications["catchem"]
     assert (c.build_name, c.build_node) == ("compute", BuildNode.COMPUTE)

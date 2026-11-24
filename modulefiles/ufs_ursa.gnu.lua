@@ -23,12 +23,24 @@
 -- upstream sets no CC/CXX (unlike the oneapi file): CMake picks gcc/g++
 -- from the loaded stack and FindMPI supplies MPI — that is the UFS-gnu
 -- reality this models; do not "fix" it here without a recorded reason.
--- Every <name>_ver variable is read from the environment, so a run config
+-- Every <name>_ver variable is read from the environment (an empty value
+-- counts as unset: pin, below), so a run config
 -- pins a version through applications.<name>.module_env.
 
 help([[
 loads UFS Model prerequisites for Ursa/GNU
 ]])
+
+-- Local addition (see header): a version pin read from the environment.
+-- Unset and empty both mean "no pin": a run config that extends another can
+-- only clear a pin its base sets by setting it to the empty string.
+local function pin(name)
+  local value = os.getenv(name)
+  if value ~= nil and value ~= "" then
+    return value
+  end
+  return nil
+end
 
 -- Optional (see header): unset or empty, the caller has already
 -- `module use`d the environment's modules/Core.
@@ -37,13 +49,13 @@ if env_root and env_root ~= "" then
   prepend_path("MODULEPATH", pathJoin(env_root, "modules/Core"))
 end
 
-stack_gnu_ver=os.getenv("stack_gnu_ver") or "12.4.0"
+local stack_gnu_ver = pin("stack_gnu_ver") or "12.4.0"
 load(pathJoin("stack-gcc", stack_gnu_ver))
 
-stack_openmpi_ver=os.getenv("stack_openmpi_ver") or "4.1.6"
+local stack_openmpi_ver = pin("stack_openmpi_ver") or "4.1.6"
 load(pathJoin("stack-openmpi", stack_openmpi_ver))
 
-cmake_ver=os.getenv("cmake_ver")
+local cmake_ver = pin("cmake_ver")
 if cmake_ver then
   load(pathJoin("cmake", cmake_ver))
 else
@@ -52,7 +64,7 @@ end
 
 load("ufs_common")
 
-nccmp_ver=os.getenv("nccmp_ver")
+local nccmp_ver = pin("nccmp_ver")
 if nccmp_ver then
   load(pathJoin("nccmp", nccmp_ver))
 else
@@ -71,14 +83,14 @@ whatis("Description: UFS build environment")
 -- Local addition (see header): the packages under test in
 -- JCSDA/spack-stack#2081. Unversioned loads take the environment's default
 -- version.
-kokkos_ver=os.getenv("kokkos_ver")
+local kokkos_ver = pin("kokkos_ver")
 if kokkos_ver then
   load(pathJoin("kokkos", kokkos_ver))
 else
   load("kokkos")
 end
 
-kokkos_kernels_ver=os.getenv("kokkos_kernels_ver")
+local kokkos_kernels_ver = pin("kokkos_kernels_ver")
 if kokkos_kernels_ver then
   load(pathJoin("kokkos-kernels", kokkos_kernels_ver))
 else
@@ -87,7 +99,7 @@ end
 
 -- Local addition (see header): arborx, tolerantly — try_load is a silent
 -- no-op if an env without arborx is ever selected.
-arborx_ver=os.getenv("arborx_ver")
+local arborx_ver = pin("arborx_ver")
 if arborx_ver then
   load(pathJoin("arborx", arborx_ver))
 else

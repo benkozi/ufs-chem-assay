@@ -16,7 +16,7 @@ import pytest
 import yaml
 from pytest_mock import MockerFixture
 
-from applications.base import Application
+from applications.base import Application, Stage
 from applications.registry import REGISTRY
 from baselines import BaselineState, StagedBaseline
 from benchmarks import (
@@ -25,7 +25,9 @@ from benchmarks import (
     read_benchmarks_csv,
     write_benchmarks_csv,
 )
+from cli.commands.run import _execute, _Step
 from cli.main import Command, main
+from cli.stage_outcomes import StageState, read_stage_record
 from logs import LOGGER_NAME
 from models.conventions import CONVENTIONS
 from platforms import Platform
@@ -220,6 +222,101 @@ def test_failed_stage_stops_the_run_and_logs_at_error(
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert len(errors) == 1
     assert "02-build-cece" in errors[0].getMessage()
+
+
+def _steps(tmp_path: Path, *steps: tuple[str, Stage, str | None]) -> list[_Step]:
+    """One application's scripts as `run` plans them: (name, stage, session)."""
+    return [
+        (tmp_path / name, "cece", None, stage, session)
+        for name, stage, session in steps
+    ]
+
+
+def _execute_with(
+    tmp_path: Path, mocker: MockerFixture, steps: list[_Step], failing: dict[str, int]
+) -> tuple[list[str], dict[str, str | None]]:
+    """What ran, and each skipped script's cause, with the named scripts
+    failing."""
+    run_bash = mocker.patch(
+        "cli.commands.run.run_bash",
+        side_effect=lambda path, *_a, **_kw: failing.get(path.name, 0),
+    )
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    failures = _execute(
+        steps, tmp_path / "logs", toolchain=None, scripts_dir=scripts_dir, run_id="r"
+    )
+    assert [(path.name, code) for path, code in failures] == list(failing.items())
+    record = read_stage_record(scripts_dir)
+    skipped = {
+        name: outcome.cause
+        for name, outcome in record.outcomes.items()
+        if outcome.state is StageState.SKIPPED
+    }
+    return [call.args[0].name for call in run_bash.call_args_list], skipped
+
+
+_SESSION_STEPS: tuple[tuple[str, Stage, str | None], ...] = (
+    ("01-source.sh", Stage.SOURCE, None),
+    ("02-build.sh", Stage.BUILD, None),
+    ("04-test.sh", Stage.TEST, None),
+    ("03-data.sh", Stage.DATA, None),
+    ("05-harness-s1.sh", Stage.HARNESS, "s1"),
+    ("05-harness-s2.sh", Stage.HARNESS, "s2"),
+    ("06-resume-s1.sh", Stage.RESUME, "s1"),
+    ("06-resume-s2.sh", Stage.RESUME, "s2"),
+)
+_SESSION_SCRIPTS = [name for name, _, _ in _SESSION_STEPS]
+
+
+def test_a_failed_session_does_not_stop_the_other_sessions(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    # s1's submit failed: there is nothing of s1 to resume, and s2 is untouched.
+    ran, skipped = _execute_with(
+        tmp_path, mocker, _steps(tmp_path, *_SESSION_STEPS), {"05-harness-s1.sh": 3}
+    )
+    assert ran == [name for name in _SESSION_SCRIPTS if name != "06-resume-s1.sh"]
+    assert skipped == {"06-resume-s1.sh": "05-harness-s1.sh"}
+
+
+def test_a_failed_test_stage_stops_nothing(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    # Neither the data stage nor a session depends on the application's own tests.
+    ran, skipped = _execute_with(
+        tmp_path, mocker, _steps(tmp_path, *_SESSION_STEPS), {"04-test.sh": 8}
+    )
+    assert ran == _SESSION_SCRIPTS
+    assert skipped == {}
+
+
+def test_a_failed_data_stage_stops_the_sessions(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    ran, skipped = _execute_with(
+        tmp_path, mocker, _steps(tmp_path, *_SESSION_STEPS), {"03-data.sh": 1}
+    )
+    assert ran == _SESSION_SCRIPTS[:4]
+    assert skipped == dict.fromkeys(_SESSION_SCRIPTS[4:], "03-data.sh")
+
+
+def test_a_failed_build_stops_its_tests_data_and_sessions(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    ran, skipped = _execute_with(
+        tmp_path, mocker, _steps(tmp_path, *_SESSION_STEPS), {"02-build.sh": 2}
+    )
+    assert ran == _SESSION_SCRIPTS[:2]
+    assert skipped == dict.fromkeys(_SESSION_SCRIPTS[2:], "02-build.sh")
+
+
+def test_a_failed_resume_stops_nothing(tmp_path: Path, mocker: MockerFixture) -> None:
+    ran, skipped = _execute_with(
+        tmp_path, mocker, _steps(tmp_path, *_SESSION_STEPS), {"06-resume-s1.sh": 1}
+    )
+    assert ran == _SESSION_SCRIPTS
+    assert skipped == {}
 
 
 def test_local_config_runs_the_same_stages(

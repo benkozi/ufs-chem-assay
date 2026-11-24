@@ -1024,3 +1024,78 @@ def test_slurm_poll_s_defaults_and_is_a_setting() -> None:
     ursa = load_run_config(TEMPLATES_DIR / "ursa.yaml")
     assert ursa.slurm is not None
     assert ursa.slurm.poll_s == 30
+
+
+def test_the_slurm_runtime_needs_a_slurm_section(tmp_path: Path) -> None:
+    # Rendering a job needs the section: said at load, not by an assert later.
+    path = run_config_file(tmp_path, overrides={"slurm": REMOVE, "sessions": REMOVE})
+    with pytest.raises(
+        ValidationError, match=r"the slurm runtime needs a slurm: section"
+    ):
+        load_run_config(path)
+    # Every field has a default: an empty section is enough.
+    path = run_config_file(tmp_path, overrides={"slurm": {}, "sessions": REMOVE})
+    config = load_run_config(path)
+    assert config.slurm is not None
+    assert config.slurm.account == "epic"
+
+
+def test_a_session_on_the_slurm_runtime_needs_a_slurm_section(tmp_path: Path) -> None:
+    path = run_config_file(
+        tmp_path,
+        "local.yaml",
+        overrides={"sessions": {"batch": {"harness": {"runtime": "slurm"}}}},
+    )
+    with pytest.raises(
+        ValidationError, match=r"sessions\.batch: the slurm runtime needs"
+    ):
+        load_run_config(path)
+
+
+def _cece_with_tests(*cmake_args: str) -> CeceRunSection:
+    return CeceRunSection.model_validate(
+        {
+            "git_url": "u",
+            "ref": "r",
+            "cmake_args": list(cmake_args),
+            "targets": ["all"],
+            "tests": {"enabled": True},
+        }
+    )
+
+
+def test_a_cmake_section_reads_the_last_definition() -> None:
+    # CMake keeps the last -D of a name, and a toolchain's arguments come
+    # after the application's.
+    section = _cece_with_tests(
+        "-DCMAKE_BUILD_TYPE=Debug",
+        "-DENABLE_ESMF:BOOL=on",
+        "-DCMAKE_BUILD_TYPE=Release",
+    )
+    assert section.cmake_value("CMAKE_BUILD_TYPE") == "Release"
+    assert section.cmake_value("ENABLE_ESMF") == "on"
+    assert section.cmake_value("ENABLE") is None  # the whole name, not a prefix
+    assert section.cmake_on("ENABLE_ESMF")
+    assert not section.cmake_on("CMAKE_BUILD_TYPE")
+    assert not section.cmake_on("NEVER_SET")
+
+
+@pytest.mark.parametrize("on", ["ON", "TRUE", "1", "yes"])
+def test_cece_tests_accept_every_spelling_of_on(on: str) -> None:
+    section = _cece_with_tests("-DCMAKE_BUILD_TYPE=Debug", f"-DENABLE_ESMF={on}")
+    assert section.runtime_problems(Runtime.SLURM) == []
+
+
+def test_cece_tests_are_judged_by_the_definitions_cmake_keeps() -> None:
+    overridden = _cece_with_tests(
+        "-DCMAKE_BUILD_TYPE=Debug",
+        "-DENABLE_ESMF=ON",
+        "-DCMAKE_BUILD_TYPE=Release",  # as a toolchain's argument would be
+        "-DENABLE_ESMF=OFF",
+    )
+    (problem,) = overridden.runtime_problems(Runtime.SLURM)
+    assert "missing: -DCMAKE_BUILD_TYPE=Debug, -DENABLE_ESMF=ON" in problem
+    restored = _cece_with_tests(
+        "-DCMAKE_BUILD_TYPE=Release", "-DENABLE_ESMF=ON", "-DCMAKE_BUILD_TYPE=Debug"
+    )
+    assert restored.runtime_problems(Runtime.SLURM) == []

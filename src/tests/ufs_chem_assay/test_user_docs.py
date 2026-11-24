@@ -1,11 +1,14 @@
-"""The user-facing tree (docs/, config/): generic — nothing user-specific, no
+"""The user-facing tree (README.md, docs/, ops/, config/, modulefiles/): generic — nothing user-specific, no
 design references — and consistent with what the CLI renders."""
 
+import re
 from pathlib import Path
 
 import pytest
 import yaml
+from pytest_mock import MockerFixture
 
+from cli.main import main
 from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -16,7 +19,8 @@ _README = _REPO_ROOT / "README.md"
 
 
 def _user_facing_files() -> list[Path]:
-    files = [_RUNBOOK, _GCAFS_RUNBOOK, _KOKKOS_RUNBOOK]
+    files = [_README, _RUNBOOK, _GCAFS_RUNBOOK, _KOKKOS_RUNBOOK]
+    files += sorted((_REPO_ROOT / "ops").glob("*.md"))
     files += sorted((_REPO_ROOT / "config").glob("*.yaml"))
     files += sorted((_REPO_ROOT / "modulefiles").glob("*.lua"))
     return files
@@ -53,14 +57,29 @@ def test_modulefiles_are_user_facing() -> None:
 @pytest.mark.parametrize("path", _user_facing_files(), ids=lambda p: p.name)
 def test_nothing_user_specific(path: Path) -> None:
     text = path.read_text()
-    for needle in ("Benjamin.Koziol", "Richard.Grubin", "my_stmp", "NCEPDEV/stmp"):
+    for needle in (
+        "Benjamin.Koziol",
+        "Richard.Grubin",
+        "my_stmp",
+        "NCEPDEV/stmp",
+        "bkoziol",  # a laptop's home
+        "/Users/",
+        "benkozi-work",  # a person's transfer repository
+    ):
         assert needle not in text, f"{path.name} contains {needle!r}"
 
 
-@pytest.mark.parametrize(
-    "path", [_RUNBOOK, _GCAFS_RUNBOOK, _KOKKOS_RUNBOOK], ids=lambda p: p.name
-)
+_DOCUMENTS = [p for p in _user_facing_files() if p.suffix == ".md"]
+
+
+def test_the_ops_documents_are_user_facing() -> None:
+    names = {path.name for path in _DOCUMENTS}
+    assert {"README.md", "c7-runbook.md", "kokkos-runbook.md"} <= names
+
+
+@pytest.mark.parametrize("path", _DOCUMENTS, ids=lambda p: f"{p.parent.name}/{p.name}")
 def test_runbook_never_mentions_the_design(path: Path) -> None:
+    # The design records are not in this repository: nothing to link to.
     assert "design/" not in path.read_text()
     assert "design doc" not in path.read_text().lower()
 
@@ -311,3 +330,40 @@ def test_kokkos_runbook_covers_the_use_case() -> None:
     for absent in ("benkozi", "Richard.Grubin", "build-test-kokkos.sh"):
         assert absent not in text, absent
     assert "example" not in text.lower()
+
+
+def test_kokkos_runbook_names_scripts_the_template_renders(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    # CATChem has two build variants, and a variant is part of a script's
+    # name: every script the runbook cites is one a dry run writes.
+    mocker.patch("cli.commands.run.run_bash")
+    root = tmp_path / "root"
+    assert (
+        main(
+            [
+                "run",
+                f"--config-file={TEMPLATES_DIR / 'ursa-kokkos.yaml'}",
+                f"--root-dir={root}",
+                "--application=all",
+                "--toolchain=all",
+                "--stage=source",
+                "--stage=build",
+                "--stage=test",
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    rendered = {p.name for p in (root / "scripts").iterdir()}
+    text = _KOKKOS_RUNBOOK.read_text()
+    cited = set(re.findall(r"\b0\d-[a-z0-9-]+\.(?:sh|sbatch)\b", text))
+    assert "02-build-catchem-gnu-musica.sh" in cited
+    assert cited <= rendered, sorted(cited - rendered)
+    # The pattern it gives for a variant's scripts, filled in, is one too.
+    for pattern in (
+        "02-build-catchem-<toolchain>-compute.sh",
+        "04-test-catchem-<toolchain>-musica.sbatch",
+    ):
+        assert pattern in text
+        assert pattern.replace("<toolchain>", "oneapi") in rendered

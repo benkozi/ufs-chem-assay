@@ -112,6 +112,18 @@ def test_source_stage_clones_when_missing_and_guards_submodules(
     assert "pull --ff-only" not in script.text  # as-is without update_source
 
 
+def test_source_stage_quotes_a_checkout_path_whole(tmp_path: Path) -> None:
+    root = Path("/scratch/my run/$HOME")
+    config = load_run_config(run_config_file(tmp_path, root_dir=root))
+    lines = render_stage(Stage.SOURCE, config, _CECE).text.splitlines()
+    clone = config.checkout_dir(_CECE)
+    assert f"if [ ! -e {shlex.quote(str(clone / 'extern/helm/libs'))} ]; then" in lines
+    message = shlex.quote(f"extern/helm submodule not initialized in {clone}")
+    assert f"  echo {message} >&2; exit 1" in lines
+    assert f"  echo {shlex.quote(f'using existing clone at {clone} as-is')}" in lines
+    assert not any('"' in line and "$HOME" in line for line in lines)
+
+
 def test_source_stage_update_source_fast_forwards(tmp_path: Path) -> None:
     config = _ursa(tmp_path, {"applications.cece.update_source": True})
     script = render_stage(Stage.SOURCE, config, _CECE)

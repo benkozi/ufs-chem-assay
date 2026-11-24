@@ -18,7 +18,7 @@ from pytest_mock import MockerFixture
 
 from cli.main import main
 from logs import LOGGER_NAME
-from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR
+from tests.ufs_chem_assay.run_configs import TEMPLATES_DIR, run_config_file
 
 _CLI_LOGGER = f"{LOGGER_NAME}.cli"
 
@@ -120,8 +120,8 @@ def test_the_transfer_repository_is_pulled_added_committed_and_pushed(
     calls = [(c.args[0], c.kwargs["cwd"]) for c in git.call_args_list]
     transfer = tmp_path / "transfer"
     assert calls == [
-        (["git", "pull"], transfer),
-        (["git", "add", "-f", "assay-x.zip"], transfer),
+        (["git", "pull", "--ff-only"], transfer),
+        (["git", "add", "-f", "--", "assay-x.zip"], transfer),
         (["git", "commit", "-m", "assay-x"], transfer),
         (["git", "push"], transfer),
     ]
@@ -158,9 +158,73 @@ def test_an_existing_name_is_refused(
         existing.mkdir()
     code, messages = _transfer(tmp_path, caplog, "--name=assay-x")
     assert code == 1
-    git.assert_not_called()
+    # Checked after the pull, which may be what brought the name in.
+    assert [c.args[0][1] for c in git.call_args_list] == ["pull"]
     assert messages[-1] == (f"transfer: {existing} already exists: pass another --name")
     assert sorted(p.name for p in (tmp_path / "transfer").iterdir()) == [taken]
+
+
+@pytest.mark.usefixtures("root")
+def test_a_failing_pull_leaves_no_archive(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The pull comes first: a transfer repository that cannot be brought up
+    # to date gets no untracked payload left in it.
+    git = _git(mocker, failing="pull")
+    code, messages = _transfer(tmp_path, caplog, "--name=assay-x")
+    assert code == 1
+    assert [c.args[0][1] for c in git.call_args_list] == ["pull"]
+    assert not any((tmp_path / "transfer").iterdir())
+    assert messages[-1] == (
+        f"transfer: `git pull --ff-only` failed (exit 1) in {tmp_path / 'transfer'}; "
+        "nothing archived"
+    )
+
+
+@pytest.mark.usefixtures("root")
+@pytest.mark.parametrize("name", ["../escape", "a/b", "-flag", ".hidden", "a b", ""])
+def test_a_name_that_is_not_a_plain_file_name_is_refused(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture, name: str
+) -> None:
+    # The name becomes a path in the transfer repository, a member prefix in
+    # the zip and an argument to git.
+    git = _git(mocker)
+    for dry_run in ((), ("--dry-run",)):
+        code, messages = _transfer(tmp_path, caplog, f"--name={name}", *dry_run)
+        assert code == 1
+        assert "--name" in messages[-1]
+        assert repr(name) in messages[-1]
+    git.assert_not_called()
+    assert not any((tmp_path / "transfer").iterdir())
+    assert not (tmp_path / "escape.zip").exists()
+
+
+def test_a_root_without_toolchains_is_archived_from_its_own_layout(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Without toolchains: the tests roots and checkouts sit directly under
+    # the root. An application's own source tests/ directory is not evidence.
+    root = tmp_path / "root"
+    config = run_config_file(tmp_path, root_dir=root)
+    data = yaml.safe_load(config.read_text())
+    data["transfer_dir"] = str(tmp_path / "transfer")
+    config.write_text(yaml.safe_dump(data, sort_keys=False))
+    mocker.patch("cli.commands.run.run_bash", return_value=0)
+    assert main(["run", f"--config-file={config}", "--dry-run"]) == 0
+    (root / "tests" / "cece").mkdir(parents=True)
+    (root / "tests" / "cece" / "tests.yaml").write_text("{}\n")
+    (root / "CECE" / "build").mkdir(parents=True)
+    (root / "CECE" / "build" / "CMakeCache.txt").write_text("ESMF:BOOL=ON\n")
+    (root / "CECE" / "tests").mkdir()
+    (root / "CECE" / "tests" / "unit.cpp").write_text("// source, not evidence\n")
+    (tmp_path / "transfer").mkdir()
+    _git(mocker)
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert main(["transfer", f"--config-file={config}", "--name=assay-x"]) == 0
+    files = _members(tmp_path / "transfer" / "assay-x.zip")
+    assert "tests/cece/tests.yaml" in files
+    assert "cmake/CECE/build/CMakeCache.txt" in files
+    assert not any(f.endswith("unit.cpp") for f in files)
 
 
 @pytest.mark.usefixtures("root")
@@ -189,7 +253,8 @@ def test_a_dry_run_archives_and_pushes_nothing(
         for m in messages
     )
     assert f"dry run: would write {tmp_path / 'transfer' / 'assay-x.zip'}" in messages
-    assert "dry run: would run `git add -f assay-x.zip`" in messages
+    assert "dry run: would run `git pull --ff-only`" in messages
+    assert "dry run: would run `git add -f -- assay-x.zip`" in messages
     assert messages[-1] == "transfer: dry run; nothing archived or pushed"
 
 
@@ -256,7 +321,7 @@ def test_a_failed_archive_leaves_no_payload(
     )
     code, messages = _transfer(tmp_path, caplog, "--name=assay-x")
     assert code == 1
-    git.assert_not_called()
+    assert [c.args[0][1] for c in git.call_args_list] == ["pull"]
     assert not any((tmp_path / "transfer").iterdir())
     assert messages[-1] == (
         f"transfer: cannot write {tmp_path / 'transfer' / 'assay-x.zip'}: No space left"

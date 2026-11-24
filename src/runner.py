@@ -407,7 +407,9 @@ def finish_driver_job(job: SubmittedJob, settings: Settings) -> DriverExecution:
     SlurmJobTimeout raised), then judge it by its accounting. Slurm writes
     the job's output to out_path itself; the harness reads it back. A job
     Slurm ended by its limit (TIMEOUT) or that was cancelled is a timeout;
-    any other nonzero exit is SlurmJobError with the output; a job whose
+    any other nonzero exit, and any other job that did not complete
+    whatever its exit code (out of memory, a lost node), is SlurmJobError
+    with the output; a job whose
     .out never appeared gets one explaining itself from the accounting."""
     accounting = wait_for_job(job, poll_s=settings.slurm_poll_s)
     command = submission_command(job.script)
@@ -422,8 +424,6 @@ def finish_driver_job(job: SubmittedJob, settings: Settings) -> DriverExecution:
     state = accounting.state or ""
     if state.startswith(("TIMEOUT", "CANCELLED")):
         raise SlurmJobTimeout(command, job.timeout_s + job.queue_wait_s, job.job_id)
-    if accounting.exit_code not in (0, None) or (
-        accounting.exit_code is None and not state.startswith("COMPLETED")
-    ):
+    if accounting.exit_code not in (0, None) or not accounting.completed:
         raise SlurmJobError(accounting.exit_code or 1, command, output, job.job_id)
     return DriverExecution(job_id=job.job_id, accounting=accounting)

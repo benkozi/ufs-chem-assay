@@ -16,7 +16,12 @@ import apptests
 from cli.commands import Subparsers
 from cli.run_config import HARNESS_ROOT
 from cli.run_report import RunReport, render, summarize_session, summarize_tests
-from cli.selectors import selected_applications, selected_sessions, toolchain_configs
+from cli.selectors import (
+    check_builds,
+    selected_applications,
+    selected_sessions,
+    toolchain_configs,
+)
 from cli.sessions import (
     SessionReport,
     SessionState,
@@ -32,7 +37,7 @@ from cli.sessions import (
     load_effective,
     poll,
     read_session_ledger,
-    read_tests_ledger,
+    read_tests_ledgers,
     session_cause,
     session_started,
     stage_summaries,
@@ -182,6 +187,7 @@ def handler(args: argparse.Namespace) -> int:
         # One build per selected toolchain (the config itself without any):
         # each has its own session roots, resume scripts and tests roots.
         builds = toolchain_configs(config, args.toolchain)
+        check_builds(config, applications, args.build)
         # Only what a run started (cli/sessions.*_started): a session or
         # test run whose stage no run selected or recorded is not waited for.
         started = read_stage_record(root_dir / "scripts")
@@ -278,7 +284,10 @@ def handler(args: argparse.Namespace) -> int:
     try:
         while True:
             ledgers = {w.root: read_session_ledger(w) for w in watched}
-            test_ledgers = {t.root: read_tests_ledger(t) for t in tests}
+            test_ledgers, unreadable = read_tests_ledgers(tests)
+            for t in tests:
+                if t.root in unreadable and t.root not in final_tests:
+                    final_tests[t.root] = unreadable[t.root]
             states = poll(ledgers.values(), test_ledgers.values())
             reports = tick(watched, ledgers, states)
             test_reports = tick_tests(tests, test_ledgers, states)

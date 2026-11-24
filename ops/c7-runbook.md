@@ -1,7 +1,7 @@
 # Gaea C7 runbook: the daily run
 
 The harness checkout on C7 is
-`/gpfs/f7/epic/proj-shared/Benjamin.Koziol/git/ufs-chem-assay`. You create
+`/gpfs/f7/epic/proj-shared/<you>/git/ufs-chem-assay`. You create
 one file, your run config. Nothing else is new: no `.env` changes, no
 `ops/env.sh`, nothing in `~/.bashrc`.
 
@@ -17,7 +17,7 @@ old one (it still looks for `ops/env.sh`). So pull by hand once, after the
 change is pushed:
 
 ```bash
-cd /gpfs/f7/epic/proj-shared/Benjamin.Koziol/git/ufs-chem-assay
+cd /gpfs/f7/epic/proj-shared/<you>/git/ufs-chem-assay
 git pull
 ```
 
@@ -29,7 +29,7 @@ against `.uv/python` (it downloads that Python and fills `.uv/cache` the one
 time):
 
 ```bash
-rm -rf /gpfs/f7/epic/proj-shared/Benjamin.Koziol/git/ufs-chem-assay/.venv
+rm -rf /gpfs/f7/epic/proj-shared/<you>/git/ufs-chem-assay/.venv
 ```
 
 `sandbox/uv-cache` and `sandbox/uv-python` are no longer used by the assay;
@@ -41,11 +41,11 @@ remove them when nothing else needs them.
 the shared `config/gaea-c7.yaml` and holds only your values:
 
 ```bash
-cat > /gpfs/f7/epic/proj-shared/Benjamin.Koziol/git/ufs-chem-assay/config/c7.local.yaml <<'EOF'
+cat > /gpfs/f7/epic/proj-shared/<you>/git/ufs-chem-assay/config/c7.local.yaml <<'EOF'
 # My daily C7 run: everything else is config/gaea-c7.yaml's.
 extends: config/gaea-c7.yaml
-root_dir: /gpfs/f7/epic/proj-shared/Benjamin.Koziol/sandbox/work-ufs-chem-assay
-transfer_dir: ~/l/c7-epic-proj-shared/git/benkozi-work/transfer
+root_dir: /gpfs/f7/epic/proj-shared/<you>/sandbox/work-ufs-chem-assay
+transfer_dir: ~/l/c7-epic-proj-shared/git/<your work repo>/transfer
 selected_stages: [source, build, test]  # selected_applications omitted: every application (cece, catchem)
 EOF
 ```
@@ -56,7 +56,7 @@ Render everything and execute nothing (this first call also rebuilds the
 venv):
 
 ```bash
-cd /gpfs/f7/epic/proj-shared/Benjamin.Koziol/git/ufs-chem-assay
+cd /gpfs/f7/epic/proj-shared/<you>/git/ufs-chem-assay
 ops/assay run --config-file config/c7.local.yaml --dry-run
 ```
 
@@ -69,14 +69,14 @@ toolchains: oneapi` and write the scripts under `<root>/scripts/`. Then
 Start from a fresh root if you want one (the path stays the same):
 
 ```bash
-rm -rf /gpfs/f7/epic/proj-shared/Benjamin.Koziol/sandbox/work-ufs-chem-assay
+rm -rf /gpfs/f7/epic/proj-shared/<you>/sandbox/work-ufs-chem-assay
 ```
 
 Run (module reset, git pull, the stages, then watch until the tests are
 evaluated):
 
 ```bash
-cd /gpfs/f7/epic/proj-shared/Benjamin.Koziol/git/ufs-chem-assay
+cd /gpfs/f7/epic/proj-shared/<you>/git/ufs-chem-assay
 ops/assay-run.sh config/c7.local.yaml
 ```
 
@@ -102,8 +102,8 @@ first, or to name the payload, call the harness command itself:
 Once the transfer has synced:
 
 ```bash
-cd /Users/bkoziol/sandbox/git-benkozi/ufs-chem-assay
-ops/assay record-benchmarks --transfer ~/Library/CloudStorage/Dropbox/rlps/rsandbox/benkozi-work/transfer/assay-<YYYYmmdd-HHMM>.zip --dry-run
+cd <your laptop's harness checkout>
+ops/assay record-benchmarks --transfer <the synced transfer directory>/assay-<YYYYmmdd-HHMM>.zip --dry-run
 ```
 
 It reads the zip in place (no need to unzip it; the unzipped `assay-<...>/` directory works too). To look at the run, `unzip assay-<YYYYmmdd-HHMM>.zip` gives `assay-<YYYYmmdd-HHMM>/`, with `report.txt` at its top. Drop `--dry-run` to append, then review `git diff -- 'src/tests/config/*/tests-benchmarks.csv'` and commit. (Plain `uv run ufs-chem-assay ...` works on the laptop too; `ops/assay` keeps its uv apart there as well.)

@@ -980,7 +980,26 @@ def summarize_tests(
             junit=None,
             issues=[Issue(kind=IssueKind.NOT_SUBMITTED, detail=detail)],
         )
-    ledger = read_test_ledger(root)
+    try:
+        ledger = read_test_ledger(root)
+    except ValueError as exc:
+        return TestsSummary(
+            application=application,
+            toolchain=toolchain,
+            build=build,
+            root=root,
+            run_id=None,
+            state=SessionState.NOT_EVALUATED,
+            exit_status=None,
+            evaluated_at=None,
+            submitted_by=None,
+            job_id=None,
+            tests=None,
+            wall_s=None,
+            out=None,
+            junit=None,
+            issues=[Issue(kind=IssueKind.NOT_EVALUATED, detail=str(exc))],
+        )
     job_id = ledger.job.job_id if ledger.job else None
     existing = [path for path in (ledger.out_path, ledger.junit_path) if path.is_file()]
     row = _test_row(root, ledger.run_id)

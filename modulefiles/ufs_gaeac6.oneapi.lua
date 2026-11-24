@@ -26,13 +26,25 @@
 -- even upstream's stale "Intel-2023.2.0" help text — is verbatim. Load it
 -- after `module reset`, never `module purge` (purge strips the Cray
 -- programming environment the wrappers need).
--- Every <name>_ver variable is read from the environment, so a run config
+-- Every <name>_ver variable is read from the environment (an empty value
+-- counts as unset: pin, below), so a run config
 -- pins a version through applications.<name>.module_env.
 
 help([[
   This module loads libraries required for building and running UFS Weather Model
   on the NOAA RDHPC machine Gaea C6 using Intel-2023.2.0.
 ]])
+
+-- Local addition (see header): a version pin read from the environment.
+-- Unset and empty both mean "no pin": a run config that extends another can
+-- only clear a pin its base sets by setting it to the empty string.
+local function pin(name)
+  local value = os.getenv(name)
+  if value ~= nil and value ~= "" then
+    return value
+  end
+  return nil
+end
 
 whatis([===[Loads libraries needed for building the UFS Weather Model on Gaea C6]===])
 
@@ -43,13 +55,13 @@ if env_root and env_root ~= "" then
   prepend_path("MODULEPATH", pathJoin(env_root, "modules/Core"))
 end
 
-stack_intel_ver=os.getenv("stack_intel_ver") or "2025.2.1"
+local stack_intel_ver = pin("stack_intel_ver") or "2025.2.1"
 load(pathJoin("stack-intel-oneapi-compilers", stack_intel_ver))
 
-stack_cray_mpich_ver=os.getenv("stack_cray_mpich_ver") or "8.1.32"
+local stack_cray_mpich_ver = pin("stack_cray_mpich_ver") or "8.1.32"
 load(pathJoin("stack-cray-mpich", stack_cray_mpich_ver))
 
-cmake_ver=os.getenv("cmake_ver")
+local cmake_ver = pin("cmake_ver")
 if cmake_ver then
   load(pathJoin("cmake", cmake_ver))
 else
@@ -58,7 +70,7 @@ end
 
 load("ufs_common")
 
-nccmp_ver=os.getenv("nccmp_ver")
+local nccmp_ver = pin("nccmp_ver")
 if nccmp_ver then
   load(pathJoin("nccmp", nccmp_ver))
 else
@@ -81,14 +93,14 @@ setenv("CMAKE_Platform","gaeac6.oneapi")
 -- JCSDA/spack-stack#2081. TODO(gaea-c6): pin versions once known
 -- (`module avail kokkos kokkos-kernels` with the stack loaded); unversioned
 -- loads take the environment's default version.
-kokkos_ver=os.getenv("kokkos_ver")
+local kokkos_ver = pin("kokkos_ver")
 if kokkos_ver then
   load(pathJoin("kokkos", kokkos_ver))
 else
   load("kokkos")
 end
 
-kokkos_kernels_ver=os.getenv("kokkos_kernels_ver")
+local kokkos_kernels_ver = pin("kokkos_kernels_ver")
 if kokkos_kernels_ver then
   load(pathJoin("kokkos-kernels", kokkos_kernels_ver))
 else
@@ -97,7 +109,7 @@ end
 
 -- Local addition (see header): arborx, tolerantly — absent in this env
 -- today, so try_load is a silent no-op and find_package falls back.
-arborx_ver=os.getenv("arborx_ver")
+local arborx_ver = pin("arborx_ver")
 if arborx_ver then
   load(pathJoin("arborx", arborx_ver))
 else
