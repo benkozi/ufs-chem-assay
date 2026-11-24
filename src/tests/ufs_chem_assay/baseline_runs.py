@@ -1,5 +1,5 @@
 """A fabricated finished run for the baseline-publishing tests (the module
-and the CLI): the maccity suite copied beside its config into tmp_path (so
+and the CLI): a three-combination maccity suite written beside the copied config in tmp_path (so
 the file can be rewritten), run.yaml/combos.csv/test-report.csv as a
 session writes them, and one directory per combination holding
 NetCDF-named files, a log, and a plot subdirectory. Every comparison
@@ -7,7 +7,6 @@ failed (the republish case); everything else passed."""
 
 from __future__ import annotations
 
-import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -36,6 +35,39 @@ PREVIOUS_ULIDS = (
     "01JPREVCONSD00000000000002",
     "01JPREVPASSTHROUGH00000003",
 )
+_ALGOS = ("bilinear", "consd", "passthrough")
+
+
+def _suite_text(name: str) -> str:
+    """The fabricated suite: three mapalgo combinations, each pinning its
+    PREVIOUS_ULIDS entry. Owned here, so the checked-in suite can change
+    its sweep without changing what publication is tested against (no
+    driver runs: consd needs no cell bounds here)."""
+    entries = "".join(
+        "  - sweep_selector:\n"
+        "      cece_data:\n"
+        "        streams:\n"
+        "          - name: MACCITY\n"
+        f"            mapalgo: {algo}\n"
+        f"    ulid: {ulid}\n"
+        "    rtol: 1.0e-15\n"
+        for algo, ulid in zip(_ALGOS, PREVIOUS_ULIDS, strict=True)
+    )
+    sweep = "".join(f"          - {algo}\n" for algo in _ALGOS)
+    return (
+        f"name: {name}\n"
+        "config_path: maccity.yaml\n"
+        "timeout_s: 10\n"
+        "# Each entry's sweep_selector mirrors `sweep` (comments survive a rewrite).\n"
+        f"baseline_comparisons:\n{entries}"
+        "sweep:\n"
+        "  cece_data:\n"
+        "    streams:\n"
+        "      - name: MACCITY\n"
+        f"        mapalgo:\n{sweep}"
+    )
+
+
 TESTS = (
     "test_driver_execution",
     "test_nc_file_count",
@@ -102,19 +134,7 @@ def fabricate_run(
     suites.mkdir()
     shutil.copy(suite_dir / "maccity.yaml", suites / "maccity.yaml")
     suite_path = suites / f"{name}-suite.yaml"
-    text = (
-        (suite_dir / "simple-maccity-suite.yaml")
-        .read_text()
-        .replace("name: simple-maccity\n", f"name: {name}\n", 1)
-    )
-    previous = iter(PREVIOUS_ULIDS)
-    text = re.sub(
-        r"^(\s*ulid:\s*)\S+$",
-        lambda m: m.group(1) + next(previous),
-        text,
-        flags=re.MULTILINE,
-    )
-    suite_path.write_text(text)
+    suite_path.write_text(_suite_text(name))
     app = get_application("cece")
     suite = load_suite(suite_path)
     base = app.config_model.from_yaml(suite.config_path)

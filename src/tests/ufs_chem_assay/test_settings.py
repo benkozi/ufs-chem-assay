@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from platforms import Platform, Runtime
-from settings import CONVENTIONS, Settings
+from settings import CONVENTIONS, Settings, parse_env_pairs
 
 _SCRUBBED = (
     "APPLICATION",
@@ -25,6 +25,7 @@ _SCRUBBED = (
     "SRUN_ARGS",
     "INPUT_SEARCH_PATH",
     "OUTPUT_STORE",
+    "CARTOPY_DATA_DIR",
 )
 
 
@@ -37,6 +38,16 @@ def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> pytest.MonkeyP
     return monkeypatch
 
 
+def test_cartopy_data_dir_is_cartopys_own_unless_set(
+    clean_env: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Unset, cartopy keeps its default (under the home directory); set, the
+    # maps' Natural Earth data is downloaded there instead.
+    assert Settings().cartopy_data_dir is None
+    clean_env.setenv("ASSAY_CARTOPY_DATA_DIR", str(tmp_path / "cartopy"))
+    assert Settings().cartopy_data_dir == tmp_path / "cartopy"
+
+
 def test_prefixes() -> None:
     assert CONVENTIONS.env_prefix == "ASSAY_"
 
@@ -44,8 +55,16 @@ def test_prefixes() -> None:
 def test_no_application_settings_on_the_harness_model(
     clean_env: pytest.MonkeyPatch,
 ) -> None:
-    # root_dir / docker_image / driver_path / modulefile are the adapters'.
-    for name in ("root_dir", "docker_image", "driver_path", "modulefile"):
+    # root_dir / docker_image / driver_path / the module environment are the
+    # adapters'.
+    for name in (
+        "root_dir",
+        "docker_image",
+        "driver_path",
+        "modulefile",
+        "modulepath",
+        "module_env",
+    ):
         assert name not in Settings.model_fields
     clean_env.setenv("CECE_ROOT_DIR", "/host/cece")
     assert not hasattr(Settings(), "root_dir")
@@ -228,6 +247,27 @@ def test_baseline_store_accepts_a_directory(
     assert Settings(baseline_store="relative/store").baseline_store == str(
         Path("relative/store").resolve()
     )
+    # `~` is the home directory with its symlinks resolved (on Gaea
+    # /ncrc/home2/<user> is a link into /autofs): one name for one place.
+    real_home = tmp_path / "real-home"
+    real_home.mkdir()
+    (tmp_path / "home").symlink_to(real_home)
+    clean_env.setenv("HOME", str(tmp_path / "home"))
     assert Settings(baseline_store="~/baselines").baseline_store == str(
-        Path("~/baselines").expanduser()
+        real_home / "baselines"
     )
+
+
+@pytest.mark.parametrize("entry", ["1BAD=x", "A;id=1", "A-B=1", "=x", "NOVALUE"])
+def test_env_pairs_take_shell_variable_names_only(entry: str) -> None:
+    # The names are written into `export NAME=...` lines of generated scripts.
+    with pytest.raises(ValueError, match="ASSAY_JOB_ENV entries must be NAME=VALUE"):
+        parse_env_pairs(f"OK=1 {entry}", variable="ASSAY_JOB_ENV")
+
+
+def test_env_pairs_keep_order_and_quoted_values() -> None:
+    assert parse_env_pairs('_A1=x B="y z" C=', variable="V") == {
+        "_A1": "x",
+        "B": "y z",
+        "C": "",
+    }

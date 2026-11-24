@@ -1,0 +1,169 @@
+# Run config for Ursa (RDHPCS): build and test CECE, CATChem and the harness's Kokkos smoke project against a
+# spack-stack environment that provides Kokkos, kokkos-kernels and ArborX, the way the UFS builds — the harness's
+# own UFS modulefiles (modulefiles/ufs_ursa.*.lua) on top of the environment's modules/Core — with two compilers.
+# The runbook is docs/kokkos-runbook.md. The standard run is the three build-and-test stages for every toolchain,
+# one toolchain after the other:
+#   ufs-chem-assay run --config-file=config/ursa-kokkos.yaml \
+#     --application all --toolchain all --stage source --stage build --stage test [--dry-run]
+#   ufs-chem-assay watch --only tests  # evaluates each test job when it leaves the queue
+#   ufs-chem-assay report --only tests
+# Each toolchain is its own build under <root_dir>/<toolchain>/ (checkouts, build directories, tests roots); its
+# scripts are <root_dir>/scripts/<NN>-<stage>-<application>-<toolchain>.sh. The CECE driver sessions are not part
+# of the standard run — the build here is Debug — and run against one toolchain's build when asked for:
+#   ufs-chem-assay run --config-file=config/ursa-kokkos.yaml --application cece --toolchain oneapi \
+#     --stage data --stage harness --session simple-maccity
+# Keys not listed keep their defaults (config/ursa.yaml lists every key); command-line overrides change any of
+# them: --override toolchains:gnu:mpi_launcher=mpiexec applications:cece:build_node=login
+platform: ursa  # optional: detected from the hostname when absent; --platform wins
+# root_dir is derived: the parent of this harness checkout. Set it here, or pass --root-dir, only if your layout
+# differs.
+# toolchains: one entry per compiler suite, overlaid on every application section below. Under this map an
+# application section may not set modulefile, modulepath, module_env, toolchain_tools or clone_dir itself.
+toolchains:
+  oneapi:
+    modulefile: ufs_ursa.oneapi  # modulefiles/ufs_ursa.oneapi.lua: the UFS platform file plus the Kokkos packages
+    modulepath:
+      - modulefiles  # relative: this harness checkout's modulefiles/
+      - /scratch4/NAGAPE/epic/role-epic/spack-stack/envs/ue-oneapi-2025.3.1/modules/Core  # the environment
+    module_env: {}  # exported before the load, e.g. kokkos_ver / kokkos_kernels_ver to pin what `module avail` shows
+    toolchain_tools:  # located with `which` after the load, so the log names the compilers the configure will see
+      - mpiicx
+      - mpiicpx
+      - mpiifx
+      - cmake
+      - ctest
+    cmake_args:  # appended to every application's configure arguments
+      - -DCMAKE_CXX_FLAGS=-fp-model=precise  # IntelLLVM: value-safe floating point, which CECE's axis tests need
+    mpi_launcher: mpiexec  # Intel MPI does not bootstrap through Slurm's PMI here: mpiexec forks inside the job
+    mpiexec_preflags:  # mpi_launcher: srun only, e.g. --mpi=pmi2
+    tests_env:  # merged into every application's tests.env
+      I_MPI_HYDRA_BOOTSTRAP: fork
+    configure_gates: []  # added to every application's own: only what every application's configure prints
+  gnu:
+    modulefile: ufs_ursa.gnu
+    modulepath:
+      - modulefiles
+      - /scratch4/NAGAPE/epic/role-epic/spack-stack/envs/ue-gcc-12.4.0/modules/Core
+    module_env: {}
+    toolchain_tools:
+      - mpicc
+      - mpic++
+      - mpifort
+      - cmake
+      - ctest
+    cmake_args: []
+    mpi_launcher: srun  # OpenMPI / PMIx: every MPI test is its own `srun -n <ranks>` step of the test job
+    mpiexec_preflags:
+    tests_env:
+      OMPI_MCA_plm: isolated
+    configure_gates: []
+applications:  # one section per application in the run, keyed by adapter name
+  cece:
+    git_url: git@github.com:ufs-community/CECE.git  # develop prefers the environment's packages (find_package)
+    ref: develop
+    update_source: false  # true: fetch, checkout ref, pull --ff-only, submodule update --init --recursive
+    cmake_args:  # CECE's unit tests are built against a Debug build with ESMF: tests.enabled requires both
+      - -DCMAKE_BUILD_TYPE=Debug
+      - -DENABLE_ESMF=ON
+    build_jobs: 8
+    targets:  # `all` includes the test stack, which tests.enabled requires
+      - all
+    configure_gates:  # with ESMF on, the adapter already requires `CECE dependency ESMF: system`
+      - 'CECE dependency Kokkos: system'  # the environment's Kokkos, not a fetched one
+      - 'AXIS: ArborX .* found via find_package'  # the environment's ArborX; only CECE (HELM's AXIS) prints it
+    build_node: compute  # the offline compile probe (two srun steps), then a login-node finish with the test stack
+    build_minutes: 10
+    tests:  # ctest, one Slurm job: ctest on the node, each MPI test launching its own ranks
+      enabled: true
+      filter:  # ctest -R regex; null = every test
+      parallel:  # ctest -j N; null = one at a time
+      ntasks: 4  # the largest MPI rank count a test asks for
+      cpus: 8
+      minutes: 5
+      env:
+        PIP_NO_INDEX: '1'  # no network on a compute node: CECE's pip fixtures return at once instead of retrying
+  catchem:
+    git_url: git@github.com:benkozi/CATChem.git  # the coupling-protos branch, as on Gaea C7
+    ref: feature/cece-coupling-proto
+    update_source: false
+    cmake_args:  # the adapter's defaults, written out: a Debug build (what its tests need) with all three components
+      - -DCMAKE_BUILD_TYPE=Debug
+      - -DCATCHEM_ENABLE_KOKKOS=ON  # always on; the adapter requires `Using system Kokkos` in the configure log
+      - -DCATCHEM_BUILD_MUSICA=ON  # MUSICA fetches at configure time: login node only
+      - -DCATCHEM_BUILD_NUOPC=ON
+    build_jobs: 8
+    targets:
+      - all
+    configure_gates: []
+    build_node: login
+    build_minutes: 10
+    tests:
+      enabled: true
+      filter:
+      parallel:
+      ntasks: 1  # every CATChem test is single-rank
+      cpus: 8  # for its OpenMP Kokkos tests
+      minutes: 5
+      env:
+        # Kokkos's OpenMP backend warns in every test when unset. false (unpinned) silences it without
+        # pinning threads: pinning buys nothing for short tests, and parallel ctest processes would pin onto
+        # the same CPUs.
+        OMP_PROC_BIND: 'false'
+    builds:  # two builds of the one checkout, each with its own build-<name> directory and test job
+      compute:  # MUSICA off: nothing is fetched, so the whole build, tests included, runs on a compute node
+        cmake_args:
+          - -DCMAKE_BUILD_TYPE=Debug
+          - -DCATCHEM_ENABLE_KOKKOS=ON
+          - -DCATCHEM_BUILD_MUSICA=OFF
+          - -DCATCHEM_BUILD_NUOPC=ON
+        build_node: compute
+      musica:  # the section as written: MUSICA on, on the login node
+        build_node: login
+  kokkos-smoke:  # ships with the harness: nothing to clone; built under <root_dir>/<toolchain>/kokkos-smoke/build
+    cmake_args:
+      - -DCMAKE_BUILD_TYPE=Release
+    build_jobs: 8
+    configure_gates: []  # the adapter requires both `Found Kokkos` and `Found KokkosKernels`
+    build_node: compute  # it fetches nothing: the compute-node build is the whole build
+    build_minutes: 10
+    tests:  # the executable itself; passed when its output holds SMOKE TEST PASSED
+      enabled: true
+      ntasks: 1
+      cpus: 8
+      minutes: 5
+      env: {}
+data:  # only the opt-in driver session uses the data stage
+  warm_cartopy: true
+  cartopy_dir:  # default <root_dir>/cartopy
+  input_search_path: []
+baselines:
+  root_dir:
+  enabled: false  # a Debug build is not what the published baselines were made with
+  store: s3://ufs-chem/baselines
+outputs:
+  store: s3://ufs-chem/assay-output
+harness:  # the opt-in driver session (see the header); as config/ursa.yaml except where noted
+  suite_config: simple-maccity-suite.yaml
+  output_root: ufs-chem-assay-output  # relative: under the toolchain's CECE checkout, then /<toolchain>/<session>
+  clean_root: true
+  record_benchmarks: false  # a Debug-build row has build_type Debug; not appended to the committed files by default
+  submit_only: true  # submit every driver job, write jobs.yaml, stop; `watch` evaluates
+  env:  # exported inside every driver job
+    I_MPI_FABRICS: shm
+    FI_PROVIDER: tcp
+  dask_nworkers: 2  # analysis runs in the pytest process on the login node: stay small
+  run_timeout_s: 300
+slurm:  # the account, QOS and partition of the compile sruns, the test jobs and the driver jobs
+  account: epic
+  qos: debug  # 30 min cap per job; the compile steps take build_minutes, the test jobs tests.minutes
+  partition: u1-compute
+  queue_wait_s: 3600  # queue allowance per test or driver job before the harness cancels it
+  poll_s: 30
+  ntasks: 1  # the driver jobs' geometry (the test jobs take theirs from tests.ntasks / tests.cpus)
+  cpus: 8
+  srun_args: ''
+  extra_args: ''
+sessions:  # named so --session can pick one; not part of the standard run
+  simple-maccity: {}
+uv:
+  cache_dir:  # UV_CACHE_DIR; default <root_dir>/uv-cache

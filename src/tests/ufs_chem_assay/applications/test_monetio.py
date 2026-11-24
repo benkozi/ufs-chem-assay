@@ -39,7 +39,7 @@ from applications.monetio.suite import (
 from applications.registry import get_application, load_suite
 from combos import enumerate_combos, write_combos_csv
 from comparison import resolve_baseline_comparisons
-from platforms import Runtime
+from platforms import ModuleInit, Runtime
 from resolution import select_suites
 from selection import BUILTIN_CONFIG_DIR
 
@@ -442,8 +442,18 @@ class _FakeRunConfigView:
     def runtime(self) -> Runtime:
         return self._runtime
 
+    @property
+    def module_init(self) -> ModuleInit:
+        return ModuleInit.RESET
+
     def checkout_dir(self, _app: object) -> Path:
         return self._checkout
+
+    def mpi_configure_args(self) -> list[str]:
+        return []
+
+    def build_launcher(self, _section: object, *, cpus: int) -> list[str]:
+        raise AssertionError(f"monetio never builds behind a launcher ({cpus})")
 
 
 def test_monetio_stage_lines_source_build_and_data(
@@ -474,6 +484,8 @@ def test_monetio_stage_lines_source_build_and_data(
 
     build_lines = stage_lines(Stage.BUILD, view, section_update, checkout)
     assert any("module load monetio_ursa" in line for line in build_lines)
+    assert "module reset" in build_lines  # the view's platform fact
+    assert f"module use {checkout}/modulefiles" in build_lines
     assert any("uv venv --allow-existing" in line for line in build_lines)
     assert any("[viz,test]" in line for line in build_lines)
     assert any("--help" in line for line in build_lines)

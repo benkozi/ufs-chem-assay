@@ -42,6 +42,12 @@ No root, no conda, no `rdhpcs-python` module needed. Put the three
 `export`s in your shell profile (or a small `source`-able file under
 `$ROOT`) so batch scripts and later logins see them.
 
+The harness runs on a Python that uv installs itself, under
+`UV_PYTHON_INSTALL_DIR`: the checkout's `.python-version` pins 3.14,
+which neither the system Python nor a module stack's Python (spack-stack's
+`python` module) provides. A harness venv built on a module's Python
+would break as soon as that module is unloaded.
+
 ### AWS CLI (once, for S3 data sync)
 
 The harness syncs data with `aws s3 sync` (today: the `data_integration`
@@ -77,9 +83,9 @@ uv run pytest -m data_integration src/tests/ufs_chem_assay/test_s3_sync.py -v
 ```bash
 git clone --branch "$HARNESS_REF" git@github.com:benkozi/ufs-chem-assay.git $ROOT/ufs-chem-assay
 cd $ROOT/ufs-chem-assay
-UV_PYTHON=3.13 uv sync --frozen        # downloads CPython 3.13 + wheels
+uv sync --frozen                      # downloads CPython 3.14 (.python-version) + wheels
 uv run pytest src/tests/ufs_chem_assay # harness suite: hermetic, login-node safe
-uv run pytest src/tests/test_driver_combos.py --dry-run   # no CECE needed
+uv run pytest src/tests/test_driver_combos.py --dry-run --application=cece   # no CECE needed
 ```
 
 Both commands run before CECE exists, and neither needs a checkout: the
@@ -87,9 +93,6 @@ harness suite never looks at one, and a dry run records
 `application_commit: null` (with a warning when `CECE_ROOT_DIR` is already
 exported but not yet cloned) — only a real run requires the configured
 root to be a git checkout.
-
-Python 3.13 rather than 3.14: every dependency has Linux wheels for
-3.13 (cartopy included), so nothing compiles during the sync.
 
 ## 3. CECE source
 
@@ -123,6 +126,40 @@ First-run checks:
 - The `grep` should show `Found MPI` and a netCDF line; a missing
   netCDF line means the spack-stack `*_ROOT` variables were not picked
   up.
+
+### CECE's own tests (optional)
+
+The build above is Release without ESMF, which CECE's unit tests are not
+built against. To run them, build Debug with ESMF and the whole tree, with
+the test stage on — as overrides here, or in a run config of your own:
+
+```bash
+cd $ROOT/ufs-chem-assay
+TESTS=(
+  'applications:cece:cmake_args=[-DCMAKE_BUILD_TYPE=Debug, -DENABLE_ESMF=ON]'
+  'applications:cece:targets=[all]'
+  applications:cece:tests:enabled=true
+)
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --application cece \
+    --stage build --stage test --dry-run --override "${TESTS[@]}"
+less $ROOT/scripts/04-test-cece.sh $ROOT/scripts/04-test-cece.sbatch
+uv run ufs-chem-assay run --config-file=config/ursa.yaml --application cece \
+    --stage build --stage test --override "${TESTS[@]}"
+uv run ufs-chem-assay watch --only tests     # evaluates the job when it leaves the queue
+uv run ufs-chem-assay report --only tests
+```
+
+The test stage submits one job — `04-test-cece.sbatch`: `ctest` directly
+on a compute node, each MPI test launching its own ranks — and returns;
+`$ROOT/tests/cece/` then holds `tests.yaml` (the test ledger), the job's
+`tests-<job id>.out` and junit report, and `benchmarks.csv` (one row per
+evaluated run). By hand, `ctest --test-dir $ROOT/CECE/build
+--output-on-failure` inside an allocation, with the modules loaded, is
+the same suite. Two things to know: this replaces the Release build in
+`$ROOT/CECE/build` with a Debug one, so rebuild (section 4) before the
+driver sessions if their timings matter — the benchmark rows record the
+build type either way — and `ufs-chem-assay cancel --tests-root
+$ROOT/tests/cece` scancels a queued test job.
 
 ## 5. Data
 

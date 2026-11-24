@@ -28,6 +28,8 @@ _REPORT_COLUMNS = ["pytest_name", "application", "suite", "combo_id", "combo", "
 class TestReportRow(StrictModel):
     """One combo-parameterized test's final outcome."""
 
+    __test__ = False  # a model, not a pytest class
+
     pytest_name: str = Field(
         description="Test name including the combo parameter id, e.g. test_driver_execution[MACCITY.map-consd]"
     )

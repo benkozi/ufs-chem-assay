@@ -65,11 +65,42 @@ class Conventions(StrictModel):
             "(that combination, uploaded with its baseline), and committed per configuration"
         ),
     )
+    tests_benchmarks: str = Field(
+        "tests-benchmarks.csv",
+        description=(
+            "The committed benchmark rows of an application's own test runs, one "
+            "file per application beside its configurations "
+            "(<config dir>/<application>/tests-benchmarks.csv)"
+        ),
+    )
     job_ledger: str = Field(
         "jobs.yaml",
         description=(
             "The job ledger at an output root (slurm runtime): every submitted "
             "driver job, and when a session evaluated them"
+        ),
+    )
+    test_ledger: str = Field(
+        "tests.yaml",
+        description=(
+            "The test ledger at a tests root: the latest run of an application's "
+            "own tests — its Slurm job when there is one, its provenance, and, "
+            "once evaluated, the verdict and the counts"
+        ),
+    )
+    tests_dirname: str = Field(
+        "tests",
+        description=(
+            "Under the run root: one directory per application holding what its "
+            "own test runs leave (<root_dir>/tests/<application>/) — the output, "
+            "the junit report, the test ledger, the benchmark rows"
+        ),
+    )
+    tests_stem: str = Field(
+        "tests",
+        description=(
+            "Stem of a test run's output and junit report in a tests root: "
+            "tests.out / tests.xml in place, tests-<job id>.out / .xml for a Slurm job"
         ),
     )
     upload_record: str = Field(
@@ -79,6 +110,13 @@ class Conventions(StrictModel):
     effective_config: str = Field(
         "run-config.yaml",
         description="The effective run config `run` writes beside the rendered stage scripts",
+    )
+    stage_record: str = Field(
+        "stages.yaml",
+        description=(
+            "Written beside the effective config by `run`: the latest outcome of every "
+            "stage script it ran or skipped, which `report` and `watch` read"
+        ),
     )
 
     # ── transfers ────────────────────────────────────────────────────────

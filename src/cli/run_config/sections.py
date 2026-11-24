@@ -5,6 +5,7 @@ own, so a session overlay re-validates one section with the same rules."""
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 from pydantic import ConfigDict, Field, model_validator
@@ -18,6 +19,13 @@ class DataSection(StrictModel):
     warm_cartopy: bool = Field(
         default=True,
         description="Fetch Natural Earth coastlines into cartopy's cache (login node)",
+    )
+    cartopy_dir: Path | None = Field(
+        default=None,
+        description=(
+            "ASSAY_CARTOPY_DATA_DIR: where cartopy downloads the plots' Natural "
+            "Earth map data; null means <root_dir>/cartopy"
+        ),
     )
     input_search_path: list[Path] = Field(
         default_factory=list,
@@ -243,15 +251,42 @@ class SlurmSection(StrictModel):
         ),
     )
 
+    def job_args(self, *, ntasks: int, cpus: int) -> str:
+        """The sbatch options of one single-node job: the account, QOS and
+        partition, `ntasks` tasks of `cpus` cores, then the extra directives
+        verbatim."""
+        base = (
+            f"-A {self.account} -q {self.qos} -p {self.partition} "
+            f"-N 1 -n {ntasks} -c {cpus}"
+        )
+        return f"{base} {self.extra_args}".strip()
+
     @property
     def sbatch_args(self) -> str:
         """ASSAY_SBATCH_ARGS: one node, the configured tasks and cpus per
         task, then the extra directives verbatim."""
-        base = (
-            f"-A {self.account} -q {self.qos} -p {self.partition} "
-            f"-N 1 -n {self.ntasks} -c {self.cpus}"
-        )
-        return f"{base} {self.extra_args}".strip()
+        return self.job_args(ntasks=self.ntasks, cpus=self.cpus)
+
+    def build_launcher(self, *, cpus: int, minutes: int) -> list[str]:
+        """The srun of one compile step under build_node: compute: the
+        account, QOS and partition of the driver jobs, the extra directives
+        verbatim (a cluster, a memory request), then one node, one task,
+        `cpus` cores and a `minutes` limit of its own — a build is not a
+        driver job, so the driver's task count and time limit do not apply."""
+        return [
+            "srun",
+            "-A",
+            self.account,
+            "-q",
+            self.qos,
+            "-p",
+            self.partition,
+            *shlex.split(self.extra_args),
+            "--nodes=1",
+            "--ntasks=1",
+            f"--cpus-per-task={cpus}",
+            f"--time={minutes}",
+        ]
 
     @property
     def srun_args_value(self) -> str:

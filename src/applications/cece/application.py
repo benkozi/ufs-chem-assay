@@ -14,6 +14,7 @@ from applications.base import (
     Stage,
     SweepBase,
     SweepSelectorBase,
+    TestPlan,
 )
 from applications.cece import assertions, cli, combos, suite
 from applications.cece.config import CeceConfig
@@ -84,3 +85,6 @@ class CeceApplication(Application):
         self, stage: Stage, config: RunConfigView, section: ApplicationRunSection
     ) -> list[str]:
         return cli.stage_lines(stage, config, section, config.checkout_dir(self))
+
+    def test_plan(self, section: ApplicationRunSection, junit: str) -> TestPlan:
+        return cli.test_plan(section, junit)

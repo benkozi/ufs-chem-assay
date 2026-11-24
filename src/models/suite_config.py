@@ -515,6 +515,14 @@ class RunManifest(StrictModel):
             "collection instead)"
         ),
     )
+    build_type: str | None = Field(
+        default=None,
+        description=(
+            "CMAKE_BUILD_TYPE of the application checkout's build directory at "
+            "session start (Release, Debug, ...); null without a CMake cache, and "
+            "in manifests older than the field"
+        ),
+    )
     harness_version: str = Field(
         description="Installed version of the harness package that produced the run"
     )

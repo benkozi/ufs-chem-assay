@@ -8,20 +8,26 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from applications.base import ApplicationRunSection, ApplicationSettings
+from applications.base import (
+    ApplicationRunSection,
+    ApplicationSettings,
+    BuildNode,
+    TestsSection,
+)
 from applications.cece.cli import CeceRunSection
 from applications.monetio.cli import MonetioRunSection
 from applications.registry import REGISTRY, get_application
 from cli.run_config import (
     HARNESS_ROOT,
     BaselinesSection,
+    DataSection,
     HarnessSection,
     ResolvedSession,
     RunConfig,
     SlurmSection,
 )
 from cli.stages import SETTINGS_NOT_MIRRORED, settings_mirror_fields
-from platforms import Platform, Runtime
+from platforms import ModuleInit, Platform, Runtime
 from settings import Settings
 from tests.ufs_chem_assay.run_configs import (
     REMOVE,
@@ -48,6 +54,7 @@ def test_ursa_template_loads() -> None:
     assert config.harness.launcher == ""  # ignored under slurm; not set by the template
     assert config.harness.dask_nworkers == 2  # analysis runs on the login node
     assert config.uv_cache_dir == config.root_dir / "uv-cache"
+    assert config.cartopy_data_dir == config.root_dir / "cartopy"
 
 
 def test_local_template_loads_and_runs_directly() -> None:
@@ -59,12 +66,23 @@ def test_local_template_loads_and_runs_directly() -> None:
     assert config.root_dir.is_absolute()  # ~ expanded
 
 
+def test_cartopy_dir_is_under_the_run_root_unless_named(tmp_path: Path) -> None:
+    # Like the uv cache: everything a run generates is under its root.
+    default = load_run_config(run_config_file(tmp_path))
+    assert default.cartopy_data_dir == default.root_dir / "cartopy"
+    named = load_run_config(
+        run_config_file(tmp_path, overrides={"data.cartopy_dir": "/shared/cartopy"})
+    )
+    assert named.cartopy_data_dir == Path("/shared/cartopy")
+
+
 def test_templates_list_every_accepted_key() -> None:
     # The template is the documentation of the surface: every key of every
     # section appears, null where the default applies.
     for name in ("ursa.yaml", "local.yaml"):
         raw = yaml.safe_load(uncommented_sessions(TEMPLATES_DIR / name))
         assert set(raw["harness"]) == set(HarnessSection.model_fields), name
+        assert set(raw["data"]) == set(DataSection.model_fields), name
         assert set(raw["applications"]["cece"]) == set(CeceRunSection.model_fields), (
             name
         )
@@ -93,9 +111,9 @@ def test_unknown_key_rejected(tmp_path: Path) -> None:
 
 def test_unknown_application_section_rejected(tmp_path: Path) -> None:
     path = run_config_file(
-        tmp_path, overrides={"applications.catchem": {"git_url": "u", "ref": "r"}}
+        tmp_path, overrides={"applications.geoschem": {"git_url": "u", "ref": "r"}}
     )
-    with pytest.raises(ValidationError, match="unknown application 'catchem'"):
+    with pytest.raises(ValidationError, match="unknown application 'geoschem'"):
         load_run_config(path)
 
 
@@ -173,6 +191,261 @@ def test_harness_env_numbers_become_strings(tmp_path: Path) -> None:
         "OMP_NUM_THREADS": "8",
         "FI_PROVIDER": "tcp",
     }
+
+
+def test_module_environment_keys_default_empty() -> None:
+    for name in ("ursa.yaml", "local.yaml"):
+        cece = load_run_config(TEMPLATES_DIR / name).applications["cece"]
+        assert cece.modulepath == []  # the clone's own modulefiles
+        assert cece.module_env == {}
+        assert cece.toolchain_tools == []  # the adapter's default probe
+        assert cece.configure_gates == []  # the adapter's own gates only
+
+
+def test_module_environment_keys_parse(tmp_path: Path) -> None:
+    path = run_config_file(
+        tmp_path,
+        overrides={
+            "applications.cece.modulepath": ["modulefiles", "/envs/stack/modules/Core"],
+            # Version pins are numbers as often as not; exported as strings.
+            "applications.cece.module_env": {"kokkos_ver": 4.5, "esmf_ver": "8.8.0"},
+            "applications.cece.toolchain_tools": ["mpiicx", "cmake"],
+            "applications.cece.configure_gates": ["Using system Kokkos"],
+        },
+    )
+    cece = load_run_config(path).applications["cece"]
+    assert cece.modulepath == [Path("modulefiles"), Path("/envs/stack/modules/Core")]
+    assert cece.module_env == {"kokkos_ver": "4.5", "esmf_ver": "8.8.0"}
+    assert cece.toolchain_tools == ["mpiicx", "cmake"]
+    assert cece.configure_gates == ["Using system Kokkos"]
+
+
+@pytest.mark.parametrize("name", ["not a name", "1st", "a-b", ""])
+def test_module_env_names_must_be_shell_identifiers(tmp_path: Path, name: str) -> None:
+    # They are rendered as `export NAME=value` ahead of `module load`.
+    path = run_config_file(
+        tmp_path, overrides={"applications.cece.module_env": {name: "x"}}
+    )
+    with pytest.raises(ValidationError, match="module_env"):
+        load_run_config(path)
+
+
+def test_module_env_must_be_a_mapping(tmp_path: Path) -> None:
+    # The settings' NAME=VALUE spelling is the environment's, not the file's.
+    path = run_config_file(
+        tmp_path, overrides={"applications.cece.module_env": "kokkos_ver=4.5.01"}
+    )
+    with pytest.raises(ValidationError, match="module_env"):
+        load_run_config(path)
+
+
+def test_module_init_follows_the_platform() -> None:
+    ursa = load_run_config(TEMPLATES_DIR / "ursa.yaml")
+    assert ursa.module_init is ModuleInit.PURGE
+    gaea = load_run_config(TEMPLATES_DIR / "ursa.yaml", platform=Platform.GAEA_C6)
+    assert gaea.module_init is ModuleInit.RESET
+    assert gaea.runtime is Runtime.SLURM
+    local = load_run_config(TEMPLATES_DIR / "local.yaml")
+    assert local.module_init is ModuleInit.PURGE
+
+
+# ── Build placement and the application's own tests ──────────────────────────
+
+
+def test_build_placement_defaults_to_the_login_node() -> None:
+    for name in ("ursa.yaml", "local.yaml"):
+        config = load_run_config(TEMPLATES_DIR / name)
+        for section in config.applications.values():
+            assert section.build_node is BuildNode.LOGIN
+            assert section.build_minutes == 10
+            assert section.tests.enabled is False
+            assert config.build_launcher(section, cpus=8) == []
+
+
+def test_compute_build_launcher_is_the_slurm_sections_srun(tmp_path: Path) -> None:
+    path = run_config_file(
+        tmp_path,
+        overrides={
+            "applications.cece.build_node": "compute",
+            "applications.cece.build_minutes": 15,
+            "slurm.extra_args": "--clusters=c6 --mem=0",
+        },
+    )
+    config = load_run_config(path)
+    section = config.applications["cece"]
+    assert section.build_node is BuildNode.COMPUTE
+    assert config.build_launcher(section, cpus=6) == [
+        "srun",
+        "-A",
+        "epic",
+        "-q",
+        "debug",
+        "-p",
+        "u1-compute",
+        "--clusters=c6",
+        "--mem=0",
+        "--nodes=1",
+        "--ntasks=1",
+        "--cpus-per-task=6",
+        "--time=15",
+    ]
+
+
+def test_compute_build_needs_the_slurm_runtime(tmp_path: Path) -> None:
+    # docker: the container builds; native: already inside an allocation.
+    local = run_config_file(
+        tmp_path, "local.yaml", overrides={"applications.cece.build_node": "compute"}
+    )
+    with pytest.raises(
+        ValidationError, match=r"applications\.cece: build_node: compute"
+    ):
+        load_run_config(local)
+    native = run_config_file(
+        tmp_path,
+        overrides={
+            "applications.cece.build_node": "compute",
+            "harness.runtime": "native",
+            "harness.submit_only": False,
+        },
+    )
+    with pytest.raises(
+        ValidationError, match=r"needs the slurm runtime; ursa runs native"
+    ):
+        load_run_config(native)
+
+
+def test_compute_build_needs_a_slurm_section(tmp_path: Path) -> None:
+    path = run_config_file(
+        tmp_path,
+        overrides={
+            "applications.cece.build_node": "compute",
+            "slurm": REMOVE,
+            "sessions": REMOVE,  # their overlays need the section too
+        },
+    )
+    with pytest.raises(ValidationError, match="build_node: compute needs a slurm:"):
+        load_run_config(path)
+
+
+def test_build_minutes_must_be_positive(tmp_path: Path) -> None:
+    path = run_config_file(tmp_path, overrides={"applications.cece.build_minutes": 0})
+    with pytest.raises(ValidationError, match="build_minutes"):
+        load_run_config(path)
+
+
+def test_cece_tests_need_a_debug_build_with_esmf(tmp_path: Path) -> None:
+    # The shipped template builds Release without ESMF: fine, with tests off.
+    enabled: dict[str, object] = {
+        "applications.cece.tests": {"enabled": True},
+        "applications.cece.targets": ["all"],
+    }
+    with pytest.raises(ValidationError) as release:
+        load_run_config(run_config_file(tmp_path, overrides=enabled))
+    message = str(release.value)
+    assert "tests.enabled requires" in message
+    assert "missing: -DCMAKE_BUILD_TYPE=Debug, -DENABLE_ESMF=ON" in message
+    debug_only: dict[str, object] = {
+        **enabled,
+        "applications.cece.cmake_args": ["-DCMAKE_BUILD_TYPE=Debug"],
+    }
+    with pytest.raises(ValidationError, match="missing: -DENABLE_ESMF=ON"):
+        load_run_config(run_config_file(tmp_path, overrides=debug_only))
+    both: dict[str, object] = {
+        **enabled,
+        "applications.cece.cmake_args": [
+            "-DENABLE_ESMF=ON",
+            "-DCMAKE_BUILD_TYPE=Debug",
+        ],
+    }
+    cece = load_run_config(run_config_file(tmp_path, overrides=both)).applications[
+        "cece"
+    ]
+    assert cece.tests.enabled is True
+
+
+def test_cece_test_rules_follow_the_runtime_and_the_targets(tmp_path: Path) -> None:
+    # Under docker the container build script owns the configure: cmake_args
+    # is unused there, so the Debug / ESMF rule does not apply.
+    local = run_config_file(
+        tmp_path,
+        "local.yaml",
+        overrides={
+            "applications.cece.tests": {"enabled": True},
+            "applications.cece.targets": ["all"],
+        },
+    )
+    assert load_run_config(local).applications["cece"].tests.enabled is True
+    # Everywhere, the test stack is part of `all`.
+    driver_only = run_config_file(
+        tmp_path, "local.yaml", overrides={"applications.cece.tests": {"enabled": True}}
+    )
+    with pytest.raises(
+        ValidationError, match=r"applications\.cece: tests\.enabled requires `all`"
+    ):
+        load_run_config(driver_only)
+
+
+def test_tests_section_defaults_and_validation() -> None:
+    assert TestsSection().model_dump() == {
+        "enabled": False,
+        "filter": None,
+        "parallel": None,
+        "ntasks": 1,
+        "cpus": 8,
+        "minutes": 5,
+        "env": {},
+    }
+    tests = TestsSection.model_validate({"env": {"OMP_NUM_THREADS": 8}})
+    assert tests.env == {"OMP_NUM_THREADS": "8"}  # numbers are exported as strings
+    for bad in (
+        {"ntasks": 0},
+        {"cpus": 0},
+        {"minutes": 0},
+        {"parallel": 0},
+        {"env": {"not a name": "x"}},
+    ):
+        with pytest.raises(ValidationError):
+            TestsSection.model_validate(bad)
+
+
+def test_build_flags_are_the_adapters_to_name() -> None:
+    # What a test run is recorded as running against: CECE's cmake_args;
+    # nothing for a section without configure flags.
+    assert ApplicationRunSection(git_url="u", ref="r").build_flags() == []
+    cece = CeceRunSection(git_url="u", ref="r", cmake_args=["-DX=1", "-DY=2"])
+    assert cece.build_flags() == ["-DX=1", "-DY=2"]
+
+
+def test_tests_root_is_under_the_run_root(tmp_path: Path) -> None:
+    config = load_run_config(run_config_file(tmp_path, root_dir=tmp_path / "root"))
+    assert config.tests_root(get_application("cece")) == tmp_path / "root/tests/cece"
+
+
+def test_monetio_has_no_test_suite_to_enable(tmp_path: Path) -> None:
+    path = run_config_file(
+        tmp_path,
+        "local.yaml",
+        overrides={"applications.monetio.tests": {"enabled": True}},
+    )
+    with pytest.raises(ValidationError, match="monetio has no test suite of its own"):
+        load_run_config(path)
+
+
+def test_tests_section_rejects_unknown_keys(tmp_path: Path) -> None:
+    path = run_config_file(
+        tmp_path, overrides={"applications.cece.tests": {"enabled": False, "nope": 1}}
+    )
+    with pytest.raises(ValidationError, match="nope"):
+        load_run_config(path)
+
+
+def test_monetio_builds_on_the_login_node_only(tmp_path: Path) -> None:
+    # Its build is a uv install from the network: nothing to probe offline.
+    path = run_config_file(
+        tmp_path, "local.yaml", overrides={"applications.monetio.build_node": "compute"}
+    )
+    with pytest.raises(ValidationError, match="monetio installs from the network"):
+        load_run_config(path)
 
 
 def test_explicit_clone_dir_is_used(tmp_path: Path) -> None:
@@ -398,6 +671,7 @@ def test_harness_section_mirrors_every_setting() -> None:
         "job_env",
         "input_search_path",  # data.input_search_path
         "output_store",  # outputs.store
+        "cartopy_data_dir",  # data.cartopy_dir
     } == SETTINGS_NOT_MIRRORED
 
 
@@ -750,3 +1024,78 @@ def test_slurm_poll_s_defaults_and_is_a_setting() -> None:
     ursa = load_run_config(TEMPLATES_DIR / "ursa.yaml")
     assert ursa.slurm is not None
     assert ursa.slurm.poll_s == 30
+
+
+def test_the_slurm_runtime_needs_a_slurm_section(tmp_path: Path) -> None:
+    # Rendering a job needs the section: said at load, not by an assert later.
+    path = run_config_file(tmp_path, overrides={"slurm": REMOVE, "sessions": REMOVE})
+    with pytest.raises(
+        ValidationError, match=r"the slurm runtime needs a slurm: section"
+    ):
+        load_run_config(path)
+    # Every field has a default: an empty section is enough.
+    path = run_config_file(tmp_path, overrides={"slurm": {}, "sessions": REMOVE})
+    config = load_run_config(path)
+    assert config.slurm is not None
+    assert config.slurm.account == "epic"
+
+
+def test_a_session_on_the_slurm_runtime_needs_a_slurm_section(tmp_path: Path) -> None:
+    path = run_config_file(
+        tmp_path,
+        "local.yaml",
+        overrides={"sessions": {"batch": {"harness": {"runtime": "slurm"}}}},
+    )
+    with pytest.raises(
+        ValidationError, match=r"sessions\.batch: the slurm runtime needs"
+    ):
+        load_run_config(path)
+
+
+def _cece_with_tests(*cmake_args: str) -> CeceRunSection:
+    return CeceRunSection.model_validate(
+        {
+            "git_url": "u",
+            "ref": "r",
+            "cmake_args": list(cmake_args),
+            "targets": ["all"],
+            "tests": {"enabled": True},
+        }
+    )
+
+
+def test_a_cmake_section_reads_the_last_definition() -> None:
+    # CMake keeps the last -D of a name, and a toolchain's arguments come
+    # after the application's.
+    section = _cece_with_tests(
+        "-DCMAKE_BUILD_TYPE=Debug",
+        "-DENABLE_ESMF:BOOL=on",
+        "-DCMAKE_BUILD_TYPE=Release",
+    )
+    assert section.cmake_value("CMAKE_BUILD_TYPE") == "Release"
+    assert section.cmake_value("ENABLE_ESMF") == "on"
+    assert section.cmake_value("ENABLE") is None  # the whole name, not a prefix
+    assert section.cmake_on("ENABLE_ESMF")
+    assert not section.cmake_on("CMAKE_BUILD_TYPE")
+    assert not section.cmake_on("NEVER_SET")
+
+
+@pytest.mark.parametrize("on", ["ON", "TRUE", "1", "yes"])
+def test_cece_tests_accept_every_spelling_of_on(on: str) -> None:
+    section = _cece_with_tests("-DCMAKE_BUILD_TYPE=Debug", f"-DENABLE_ESMF={on}")
+    assert section.runtime_problems(Runtime.SLURM) == []
+
+
+def test_cece_tests_are_judged_by_the_definitions_cmake_keeps() -> None:
+    overridden = _cece_with_tests(
+        "-DCMAKE_BUILD_TYPE=Debug",
+        "-DENABLE_ESMF=ON",
+        "-DCMAKE_BUILD_TYPE=Release",  # as a toolchain's argument would be
+        "-DENABLE_ESMF=OFF",
+    )
+    (problem,) = overridden.runtime_problems(Runtime.SLURM)
+    assert "missing: -DCMAKE_BUILD_TYPE=Debug, -DENABLE_ESMF=ON" in problem
+    restored = _cece_with_tests(
+        "-DCMAKE_BUILD_TYPE=Release", "-DENABLE_ESMF=ON", "-DCMAKE_BUILD_TYPE=Debug"
+    )
+    assert restored.runtime_problems(Runtime.SLURM) == []

@@ -30,7 +30,7 @@ from identity import harness_commit, harness_version
 from jobs import (
     JobLedger,
     SubmittedJob,
-    queue_states,
+    queued_jobs,
     read_ledger,
     submitted_by,
     write_ledger,
@@ -48,7 +48,7 @@ from models.suite_config import (
 )
 from outputs import upload_output
 from platforms import ACCOUNTING, Accounting, Runtime
-from plotting import render_all_bias_plots, render_all_plots
+from plotting import render_all_bias_plots, render_all_plots, use_cartopy_data_dir
 from report import TestReportRow, worst_result, write_test_report_csv
 from resolution import resolve_output_roots
 from runner import (
@@ -291,7 +291,8 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         settings = Settings(**overrides)
     except ValidationError as exc:
         raise pytest.UsageError(str(exc)) from exc
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, command="pytest")
+    use_cartopy_data_dir(settings.cartopy_data_dir)  # before any map is drawn
     config.stash[_SETTINGS] = settings
     submit_only = bool(config.getoption("--submit-only"))
     resume = bool(config.getoption("--resume"))
@@ -505,7 +506,7 @@ def _refuse_a_live_root(host_root: Path) -> None:
         ledger = read_ledger(host_root)
     except ValueError:
         return
-    live = sorted(queue_states(job.job_id for job in ledger.jobs))
+    live = sorted(job_id for ids in queued_jobs(ledger).values() for job_id in ids)
     if live:
         raise pytest.UsageError(
             f"output root {host_root} has {len(live)} job(s) still in the Slurm "
@@ -1093,6 +1094,7 @@ def combo_roots(
         platform=settings.platform,
         runtime=settings.runtime,
         modulefile=request.config.stash[_APP_SETTINGS].modulefile,
+        build_type=request.config.stash[_APP_SETTINGS].build_type(),
         launch=(
             LaunchRecord(
                 sbatch_args=settings.sbatch_args,
@@ -1218,7 +1220,7 @@ def submitted_jobs(
             out_path = generated.host_dir / f"{combo.combo_id}.out"
             timeout_s = min(context.suite.timeout_s, settings.run_timeout_s)
             try:
-                script, job_id = submit_driver_job(
+                script, submitted = submit_driver_job(
                     settings,
                     app_settings,
                     generated.driver_yaml,
@@ -1243,7 +1245,8 @@ def submitted_jobs(
                 suite=context.suite.name,
                 combo=combo.name,
                 combo_id=combo.combo_id,
-                job_id=job_id,
+                job_id=submitted.job_id,
+                cluster=submitted.cluster,
                 script=script,
                 out_path=out_path,
                 timeout_s=timeout_s,
@@ -1253,7 +1256,7 @@ def submitted_jobs(
             ledger.jobs.append(job)
             write_ledger(ledger, combo_roots.host)
             jobs[combo.combo_id] = job
-            logger.info("submitted combo %s as Slurm job %s", combo.name, job_id)
+            logger.info("submitted combo %s as Slurm job %s", combo.name, job.job_id)
     return jobs
 
 
@@ -1359,7 +1362,7 @@ def _slurm_driver_run(
     if accounting is None and ACCOUNTING.get(settings.platform) is Accounting.SACCT:
         # A failed or cancelled job: the runner raised before returning its
         # accounting, and that is when the accounting matters most.
-        accounting = slurm_accounting(job.job_id)
+        accounting = slurm_accounting(job.job_id, clusters=job.cluster)
     if accounting is not None:
         request.config.stash[_ACCOUNTING][combo.combo_id] = accounting
     if (

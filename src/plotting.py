@@ -22,14 +22,19 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+import cartopy
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import xarray as xr
+from cartopy.io import shapereader
+from cartopy.mpl.geoaxes import GeoAxes
 from cartopy.mpl.ticker import LatitudeFormatter, LongitudeFormatter
+from matplotlib.artist import Artist
 from matplotlib.colors import LogNorm, Normalize, SymLogNorm
+from matplotlib.figure import Figure
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
@@ -37,6 +42,7 @@ from analysis import _file_time, spatial_variables
 from identity import HARNESS_NAME
 from logs import get_logger
 from models.suite_config import BiasColorScale, ColorScale, Plotting
+from settings import Settings
 
 logger = get_logger("plotting")
 
@@ -181,6 +187,72 @@ def _units_label(da: xr.DataArray) -> str:
     return f"[{units}]" if units else "[unknown]"
 
 
+def use_cartopy_data_dir(data_dir: Path | None) -> None:
+    """Have cartopy download the Natural Earth data the maps draw into
+    `data_dir` (the run config's `data.cartopy_dir`, `<root_dir>/cartopy` by
+    default) rather than under the home directory, which on a shared
+    machine may be small, absent on some nodes, or left in a state by
+    another machine. None keeps cartopy's own choice."""
+    if data_dir is not None:
+        cartopy.config["data_dir"] = data_dir
+
+
+def warm_natural_earth() -> None:
+    """The data stage's warm-up: download the coastlines and borders the
+    maps draw, at the two resolutions a global map asks for, into the
+    configured directory — on a node with the network, before any plot is
+    rendered."""
+    use_cartopy_data_dir(Settings().cartopy_data_dir)
+    for category, name in (
+        ("physical", "coastline"),
+        ("cultural", "admin_0_boundary_lines_land"),
+    ):
+        for resolution in ("110m", "50m"):
+            shapereader.natural_earth(
+                resolution=resolution, category=category, name=name
+            )
+
+
+def _add_boundaries(ax: GeoAxes) -> list[Artist]:
+    """Coastlines and country borders on a map; returns the artists added.
+    Boundaries degrade gracefully, in two places. Here, when cartopy refuses
+    the request outright. And in `_save`: the Natural Earth data itself is
+    read — downloaded on first use — only when the figure is drawn."""
+    boundaries: list[Artist] = []
+    try:
+        boundaries.append(ax.coastlines(linewidth=0.6))
+    except Exception:
+        logger.warning(
+            "could not draw coastlines (Natural Earth download may have failed)"
+        )
+    try:
+        boundaries.append(
+            ax.add_feature(cfeature.BORDERS, linewidth=0.4, edgecolor="#555555")
+        )
+    except Exception:
+        logger.warning("could not draw BORDERS feature (download may have failed)")
+    return boundaries
+
+
+def _save(fig: Figure, out_path: Path, boundaries: list[Artist]) -> None:
+    """Write the figure as a PNG. When drawing fails and the map has
+    boundaries, they are the likely cause — no network on this machine, or a
+    cartopy data directory that cannot be written — so the map is drawn
+    once more without them: a data-only map with a warning, not a missing
+    plot. A failure with no boundaries to remove is raised."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            fig.savefig(out_path, format="png", dpi=120)
+        except Exception as exc:
+            if not boundaries:
+                raise
+            logger.warning("writing %s without map boundaries (%s)", out_path.name, exc)
+            for artist in boundaries:
+                artist.remove()
+            fig.savefig(out_path, format="png", dpi=120)
+
+
 def render_spatial_plot(
     nc_path: Path, variable: str, scale: VariableScale, out_path: Path
 ) -> None:
@@ -219,18 +291,7 @@ def render_spatial_plot(
         transform=ccrs.PlateCarree(),
         **_mesh_kwargs(scale, "viridis"),
     )
-    # Geographic boundaries degrade gracefully: cartopy fetches Natural Earth
-    # data on first use, and an offline machine still gets a data-only map.
-    try:
-        ax.coastlines(linewidth=0.6)
-    except Exception:
-        logger.warning(
-            "could not draw coastlines (Natural Earth download may have failed)"
-        )
-    try:
-        ax.add_feature(cfeature.BORDERS, linewidth=0.4, edgecolor="#555555")
-    except Exception:
-        logger.warning("could not draw BORDERS feature (download may have failed)")
+    boundaries = _add_boundaries(ax)
     # Ticker formatters instead of draw_labels=True (cartopy/shapely 2.x issue).
     ax.set_xticks(range(-180, 181, 60), crs=ccrs.PlateCarree())
     ax.set_yticks(range(-90, 91, 30), crs=ccrs.PlateCarree())
@@ -254,9 +315,7 @@ def render_spatial_plot(
         transform=fig.transFigure,
     )
     fig.tight_layout()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        fig.savefig(out_path, format="png", dpi=120)
+    _save(fig, out_path, boundaries)
     plt.close(fig)
     logger.info("wrote %s", out_path)
 
@@ -414,16 +473,7 @@ def render_bias_plot(
         transform=ccrs.PlateCarree(),
         **_mesh_kwargs(scale, "RdBu_r"),
     )
-    try:
-        ax.coastlines(linewidth=0.6)
-    except Exception:
-        logger.warning(
-            "could not draw coastlines (Natural Earth download may have failed)"
-        )
-    try:
-        ax.add_feature(cfeature.BORDERS, linewidth=0.4, edgecolor="#555555")
-    except Exception:
-        logger.warning("could not draw BORDERS feature (download may have failed)")
+    boundaries = _add_boundaries(ax)
     ax.set_xticks(range(-180, 181, 60), crs=ccrs.PlateCarree())
     ax.set_yticks(range(-90, 91, 30), crs=ccrs.PlateCarree())
     ax.xaxis.set_major_formatter(LongitudeFormatter())
@@ -446,9 +496,7 @@ def render_bias_plot(
         transform=fig.transFigure,
     )
     fig.tight_layout()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        fig.savefig(out_path, format="png", dpi=120)
+    _save(fig, out_path, boundaries)
     plt.close(fig)
     logger.info("wrote %s", out_path)
 

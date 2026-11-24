@@ -1,6 +1,7 @@
 """Run-config templates for the `ufs-chem-assay run` tests: load a checked-in
 template, tweak it, write it to tmp_path, load it with the real registry."""
 
+import copy
 import re
 from collections.abc import Iterable
 from pathlib import Path
@@ -39,7 +40,9 @@ def run_config_file(
         if value is REMOVE:
             del target[name]
         else:
-            target[name] = value
+            # A copy: a later dotted override descends into this value, and
+            # must not edit the caller's (often module-level) object.
+            target[name] = copy.deepcopy(value)
     path = tmp_path / f"run-{template}"
     path.write_text(yaml.safe_dump(data, sort_keys=False))  # keep env order
     return path
@@ -78,3 +81,32 @@ def uncommented_sessions(template: Path) -> str:
             line = "  " + line[4:]
         out.append(line)
     return "".join(out)
+
+
+# Two compiler suites for the toolchain tests: what a kokkos run config
+# declares. The Ursa template's own modulefile comes off the application
+# section, since under a toolchains: map the module keys are the toolchain's.
+TOOLCHAINS: dict[str, dict[str, object]] = {
+    "oneapi": {
+        "modulefile": "ufs_ursa.oneapi",
+        "modulepath": ["modulefiles", "/envs/oneapi/modules/Core"],
+        "module_env": {"kokkos_ver": "4.5.01"},
+        "toolchain_tools": ["mpiicx", "mpiicpx", "mpiifx", "cmake", "ctest"],
+        "cmake_args": ["-DCMAKE_CXX_FLAGS=-fp-model=precise"],
+        "mpi_launcher": "mpiexec",
+        "tests_env": {"I_MPI_HYDRA_BOOTSTRAP": "fork"},
+        "configure_gates": ["AXIS: ArborX .* found via find_package"],
+    },
+    "gnu": {
+        "modulefile": "ufs_ursa.gnu",
+        "modulepath": ["modulefiles", "/envs/gcc/modules/Core"],
+        "toolchain_tools": ["mpicc", "mpic++", "mpifort", "cmake", "ctest"],
+        "mpi_launcher": "srun",
+        "tests_env": {"OMPI_MCA_plm": "isolated"},
+        "configure_gates": ["AXIS: ArborX .* found via find_package"],
+    },
+}
+TOOLCHAIN_OVERRIDES: dict[str, object] = {
+    "toolchains": TOOLCHAINS,
+    "applications.cece.modulefile": None,
+}

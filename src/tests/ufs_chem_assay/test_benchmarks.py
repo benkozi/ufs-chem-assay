@@ -5,6 +5,8 @@ combination, and the append-only committed copy."""
 from __future__ import annotations
 
 import csv
+import logging
+import os
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,20 +18,25 @@ from pytest_mock import MockerFixture
 from benchmarks import (
     BENCHMARK_COLUMNS,
     BENCHMARK_CONVENTIONS,
+    TEST_BENCHMARK_COLUMNS,
     AppendResult,
     BenchmarkRow,
     SlurmAccounting,
+    TestBenchmarkRow,
     append_benchmarks,
+    append_test_benchmarks,
     collect_row,
     parse_sacct,
     parse_tic_toc,
     read_benchmarks_csv,
+    read_test_benchmarks_csv,
     slurm_accounting,
     write_benchmarks_csv,
 )
 from models.conventions import CONVENTIONS
 from models.suite_config import LaunchRecord, RunManifest
 from platforms import Platform, Runtime
+from selection import BUILTIN_CONFIG_DIR
 
 _RECORDED = datetime(2026, 10, 23, 15, 0, tzinfo=UTC)
 _RUN = RunManifest(
@@ -41,6 +48,7 @@ _RUN = RunManifest(
     platform=Platform.URSA,
     runtime=Runtime.SLURM,
     modulefile="cece_ursa.intelllvm",
+    build_type="Release",
     launch=LaunchRecord(
         sbatch_args="-A epic -q debug -p u1-compute -N 1 -n 1 -c 1 --mem=0",
         srun_args="--ntasks=1 --cpu-bind=cores",
@@ -66,6 +74,7 @@ def _row(**overrides: object) -> BenchmarkRow:
         "combo_id": "01JCOMBOCOMBOCOMBOCOMBOCOM",
         "config_sha256": "a" * 64,
         "application_commit": _RUN.application_commit,
+        "build_type": "Release",
         "harness_version": _RUN.harness_version,
         "harness_commit": _RUN.harness_commit,
         "platform": Platform.URSA,
@@ -206,9 +215,26 @@ def test_slurm_accounting_queries_sacct_and_retries_once(mocker: MockerFixture) 
     assert run.call_count == 2
     argv = run.call_args.args[0]
     assert argv[:3] == ["sacct", "-j", "123"]
+    assert "-M" not in argv
     assert "-P" in argv
     assert "-n" in argv
     sleep.assert_called_once()
+
+
+def test_slurm_accounting_asks_the_jobs_own_cluster(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A job on a named cluster is asked about there, and the hint for a
+    job sacct does not know yet names the cluster too."""
+    found = subprocess.CompletedProcess(["sacct"], 0, stdout=_SACCT, stderr="")
+    empty = subprocess.CompletedProcess(["sacct"], 0, stdout="", stderr="")
+    run = mocker.patch("benchmarks.subprocess.run", side_effect=[found, empty, empty])
+    mocker.patch("benchmarks.time.sleep")
+    assert slurm_accounting("123", clusters="c7") is not None
+    assert run.call_args.args[0][:5] == ["sacct", "-M", "c7", "-j", "123"]
+    with caplog.at_level("WARNING"):
+        assert slurm_accounting("123", clusters="c7") is None
+    assert "(sacct -M c7 -j 123 by hand)" in caplog.text
 
 
 def test_slurm_accounting_is_none_when_sacct_is_missing_or_fails(
@@ -285,6 +311,50 @@ def test_append_creates_appends_and_skips_duplicates(tmp_path: Path) -> None:
     assert repo.read_text() == after
 
 
+def test_append_writes_a_key_once_per_batch(tmp_path: Path) -> None:
+    repo = tmp_path / CONVENTIONS.benchmarks
+    first, second = _row(), _row(run_id="01JRUN2RUN2RUN2RUN2RUN2RUN")
+    result = append_benchmarks(repo, [first, first])  # the file's first rows
+    assert result == AppendResult(appended=1, skipped=1)
+    result = append_benchmarks(repo, [second, first, second])
+    assert result == AppendResult(appended=1, skipped=2)
+    assert read_benchmarks_csv(repo) == [first, second]
+
+
+def test_an_append_of_nothing_new_does_not_write(tmp_path: Path) -> None:
+    repo = tmp_path / CONVENTIONS.benchmarks
+    append_benchmarks(repo, [_row()])
+    os.utime(repo, ns=(1_000, 1_000))
+    assert append_benchmarks(repo, [_row()]) == AppendResult(appended=0, skipped=1)
+    assert repo.stat().st_mtime_ns == 1_000
+
+
+def test_rows_end_with_a_line_feed_and_existing_lines_are_left_alone(
+    tmp_path: Path,
+) -> None:
+    # One line ending for what the harness writes, on every machine; lines
+    # already in the file are appended after, never rewritten.
+    repo = tmp_path / CONVENTIONS.benchmarks
+    write_benchmarks_csv([_row()], repo)
+    assert b"\r" not in repo.read_bytes()
+    append_benchmarks(repo, [_row(run_id="01JRUN2RUN2RUN2RUN2RUN2RUN")])
+    assert b"\r" not in repo.read_bytes()
+    earlier = repo.read_bytes().replace(b"\n", b"\r\n")  # as an older harness wrote it
+    repo.write_bytes(earlier)
+    append_benchmarks(repo, [_row(run_id="01JRUN3RUN3RUN3RUN3RUN3RUN")])
+    after = repo.read_bytes()
+    assert after.startswith(earlier)
+    assert b"\r" not in after[len(earlier) :]
+    assert len(read_benchmarks_csv(repo)) == 3
+
+
+def test_no_committed_benchmarks_file_has_a_carriage_return() -> None:
+    committed = sorted(BUILTIN_CONFIG_DIR.rglob("*benchmarks.csv"))
+    assert committed
+    for path in committed:
+        assert b"\r" not in path.read_bytes(), path
+
+
 def test_append_to_a_file_without_a_trailing_newline(tmp_path: Path) -> None:
     repo = tmp_path / CONVENTIONS.benchmarks
     write_benchmarks_csv([_row()], repo)
@@ -292,6 +362,19 @@ def test_append_to_a_file_without_a_trailing_newline(tmp_path: Path) -> None:
     result = append_benchmarks(repo, [_row(run_id="01JRUN2RUN2RUN2RUN2RUN2RUN")])
     assert result.appended == 1
     assert len(read_benchmarks_csv(repo)) == 2
+
+
+def test_a_failed_reload_takes_the_file_back_to_exactly_what_it_was(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    repo = tmp_path / CONVENTIONS.benchmarks
+    write_benchmarks_csv([_row()], repo)
+    repo.write_bytes(repo.read_bytes().rstrip(b"\n"))  # no final newline either
+    original = repo.read_bytes()
+    mocker.patch("benchmarks._read_csv", side_effect=[[_row()], ValueError("bad")])
+    with pytest.raises(ValueError, match="restored"):
+        append_benchmarks(repo, [_row(run_id="01JRUN2RUN2RUN2RUN2RUN2RUN")])
+    assert repo.read_bytes() == original
 
 
 def test_append_refuses_a_foreign_header_and_restores_on_a_bad_reload(
@@ -304,9 +387,7 @@ def test_append_refuses_a_foreign_header_and_restores_on_a_bad_reload(
     assert repo.read_text() == "run_id,combo_id\nx,y\n"
     write_benchmarks_csv([_row()], repo)
     original = repo.read_text()
-    mocker.patch(
-        "benchmarks.read_benchmarks_csv", side_effect=[[_row()], ValueError("bad")]
-    )
+    mocker.patch("benchmarks._read_csv", side_effect=[[_row()], ValueError("bad")])
     with pytest.raises(ValueError, match="restored"):
         append_benchmarks(repo, [_row(run_id="01JRUN2RUN2RUN2RUN2RUN2RUN")])
     assert repo.read_text() == original
@@ -523,3 +604,178 @@ def test_accounting_model_is_frozen() -> None:
     )
     with pytest.raises(ValidationError):
         accounting.state = "x"  # type: ignore[misc]
+
+
+# ── build_type: which build a row measured ───────────────────────────────────
+
+
+def test_build_type_sits_after_the_application_commit() -> None:
+    commit = BENCHMARK_COLUMNS.index("application_commit")
+    assert BENCHMARK_COLUMNS[commit + 1] == "build_type"
+    assert BenchmarkRow.model_fields["build_type"].description
+
+
+def test_collect_row_records_the_runs_build_type(tmp_path: Path) -> None:
+    for build_type in ("Debug", None):
+        run = _RUN.model_copy(update={"build_type": build_type})
+        row = collect_row(
+            recorded_at=_RECORDED,
+            run=run,
+            suite="s",
+            combo="base",
+            combo_id="01JCOMBOCOMBOCOMBOCOMBOCOM",
+            config_sha256="a" * 64,
+            timeout_s=60,
+            duration_s=1.0,
+            error=None,
+            combo_dir=tmp_path,
+            accounting=None,
+            test_results={"test_driver_execution": "passed"},
+            baseline=None,
+        )
+        assert row.build_type == build_type
+
+
+def test_a_file_older_than_build_type_still_reads(tmp_path: Path) -> None:
+    # Output roots and published baselines written before the column: read
+    # with build_type null. Any other header mismatch is still an error.
+    current = tmp_path / "current.csv"
+    write_benchmarks_csv([_row()], current)
+    header, line = current.read_text().splitlines()
+    position = BENCHMARK_COLUMNS.index("build_type")
+    legacy = tmp_path / "legacy.csv"
+    legacy.write_text(
+        "\n".join(
+            ",".join(cell for i, cell in enumerate(text.split(",")) if i != position)
+            for text in (header, line)
+        )
+        + "\n"
+    )
+    assert "build_type" not in legacy.read_text()
+    (row,) = read_benchmarks_csv(legacy)
+    assert row.build_type is None
+    assert row.model_dump(exclude={"build_type"}) == _row().model_dump(
+        exclude={"build_type"}
+    )
+    # Appending to a legacy file is refused: the committed files are migrated.
+    with pytest.raises(ValueError, match="is not the benchmark columns"):
+        append_benchmarks(legacy, [_row(combo_id="01JOTHER00000000000000000X")])
+
+
+def test_the_committed_files_carry_the_current_header() -> None:
+
+    committed = sorted(BUILTIN_CONFIG_DIR.rglob(CONVENTIONS.benchmarks))
+    assert committed  # maccity and gcafs-anthro at least
+    for path in committed:
+        assert path.read_text().splitlines()[0].split(",") == BENCHMARK_COLUMNS, path
+        assert read_benchmarks_csv(path)
+
+
+# ── the application's own tests: one row per test run ────────────────────────
+
+
+def _test_row(**overrides: object) -> TestBenchmarkRow:
+    values: dict[str, object] = {
+        "recorded_at": _RECORDED,
+        "run_id": "01JTESTRUNTESTRUNTESTRUNTE",
+        "application": "cece",
+        "toolchain": None,
+        "build": None,
+        "platform": Platform.URSA,
+        "runtime": Runtime.SLURM,
+        "modulefile": "ufs_ursa.oneapi",
+        "build_type": "Debug",
+        "cmake_args": "-DCMAKE_BUILD_TYPE=Debug -DENABLE_ESMF=ON",
+        "application_commit": _RUN.application_commit,
+        "harness_version": "0.1.0-rc.11",
+        "harness_commit": "abc123",
+        "slurm_job_id": "777",
+        "slurm_state": "COMPLETED",
+        "exit_code": 0,
+        "wall_s": 312.0,
+        "queue_s": 40.0,
+        "elapsed_s": 320.0,
+        "max_rss_kb": 2_000_000,
+        "tests_total": 577,
+        "tests_passed": 577,
+        "tests_failed": 0,
+        "tests_skipped": 0,
+        "ctest_s": 301.5,
+        "tests_root": Path("/root/tests/cece"),
+    }
+    values.update(overrides)
+    return TestBenchmarkRow.model_validate(values)
+
+
+def test_test_benchmark_columns_are_described_and_ordered() -> None:
+    assert list(TestBenchmarkRow.model_fields) == TEST_BENCHMARK_COLUMNS
+    assert TEST_BENCHMARK_COLUMNS[:5] == [
+        "recorded_at",
+        "run_id",
+        "application",
+        "toolchain",
+        "build",  # the build variant (2026-11-20); empty for the unnamed build
+    ]
+    assert TEST_BENCHMARK_COLUMNS[-1] == "tests_root"
+    for field in TestBenchmarkRow.model_fields.values():
+        assert field.description, field
+    assert not {"suite", "combo", "combo_id", "nc_files"} & set(TEST_BENCHMARK_COLUMNS)
+
+
+def test_test_benchmarks_append_one_row_per_run(tmp_path: Path) -> None:
+    path = tmp_path / "tests" / "cece" / "benchmarks.csv"
+    first = append_test_benchmarks(path, [_test_row()])  # creates it, parents too
+    assert (first.appended, first.skipped) == (1, 0)
+    again = append_test_benchmarks(path, [_test_row()])  # same run: left alone
+    assert (again.appended, again.skipped) == (0, 1)
+    second = _test_row(
+        run_id="01JTESTRUNTESTRUNTESTRUN02",
+        tests_failed=2,
+        tests_passed=575,
+        exit_code=8,
+    )
+    assert append_test_benchmarks(path, [second]).appended == 1
+    rows = read_test_benchmarks_csv(path)
+    assert rows == [_test_row(), second]
+    assert rows[0].toolchain is None  # an empty cell
+    assert path.read_text().splitlines()[0].split(",") == TEST_BENCHMARK_COLUMNS
+
+
+def test_test_benchmarks_refuse_another_schema(tmp_path: Path) -> None:
+    # The driver rows' file is not a test rows' file, and the reverse.
+    path = tmp_path / "benchmarks.csv"
+    write_benchmarks_csv([_row()], path)
+    with pytest.raises(ValueError, match="is not the test benchmark columns"):
+        read_test_benchmarks_csv(path)
+    with pytest.raises(ValueError, match="is not the test benchmark columns"):
+        append_test_benchmarks(path, [_test_row()])
+
+
+def test_a_tests_root_file_older_than_build_reads_and_is_migrated_on_append(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A tests root evaluated before the build column existed (every C7 run of
+    # 2026-11-18/20): it reads with build null, and the next evaluation's
+    # append rewrites it with the current header, its rows kept, rather than
+    # refusing the run's row.
+    current = tmp_path / "current.csv"
+    append_test_benchmarks(current, [_test_row()])
+    header, line = current.read_text().splitlines()
+    position = TEST_BENCHMARK_COLUMNS.index("build")
+    legacy = tmp_path / "tests" / "cece" / "benchmarks.csv"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(
+        "\n".join(
+            ",".join(cell for i, cell in enumerate(text.split(",")) if i != position)
+            for text in (header, line)
+        )
+        + "\n"
+    )
+    (old,) = read_test_benchmarks_csv(legacy)
+    assert old == _test_row()  # build: null
+    newer = _test_row(run_id="01JTESTRUNTESTRUNTESTRUN02", build="musica")
+    with caplog.at_level(logging.WARNING):
+        assert append_test_benchmarks(legacy, [newer]).appended == 1
+    assert "added the build column" in caplog.text
+    assert legacy.read_text().splitlines()[0].split(",") == TEST_BENCHMARK_COLUMNS
+    assert read_test_benchmarks_csv(legacy) == [_test_row(), newer]

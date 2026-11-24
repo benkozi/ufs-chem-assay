@@ -2,6 +2,7 @@
 parsing, the one-call queue poll, the deadline, the accounting verdict, and
 cancellation. Every Slurm command is mocked at subprocess.run."""
 
+import logging
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -14,14 +15,18 @@ from benchmarks import SlurmAccounting
 from jobs import (
     QUEUED_UNKNOWN,
     JobLedger,
+    JobRef,
     SlurmAccountingMissing,
+    SlurmJob,
     SlurmJobTimeout,
     SlurmSubmissionError,
     SubmittedJob,
+    TestJob,
     cancel_jobs,
     ledger_path,
     queue_states,
     read_ledger,
+    scancel,
     submit_job,
     submitted_by,
     wait_for_job,
@@ -122,11 +127,16 @@ def test_job_deadline_and_submitted_by() -> None:
 
 
 def test_submit_job_parses_the_parsable_id(mocker: MockerFixture) -> None:
-    run = mocker.patch("jobs.subprocess.run", return_value=_completed("123;cluster\n"))
-    assert submit_job(Path("/o/x.sbatch")) == "123"
+    # --parsable prints `<id>` or, when the job went to a named cluster,
+    # `<id>;<cluster>`: the cluster is kept, because on a multi-cluster
+    # Slurm every later command about the job must name it.
+    run = mocker.patch("jobs.subprocess.run", return_value=_completed("123;c7\n"))
+    assert submit_job(Path("/o/x.sbatch")) == JobRef(job_id="123", cluster="c7")
     assert run.call_args.args[0] == ["sbatch", "--parsable", "/o/x.sbatch"]
     run.return_value = _completed("456\n")
-    assert submit_job(Path("/o/x.sbatch")) == "456"
+    assert submit_job(Path("/o/x.sbatch")) == JobRef(job_id="456", cluster=None)
+    run.return_value = _completed("789;\n")  # an empty cluster field is none
+    assert submit_job(Path("/o/x.sbatch")).cluster is None
 
 
 def test_submit_job_failure_carries_sbatch_output(mocker: MockerFixture) -> None:
@@ -234,7 +244,7 @@ def test_wait_for_job_polls_until_the_job_leaves_the_queue(
     assert result is accounting
     assert sleeps == [30, 30]
     assert states.call_count == 3
-    sacct.assert_called_once_with("123")
+    sacct.assert_called_once_with("123", clusters=None)
 
 
 def test_wait_for_job_past_the_deadline_cancels_and_times_out(
@@ -296,3 +306,154 @@ def test_cancel_jobs_cancels_only_the_queued_ones(mocker: MockerFixture) -> None
     states.return_value = {}
     assert cancel_jobs(ledger) == []
     run.assert_not_called()
+
+
+def test_scancel_is_one_call_and_never_raises(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    run = mocker.patch("jobs.subprocess.run")
+    scancel(["10", "11"])
+    # Bounded and quiet: it runs when the controller is already slow.
+    run.assert_called_once_with(
+        ["scancel", "10", "11"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    for error in (
+        FileNotFoundError("scancel"),
+        subprocess.TimeoutExpired(["scancel"], 60),
+    ):
+        mocker.patch("jobs.subprocess.run", side_effect=error)
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            scancel(["10", "11"])  # logged, never raised
+        assert "scancel 10 11 did not run" in caplog.records[-1].getMessage()
+
+
+def test_scancel_of_nothing_runs_nothing(mocker: MockerFixture) -> None:
+    run = mocker.patch("jobs.subprocess.run")
+    scancel([])
+    run.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [FileNotFoundError("sbatch"), subprocess.TimeoutExpired(["sbatch"], 60)],
+    ids=["missing", "timed-out"],
+)
+def test_submit_job_that_cannot_run_is_a_submission_error(
+    mocker: MockerFixture, error: Exception
+) -> None:
+    # One error for both callers, whatever stopped sbatch; a timed-out
+    # sbatch may still have queued the job, and the message says to look.
+    run = mocker.patch("jobs.subprocess.run", side_effect=error)
+    with pytest.raises(SlurmSubmissionError) as excinfo:
+        submit_job(Path("/o/x.sbatch"))
+    assert run.call_args.kwargs["timeout"] == 60
+    assert excinfo.value.cmd == ["sbatch", "--parsable", "/o/x.sbatch"]
+    assert "squeue --me" in excinfo.value.stderr
+
+
+def test_both_job_models_share_the_slurm_fields() -> None:
+    shared = set(SlurmJob.model_fields)
+    assert shared == {
+        "job_id",
+        "cluster",
+        "script",
+        "timeout_s",
+        "queue_wait_s",
+        "submitted_at",
+    }
+    assert issubclass(SubmittedJob, SlurmJob)
+    assert issubclass(TestJob, SlurmJob)
+    assert set(TestJob.model_fields) == shared
+    assert all(field.description for field in SlurmJob.model_fields.values())
+    job = _job()
+    assert job.deadline == job.submitted_at + timedelta(
+        seconds=job.timeout_s + job.queue_wait_s
+    )
+
+
+# ── a named cluster (multi-cluster Slurm: Gaea's c6, c7) ─────────────────────
+
+
+def test_a_submitted_job_remembers_its_cluster() -> None:
+    assert _job().cluster is None  # single-cluster machines, and older ledgers
+    assert _job(cluster="c7").cluster == "c7"
+    assert SubmittedJob.model_fields["cluster"].description
+
+
+def test_queue_states_names_the_cluster(mocker: MockerFixture) -> None:
+    # With -M squeue may head its output with a `CLUSTER: <name>` line.
+    run = mocker.patch(
+        "jobs.subprocess.run",
+        return_value=_completed("CLUSTER: c7\n123 PENDING\n456 RUNNING\n"),
+    )
+    assert queue_states(["123", "456", "789"], clusters="c7") == {
+        "123": "PENDING",
+        "456": "RUNNING",
+    }
+    assert run.call_args.args[0] == [
+        "squeue",
+        "-h",
+        "-M",
+        "c7",
+        "-j",
+        "123,456,789",
+        "-o",
+        "%i %T",
+    ]
+
+
+def test_scancel_names_the_cluster(mocker: MockerFixture) -> None:
+    run = mocker.patch("jobs.subprocess.run")
+    scancel(["10", "11"], clusters="c7")
+    assert run.call_args.args[0] == ["scancel", "-M", "c7", "10", "11"]
+
+
+def test_wait_for_job_asks_the_jobs_own_cluster(mocker: MockerFixture) -> None:
+    job = _job(cluster="c7")
+    states = mocker.patch("jobs.queue_states", side_effect=[{"123": "RUNNING"}, {}])
+    accounting = mocker.patch("jobs.slurm_accounting", return_value=_accounting())
+    wait_for_job(job, poll_s=1, now=lambda: _T0, sleep=lambda _s: None)
+    assert [call.kwargs for call in states.call_args_list] == [{"clusters": "c7"}] * 2
+    accounting.assert_called_once_with("123", clusters="c7")
+    # Past its deadline it is cancelled on that cluster.
+    mocker.patch("jobs.queue_states", return_value={"123": "PENDING"})
+    run = mocker.patch("jobs.subprocess.run")
+    with pytest.raises(SlurmJobTimeout):
+        wait_for_job(job, poll_s=1, now=lambda: job.deadline, sleep=lambda _s: None)
+    run.assert_called_once()
+    assert run.call_args.args[0] == ["scancel", "-M", "c7", "123"]
+
+
+def test_cancel_jobs_cancels_each_cluster_with_its_own_jobs(
+    mocker: MockerFixture,
+) -> None:
+    ledger = JobLedger(
+        run_id="r",
+        application="cece",
+        submitted_by="me@h",
+        jobs=[
+            _job("1", cluster="c7"),
+            _job("2", cluster="c7"),
+            _job("3", cluster="c6"),
+        ],
+    )
+
+    def queued(ids: list[str], **_on: str | None) -> dict[str, str]:
+        return {job_id: "PENDING" for job_id in ids if job_id != "2"}
+
+    states = mocker.patch("jobs.queue_states", side_effect=queued)
+    run = mocker.patch("jobs.subprocess.run")
+    assert cancel_jobs(ledger) == ["1", "3"]
+    assert [(list(c.args[0]), c.kwargs) for c in states.call_args_list] == [
+        (["1", "2"], {"clusters": "c7"}),
+        (["3"], {"clusters": "c6"}),
+    ]
+    assert [c.args[0] for c in run.call_args_list] == [
+        ["scancel", "-M", "c7", "1"],
+        ["scancel", "-M", "c6", "3"],
+    ]

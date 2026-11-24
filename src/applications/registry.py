@@ -13,13 +13,24 @@ from pathlib import Path
 
 import yaml
 
-from applications.base import Application
+from applications.base import Application, Stage
+from applications.catchem.application import CatchemApplication
 from applications.cece.application import CeceApplication
+from applications.kokkos_smoke.application import KokkosSmokeApplication
 from applications.monetio.application import MonetioApplication
 from models.suite_config import SuiteConfig
 
+# The applications with a driver the harness sweeps (cece, monetio), then
+# the ones it only builds and tests (catchem, kokkos-smoke): each adapter's
+# `stages` says which.
 REGISTRY: dict[str, Application] = {
-    app.name: app for app in (CeceApplication(), MonetioApplication())
+    app.name: app
+    for app in (
+        CeceApplication(),
+        MonetioApplication(),
+        CatchemApplication(),
+        KokkosSmokeApplication(),
+    )
 }
 
 
@@ -30,6 +41,21 @@ def get_application(name: object) -> Application:
     raise ValueError(
         f"unknown application {name!r}; registered applications: {sorted(REGISTRY)}"
     )
+
+
+def driver_application(name: object) -> Application:
+    """The registered adapter of an application that has a driver suite —
+    what a suite file, a pytest session or `fetch` may name. NoDriverSuite
+    for one that is only built and tested; ValueError for an unknown name."""
+    app = get_application(name)
+    if Stage.HARNESS not in app.stages:
+        raise app.no_driver_suite()
+    return app
+
+
+def driver_application_names() -> list[str]:
+    """The registered applications a session can run, sorted."""
+    return sorted(name for name, app in REGISTRY.items() if Stage.HARNESS in app.stages)
 
 
 def _application_key(raw: object) -> object:
@@ -45,7 +71,7 @@ def peek_application(path: Path) -> str:
     (and so the root the suite's config_path may anchor on) exist."""
     with open(path) as f:
         raw = yaml.safe_load(f)
-    return get_application(_application_key(raw)).name
+    return driver_application(_application_key(raw)).name
 
 
 def load_suite(
@@ -59,7 +85,7 @@ def load_suite(
     SuiteConfig.resolve_config_path)."""
     with open(path) as f:
         raw = yaml.safe_load(f)
-    app = get_application(_application_key(raw))
+    app = driver_application(_application_key(raw))
     suite = app.suite_model.model_validate(raw)
     suite.resolve_config_path(
         path,

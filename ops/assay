@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# ops/assay: the harness, with uv's cache and managed Pythons in this
+# checkout's .uv/ (gitignored) and nowhere else.
+#
+#   ops/assay <ufs-chem-assay arguments>   e.g. ops/assay transfer --config-file config/c7.local.yaml
+#
+# The two directories are set here, for this process and what it starts (the
+# stages, the test job), never in your shell: other uv projects keep their
+# own, and a UV_CACHE_DIR exported for them does not reach the assay. Works
+# from any directory; relative arguments and the harness's .env are read from
+# the current one, so run it from the checkout.
+set -euo pipefail
+checkout="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export UV_CACHE_DIR="$checkout/.uv/cache"
+export UV_PYTHON_INSTALL_DIR="$checkout/.uv/python"
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) export PATH="$HOME/.local/bin:$PATH" ;; # uv
+esac
+exec uv run --project "$checkout" ufs-chem-assay "$@"

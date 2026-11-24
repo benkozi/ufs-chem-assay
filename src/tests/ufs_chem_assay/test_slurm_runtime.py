@@ -13,8 +13,9 @@ from pytest_mock import MockerFixture
 from applications.cece.settings import CeceSettings
 from applications.registry import get_application
 from benchmarks import SlurmAccounting
-from jobs import SlurmJobError, SlurmJobTimeout, SubmittedJob
-from platforms import Platform, Runtime, default_runtime
+from jobs import JobRef, SlurmJobError, SlurmJobTimeout, SubmittedJob
+from lmod import LMOD_INIT, module_lines
+from platforms import ModuleInit, Platform, Runtime, default_runtime
 from resolution import resolve_output_roots
 from runner import (
     TEMPLATE_PATH,
@@ -84,7 +85,7 @@ def test_template_is_shipped_and_strict() -> None:
             root_dir=Path("/host/cece"),
             minutes=1,
             directives=[],
-            modulefile=None,
+            module_lines=[],
             env={},
             command="",
             srun_args="--ntasks=1",
@@ -100,7 +101,12 @@ def test_render_job_script_golden() -> None:
         root_dir=Path("/host/cece"),
         minutes=1,
         directives=sbatch_directives(_slurm().sbatch_args),
-        modulefile="cece_ursa.intelllvm",
+        module_lines=module_lines(
+            init=ModuleInit.PURGE,
+            env={},
+            paths=[Path("/host/cece/modulefiles")],
+            modulefile="cece_ursa.intelllvm",
+        ),
         env={"I_MPI_FABRICS": "shm", "FI_PROVIDER": "tcp"},
         command="./build/cece_standalone_driver /host/out/01ABC/01ABC.yaml",
         srun_args="--ntasks=1",
@@ -153,7 +159,7 @@ def test_render_job_script_without_modules_or_env() -> None:
         root_dir=Path("/r"),
         minutes=2,
         directives=[],
-        modulefile=None,
+        module_lines=[],
         env={},
         command="ctest --test-dir /r/build",
         srun_args="--ntasks=1",
@@ -182,10 +188,70 @@ def test_write_job_script_renders_from_settings(tmp_path: Path) -> None:
     assert "#SBATCH --time=2" in text
     assert "#SBATCH -A epic" in text
     assert "#SBATCH --job-name=ufs-chem-assay-x" in text
+    # The default module environment: purge, the checkout's own modulefiles.
+    lines = text.splitlines()
+    start = lines.index(LMOD_INIT)
+    assert lines[start + 1 : start + 5] == [
+        "module purge",
+        "module use /host/cece/modulefiles",
+        "module load cece_ursa.intelllvm",
+        "module list",
+    ]
     assert (
         f"srun --ntasks=1 ./build/cece_standalone_driver {tmp_path}/x.yaml"
         in text.splitlines()
     )
+
+
+def test_write_job_script_loads_the_configured_module_environment(
+    tmp_path: Path,
+) -> None:
+    # The job loads what the build loaded: the application's module paths and
+    # exports (CECE_MODULEPATH, CECE_MODULE_ENV), initialised the platform's
+    # way — reset on Gaea, where purge strips the Cray machinery.
+    cece = CeceSettings(
+        root_dir=Path("/host/cece"),
+        modulefile="ufs_gaeac7.oneapi",
+        modulepath=[Path("/harness/modulefiles"), Path("/envs/ss/modules/Core")],
+        module_env="kokkos_ver=4.5.01 arborx_ver=2.0",
+    )
+    script = write_job_script(
+        _slurm(platform=Platform.GAEA_C7),
+        cece,
+        PurePosixPath(str(tmp_path / "x.yaml")),
+        tmp_path / "x.out",
+        timeout_s=60,
+    )
+    lines = script.read_text().splitlines()
+    start = lines.index("module reset")
+    assert lines[start - 1] == LMOD_INIT
+    assert lines[start : start + 7] == [
+        "module reset",
+        "export kokkos_ver=4.5.01",
+        "export arborx_ver=2.0",
+        "module use /harness/modulefiles",
+        "module use /envs/ss/modules/Core",
+        "module load ufs_gaeac7.oneapi",
+        "module list",
+    ]
+    assert "module purge" not in lines
+    assert "module use /host/cece/modulefiles" not in lines
+    # The module block precedes the job's own exports and the launch.
+    assert start < lines.index("export I_MPI_FABRICS=shm")
+
+
+def test_write_job_script_without_a_modulefile_loads_nothing(tmp_path: Path) -> None:
+    # Paths and exports alone do nothing: the modulefile is the switch.
+    cece = CeceSettings(
+        root_dir=Path("/host/cece"),
+        modulefile=None,
+        modulepath=[Path("/harness/modulefiles")],
+        module_env="kokkos_ver=4.5.01",
+    )
+    script = write_job_script(
+        _slurm(), cece, PurePosixPath(str(tmp_path / "x.yaml")), tmp_path / "x.out", 60
+    )
+    assert "module" not in script.read_text()
 
 
 def test_write_job_script_renders_the_srun_args_setting(tmp_path: Path) -> None:
@@ -249,11 +315,12 @@ def _accounting(state: str, exit_code: int | None) -> SlurmAccounting:
 def test_submit_driver_job_writes_the_script_and_submits_it(
     mocker: MockerFixture, tmp_path: Path
 ) -> None:
-    submit = mocker.patch("runner.submit_job", return_value="12345")
-    script, job_id = submit_driver_job(
+    submit = mocker.patch("runner.submit_job", return_value=JobRef("12345", "c7"))
+    script, ref = submit_driver_job(
         _slurm(), _CECE, PurePosixPath(str(tmp_path / "x.yaml")), tmp_path / "x.out", 10
     )
-    assert job_id == "12345"  # from sbatch --parsable, for the ledger
+    # From sbatch --parsable, for the ledger: the id and where it went.
+    assert (ref.job_id, ref.cluster) == ("12345", "c7")
     assert script == tmp_path / "x.sbatch"
     assert script.is_file()
     assert "srun --ntasks=1" in script.read_text()
@@ -303,6 +370,37 @@ def test_finish_driver_job_without_an_exit_code_judges_by_state(
     # COMPLETED with no parsed exit code is still a pass.
     mocker.patch("runner.wait_for_job", return_value=_accounting("COMPLETED", None))
     assert finish_driver_job(job, _slurm(slurm_poll_s=1)).job_id == "12345"
+
+
+@pytest.mark.parametrize("state", ["OUT_OF_MEMORY", "NODE_FAIL", "FAILED", "RUNNING"])
+def test_finish_driver_job_fails_a_job_that_did_not_complete_whatever_its_exit_code(
+    mocker: MockerFixture, tmp_path: Path, state: str
+) -> None:
+    # ExitCode is <status>:<signal>: a job Slurm killed (out of memory, a
+    # lost node, a signal) can carry status 0. The state is the verdict.
+    mocker.patch("runner.wait_for_job", return_value=_accounting(state, 0))
+    job = _submitted(tmp_path)
+    job.out_path.write_bytes(b"killed\n")
+    with pytest.raises(SlurmJobError) as excinfo:
+        finish_driver_job(job, _slurm(slurm_poll_s=1))
+    assert excinfo.value.returncode == 1
+    assert excinfo.value.output == b"killed\n"
+
+
+@pytest.mark.parametrize(
+    ("state", "completed"),
+    [
+        ("COMPLETED", True),
+        ("OUT_OF_MEMORY", False),
+        ("CANCELLED by 1234", False),
+        (None, False),
+    ],
+)
+def test_accounting_says_whether_the_job_completed(
+    state: str | None, completed: bool
+) -> None:
+    accounting = _accounting("x", 0).model_copy(update={"state": state})
+    assert accounting.completed is completed
 
 
 @pytest.mark.parametrize("state", ["TIMEOUT", "CANCELLED by 1234"])

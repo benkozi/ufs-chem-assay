@@ -1,5 +1,6 @@
 """CeceSettings: the CECE_* namespace and the application commit for run.yaml."""
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -19,6 +20,8 @@ def clean_cece_env(
         "CECE_DOCKER_IMAGE",
         "CECE_DRIVER_PATH",
         "CECE_MODULEFILE",
+        "CECE_MODULEPATH",
+        "CECE_MODULE_ENV",
         "ASSAY_ROOT_DIR",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -33,6 +36,9 @@ def test_defaults() -> None:
     assert settings.docker_image == "cece/cece-dev"
     assert settings.driver_path == "./build/cece_standalone_driver"
     assert settings.modulefile is None
+    assert settings.modulepath == []
+    assert settings.module_env == ""
+    assert settings.module_env_pairs == {}
     assert CeceSettings.env_prefix == "CECE_"
     assert str(CeceSettings.container_workdir) == "/work"
 
@@ -40,6 +46,30 @@ def test_defaults() -> None:
 def test_root_dir_reads_cece_root_dir_env(clean_cece_env: pytest.MonkeyPatch) -> None:
     clean_cece_env.setenv("CECE_ROOT_DIR", "/host/cece")
     assert CeceSettings().root_dir == Path("/host/cece")
+
+
+def test_module_environment_reads_the_cece_env(
+    clean_cece_env: pytest.MonkeyPatch,
+) -> None:
+    # What the harness stage exports for the driver jobs: the module paths
+    # (os.pathsep-separated, like the search paths) and the exports that
+    # precede `module load` (NAME=VALUE pairs, like ASSAY_JOB_ENV).
+    clean_cece_env.setenv(
+        "CECE_MODULEPATH", f"/harness/modulefiles{os.pathsep}/envs/stack/modules/Core"
+    )
+    clean_cece_env.setenv("CECE_MODULE_ENV", "kokkos_ver=4.5.01 NOTE='a b'")
+    settings = CeceSettings()
+    assert settings.modulepath == [
+        Path("/harness/modulefiles"),
+        Path("/envs/stack/modules/Core"),
+    ]
+    assert settings.module_env_pairs == {"kokkos_ver": "4.5.01", "NOTE": "a b"}
+
+
+def test_module_env_entries_must_be_pairs(clean_cece_env: pytest.MonkeyPatch) -> None:
+    clean_cece_env.setenv("CECE_MODULE_ENV", "NOT_A_PAIR")
+    with pytest.raises(ValueError, match="CECE_MODULE_ENV entries must be NAME=VALUE"):
+        _ = CeceSettings().module_env_pairs
 
 
 def test_assay_prefix_never_applies_to_application_settings(
@@ -136,3 +166,24 @@ def test_commit_sha_none_when_no_checkout_configured() -> None:
     # An explicit None root (init kwarg beats env) means "no checkout":
     # recorded as null, never an error.
     assert CeceSettings(root_dir=None).commit_sha() is None
+
+
+# -- build_type: the checkout's CMake build type for run.yaml -------------------
+
+
+def test_build_type_reads_the_cmake_cache(tmp_path: Path) -> None:
+    settings = CeceSettings(root_dir=tmp_path)
+    assert settings.build_type() is None  # no build directory yet
+    cache = tmp_path / "build" / "CMakeCache.txt"
+    cache.parent.mkdir()
+    cache.write_text(
+        "# This is the CMakeCache file.\n"
+        "CMAKE_BUILD_TYPE:STRING=Debug\n"
+        "CMAKE_BUILD_TYPE-ADVANCED:INTERNAL=1\n"
+    )
+    assert settings.build_type() == "Debug"
+    cache.write_text("CMAKE_BUILD_TYPE:STRING=\n")  # a generator default
+    assert settings.build_type() is None
+    cache.write_text("CMAKE_CXX_COMPILER:FILEPATH=/usr/bin/c++\n")
+    assert settings.build_type() is None
+    assert CeceSettings(root_dir=None).build_type() is None

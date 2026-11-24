@@ -58,6 +58,7 @@ done
 # state and exit code can be overridden through `state` and `exit`.
 _SACCT = """#!/bin/bash
 here=$(dirname "$0")
+echo "$@" >> "$here/sacct.log"
 while [ $# -gt 0 ]; do
   if [ "$1" = "-j" ]; then id=$2; fi
   shift
@@ -167,7 +168,7 @@ def test_submit_only_submits_everything_and_stops(
 ) -> None:
     result = _submit(tmp_path, slurm_env)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "21 skipped" in result.stdout  # every combo test skips, naming its job
+    assert "14 skipped" in result.stdout  # every combo test skips, naming its job
     root = _root(tmp_path)
     assert (root / CONVENTIONS.run_manifest).is_file()
     assert (root / CONVENTIONS.combos_csv).is_file()
@@ -181,7 +182,7 @@ def test_submit_only_submits_everything_and_stops(
     assert ledger.evaluated_at is None
     assert ledger.exit_status is None
     jobs = ledger.jobs
-    assert [job.job_id for job in jobs] == ["1000", "1001", "1002"]
+    assert [job.job_id for job in jobs] == ["1000", "1001"]
     combos = pd.read_csv(root / CONVENTIONS.combos_csv)
     assert [job.combo_id for job in jobs] == list(dict.fromkeys(combos["combo_id"]))
     for job in jobs:
@@ -237,7 +238,7 @@ def test_resume_adopts_the_ids_waits_and_evaluates(
     assert {"passed", "failed"} <= set(report["result"])  # comparisons skip (off)
     benchmarks = pd.read_csv(root / CONVENTIONS.benchmarks, dtype=str)
     assert sorted(benchmarks["combo_id"]) == sorted(j.combo_id for j in ledger.jobs)
-    assert sorted(benchmarks["slurm_job_id"]) == ["1000", "1001", "1002"]
+    assert sorted(benchmarks["slurm_job_id"]) == ["1000", "1001"]
     assert set(benchmarks["slurm_state"]) == {"COMPLETED"}
     assert set(benchmarks["driver_result"]) == {"passed"}
     assert set(benchmarks["run_id"]) == {ledger.run_id}
@@ -248,9 +249,16 @@ def test_resume_adopts_the_ids_waits_and_evaluates(
         assert "COMPLETED" in job.out_path.read_text()
     squeue_calls = (tmp_path / "bin" / "squeue.log").read_text().splitlines()
     assert len(squeue_calls) >= 2  # polled until 1001 left the queue
+    # The stub sbatch answered `<id>;cluster`: the ledger kept the cluster
+    # and every later question about a job named it.
+    assert {job.cluster for job in ledger.jobs} == {"cluster"}
+    assert all(call.startswith("-h -M cluster -j ") for call in squeue_calls)
+    sacct_calls = (tmp_path / "bin" / "sacct.log").read_text().splitlines()
+    assert sacct_calls
+    assert all(call.startswith("-M cluster -j ") for call in sacct_calls)
     assert not (tmp_path / "bin" / "scancel.log").exists()
     # Nothing was resubmitted.
-    assert len((tmp_path / "bin" / "sbatch.log").read_text().splitlines()) == 3
+    assert len((tmp_path / "bin" / "sbatch.log").read_text().splitlines()) == 2
 
 
 def test_resume_records_failed_and_timed_out_jobs(
@@ -288,14 +296,14 @@ def test_a_refused_submission_leaves_a_truthful_ledger(
     # A resume over it: the rebinding names the combinations without a job.
     result = _pytest(tmp_path, slurm_env, "--resume", "--combo-output-root=combo_runs")
     assert result.returncode == 4  # usage error
-    assert "2 combination(s) have no recorded job" in result.stderr
+    assert "1 combination(s) have no recorded job" in result.stderr
 
 
 def test_live_root_guard_refuses_clean_root_while_jobs_are_queued(
     tmp_path: Path, slurm_env: dict[str, str]
 ) -> None:
     assert _submit(tmp_path, slurm_env).returncode == 0
-    (tmp_path / "bin" / "queued").write_text("1000\n1002\n")
+    (tmp_path / "bin" / "queued").write_text("1000\n1001\n")
     result = _pytest(
         tmp_path,
         slurm_env,
@@ -307,6 +315,10 @@ def test_live_root_guard_refuses_clean_root_while_jobs_are_queued(
     assert "2 job(s) still in the Slurm queue" in result.stderr
     assert "ufs-chem-assay cancel --output-root=" in result.stderr
     assert (_root(tmp_path) / CONVENTIONS.job_ledger).is_file()  # nothing removed
+    # The guard asked the cluster the jobs were submitted to.
+    squeue_calls = (tmp_path / "bin" / "squeue.log").read_text().splitlines()
+    assert squeue_calls
+    assert all(call.startswith("-h -M cluster -j ") for call in squeue_calls)
     # Once they are gone the root is cleaned as before.
     (tmp_path / "bin" / "queued").unlink()
     result = _pytest(

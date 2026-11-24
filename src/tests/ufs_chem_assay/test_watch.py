@@ -16,7 +16,13 @@ from pytest_mock import MockerFixture
 
 from cli.main import main
 from cli.run_report import RunReport
-from cli.sessions import PendingState, SessionState, WatchedSession, tick
+from cli.sessions import (
+    PendingState,
+    SessionReport,
+    SessionState,
+    WatchedSession,
+    tick,
+)
 from jobs import JobLedger, SubmittedJob, read_ledger, write_ledger
 from logs import LOGGER_NAME
 from models.conventions import CONVENTIONS
@@ -298,7 +304,7 @@ def test_tick_counts_every_pending_state_as_queued(tmp_path: Path) -> None:
     )
     states = dict(zip(ids, [*pending, "RUNNING", "COMPLETING"], strict=False))
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr("cli.sessions.queue_states", lambda _ids: states)
+        patch.setattr("cli.sessions.queue_states", lambda _ids, **_on: states)
         report = tick([watched], {root: ledger})[root]
     assert report.state is SessionState.WAITING
     assert (report.queued, report.running, report.done) == (6, 2, 1)
@@ -472,8 +478,9 @@ def test_report_clean_errors(
     )
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert _report(tmp_path / "local-root") == 1
-    messages = [r.getMessage() for r in caplog.records]
-    assert "cece     not submitted" in messages
+    messages = [r.getMessage().split() for r in caplog.records]
+    # Only cece: the run selected it, so the report covers no other application.
+    assert ["cece", "not", "submitted"] in messages
 
 
 # ── cancel ───────────────────────────────────────────────────────────────────
@@ -509,3 +516,9 @@ def test_cancel_without_a_ledger_or_live_jobs_is_a_no_op(
     with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
         assert main(["cancel", f"--output-root={root}"]) == 0
     assert "no job in the queue" in caplog.records[-1].getMessage()
+
+
+def test_a_failed_evaluation_has_its_own_line() -> None:
+    # `watch` logs a final report's line on every later check.
+    report = SessionReport(state=SessionState.FAILED, exit_status=2)
+    assert report.line() == "evaluation failed (exit 2)"

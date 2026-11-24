@@ -69,7 +69,7 @@ def test_multi_match_runs_every_selected_suite(tmp_path: Path) -> None:
         tmp_path,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "1461 skipped" in result.stdout
+    assert "1454 skipped" in result.stdout
 
 
 def test_application_switch_filters_the_selection(tmp_path: Path) -> None:
@@ -84,17 +84,17 @@ def test_application_switch_filters_the_selection(tmp_path: Path) -> None:
         tmp_path,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "1461 skipped" in result.stdout
+    assert "1454 skipped" in result.stdout
 
 
 def test_suite_of_an_unknown_application_is_a_usage_error(tmp_path: Path) -> None:
     suite = tmp_path / "other-suite.yaml"
     suite.write_text(
-        "name: other\napplication: catchem\nconfig_path: x.yaml\ntimeout_s: 5\n"
+        "name: other\napplication: geoschem\nconfig_path: x.yaml\ntimeout_s: 5\n"
     )
     result = _run_pytest(["--dry-run", f"--suite-config={suite}"], tmp_path)
     assert result.returncode == _USAGE_ERROR, result.stdout + result.stderr
-    assert "unknown application 'catchem'" in result.stderr
+    assert "unknown application 'geoschem'" in result.stderr
 
 
 def test_configuration_files_beside_suites_are_not_candidates(tmp_path: Path) -> None:

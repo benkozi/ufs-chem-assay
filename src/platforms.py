@@ -18,6 +18,8 @@ class Platform(StrEnum):
 
     LOCAL = "local"
     URSA = "ursa"
+    GAEA_C6 = "gaea-c6"
+    GAEA_C7 = "gaea-c7"
 
 
 @unique
@@ -40,17 +42,50 @@ class Accounting(StrEnum):
 
 # Platforms whose accounting the harness knows how to ask for; a platform
 # absent here (local) records the harness's own clock and null accounting
-# columns. Gaea C6/C7 join once their sacct is confirmed to answer the same
-# columns (one entry here, one hostname pattern above).
+# columns. Gaea C7's sacct answered every column for the first test job there
+# (asked with the job's cluster, `-M c7`); Gaea C6 joins once its sacct is
+# confirmed the same way (one entry here).
 ACCOUNTING: dict[Platform, Accounting] = {
     Platform.URSA: Accounting.SACCT,
+    Platform.GAEA_C7: Accounting.SACCT,
 }
 
 
+@unique
+class ModuleInit(StrEnum):
+    """How a platform clears the module environment before an application's
+    modulefile is loaded: the `module` subcommand."""
+
+    PURGE = "purge"  # unload everything
+    RESET = "reset"  # back to the system default set
+
+
+# `module purge` strips Cray's craype/PrgEnv machinery on Gaea, which the
+# compiler wrappers (cc, CC, ftn) need: reset there. A platform absent here
+# purges (module_init below).
+MODULE_INIT: dict[Platform, ModuleInit] = {
+    Platform.URSA: ModuleInit.PURGE,
+    Platform.GAEA_C6: ModuleInit.RESET,
+    Platform.GAEA_C7: ModuleInit.RESET,
+}
+
+
+def module_init(platform: Platform) -> ModuleInit:
+    """How `platform` clears its module environment; purge unless
+    MODULE_INIT says otherwise."""
+    return MODULE_INIT.get(platform, ModuleInit.PURGE)
+
+
 # Hostname patterns (fullmatch) per platform. Ursa login nodes are ufe01-04;
-# the compute-node form is a first-run item recorded in the design doc.
+# the compute-node form is a first-run item recorded in the design doc. Gaea
+# login nodes are gaea<cluster digit><node digits>: C6 is gaea61-68; C7 is
+# gaea7N by the same scheme (gaea75.ncrc.gov on the first login there). A
+# hostname that matches nothing is LOCAL, and every Gaea run config names its
+# platform explicitly, so a wrong pattern costs nothing but the convenience.
 _HOSTNAME_PATTERNS: dict[Platform, re.Pattern[str]] = {
     Platform.URSA: re.compile(r"ufe\d+(\..*)?"),
+    Platform.GAEA_C6: re.compile(r"gaea6\d+(\..*)?"),
+    Platform.GAEA_C7: re.compile(r"gaea7\d+(\..*)?"),
 }
 
 

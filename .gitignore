@@ -2,6 +2,8 @@
 .env
 
 .venv/
+# uv's cache and Pythons for this checkout only (ops/assay)
+.uv/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
@@ -12,3 +14,6 @@ __pycache__/
 .coverage
 coverage-html/
 pytest-output.txt
+
+# Personal run configs (a root, a transfer directory, a selection over a shared template)
+config/*.local.yaml

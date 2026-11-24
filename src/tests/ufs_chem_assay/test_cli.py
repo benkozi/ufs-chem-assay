@@ -16,7 +16,7 @@ import pytest
 import yaml
 from pytest_mock import MockerFixture
 
-from applications.base import Application
+from applications.base import Application, Stage
 from applications.registry import REGISTRY
 from baselines import BaselineState, StagedBaseline
 from benchmarks import (
@@ -25,7 +25,9 @@ from benchmarks import (
     read_benchmarks_csv,
     write_benchmarks_csv,
 )
+from cli.commands.run import _execute, _Step
 from cli.main import Command, main
+from cli.stage_outcomes import StageState, read_stage_record
 from logs import LOGGER_NAME
 from models.conventions import CONVENTIONS
 from platforms import Platform
@@ -107,8 +109,11 @@ def test_dry_run_renders_every_script_and_executes_nothing(
     run_bash.assert_not_called()
     messages = [record.getMessage() for record in caplog.records]
     assert any("dry run" in m for m in messages)
-    # Nothing but scripts/ under the root; the effective config beside them.
-    assert sorted(p.name for p in (tmp_path / "root").iterdir()) == ["scripts"]
+    # Nothing but scripts/ under the root, the effective config beside them,
+    # and logs/ holding only run's transcript (no stage log: nothing ran).
+    assert sorted(p.name for p in (tmp_path / "root").iterdir()) == ["logs", "scripts"]
+    (transcript,) = (tmp_path / "root" / "logs").iterdir()
+    assert transcript.name.startswith("assay-run-")
     assert (tmp_path / "root" / "scripts" / "run-config.yaml").is_file()
 
 
@@ -219,6 +224,101 @@ def test_failed_stage_stops_the_run_and_logs_at_error(
     assert "02-build-cece" in errors[0].getMessage()
 
 
+def _steps(tmp_path: Path, *steps: tuple[str, Stage, str | None]) -> list[_Step]:
+    """One application's scripts as `run` plans them: (name, stage, session)."""
+    return [
+        (tmp_path / name, "cece", None, stage, session)
+        for name, stage, session in steps
+    ]
+
+
+def _execute_with(
+    tmp_path: Path, mocker: MockerFixture, steps: list[_Step], failing: dict[str, int]
+) -> tuple[list[str], dict[str, str | None]]:
+    """What ran, and each skipped script's cause, with the named scripts
+    failing."""
+    run_bash = mocker.patch(
+        "cli.commands.run.run_bash",
+        side_effect=lambda path, *_a, **_kw: failing.get(path.name, 0),
+    )
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    failures = _execute(
+        steps, tmp_path / "logs", toolchain=None, scripts_dir=scripts_dir, run_id="r"
+    )
+    assert [(path.name, code) for path, code in failures] == list(failing.items())
+    record = read_stage_record(scripts_dir)
+    skipped = {
+        name: outcome.cause
+        for name, outcome in record.outcomes.items()
+        if outcome.state is StageState.SKIPPED
+    }
+    return [call.args[0].name for call in run_bash.call_args_list], skipped
+
+
+_SESSION_STEPS: tuple[tuple[str, Stage, str | None], ...] = (
+    ("01-source.sh", Stage.SOURCE, None),
+    ("02-build.sh", Stage.BUILD, None),
+    ("04-test.sh", Stage.TEST, None),
+    ("03-data.sh", Stage.DATA, None),
+    ("05-harness-s1.sh", Stage.HARNESS, "s1"),
+    ("05-harness-s2.sh", Stage.HARNESS, "s2"),
+    ("06-resume-s1.sh", Stage.RESUME, "s1"),
+    ("06-resume-s2.sh", Stage.RESUME, "s2"),
+)
+_SESSION_SCRIPTS = [name for name, _, _ in _SESSION_STEPS]
+
+
+def test_a_failed_session_does_not_stop_the_other_sessions(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    # s1's submit failed: there is nothing of s1 to resume, and s2 is untouched.
+    ran, skipped = _execute_with(
+        tmp_path, mocker, _steps(tmp_path, *_SESSION_STEPS), {"05-harness-s1.sh": 3}
+    )
+    assert ran == [name for name in _SESSION_SCRIPTS if name != "06-resume-s1.sh"]
+    assert skipped == {"06-resume-s1.sh": "05-harness-s1.sh"}
+
+
+def test_a_failed_test_stage_stops_nothing(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    # Neither the data stage nor a session depends on the application's own tests.
+    ran, skipped = _execute_with(
+        tmp_path, mocker, _steps(tmp_path, *_SESSION_STEPS), {"04-test.sh": 8}
+    )
+    assert ran == _SESSION_SCRIPTS
+    assert skipped == {}
+
+
+def test_a_failed_data_stage_stops_the_sessions(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    ran, skipped = _execute_with(
+        tmp_path, mocker, _steps(tmp_path, *_SESSION_STEPS), {"03-data.sh": 1}
+    )
+    assert ran == _SESSION_SCRIPTS[:4]
+    assert skipped == dict.fromkeys(_SESSION_SCRIPTS[4:], "03-data.sh")
+
+
+def test_a_failed_build_stops_its_tests_data_and_sessions(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    ran, skipped = _execute_with(
+        tmp_path, mocker, _steps(tmp_path, *_SESSION_STEPS), {"02-build.sh": 2}
+    )
+    assert ran == _SESSION_SCRIPTS[:2]
+    assert skipped == dict.fromkeys(_SESSION_SCRIPTS[2:], "02-build.sh")
+
+
+def test_a_failed_resume_stops_nothing(tmp_path: Path, mocker: MockerFixture) -> None:
+    ran, skipped = _execute_with(
+        tmp_path, mocker, _steps(tmp_path, *_SESSION_STEPS), {"06-resume-s1.sh": 1}
+    )
+    assert ran == _SESSION_SCRIPTS
+    assert skipped == {}
+
+
 def test_local_config_runs_the_same_stages(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:
@@ -236,23 +336,86 @@ def test_local_config_runs_the_same_stages(
     assert _scripts(tmp_path) == _LOCAL_SCRIPTS  # no resume without submit_only
 
 
-def test_harness_keeps_slot_05_without_a_04(
-    tmp_path: Path, mocker: MockerFixture
+_TESTS_ENABLED: dict[str, object] = {
+    "applications.cece.cmake_args": ["-DCMAKE_BUILD_TYPE=Debug", "-DENABLE_ESMF=ON"],
+    "applications.cece.targets": ["all"],
+    "applications.cece.tests": {"enabled": True, "ntasks": 4},
+}
+
+
+def test_test_stage_is_skipped_with_a_note_when_tests_are_disabled(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
 ) -> None:
-    # Slot 04 is held for the application-tests stage of issue #9.
-    mocker.patch("cli.commands.run.run_bash")
-    assert (
-        main(
+    # Slot 04 is the application's own tests (issue #9): nothing is rendered
+    # for an application whose tests are off, and the run says so.
+    run_bash = mocker.patch("cli.commands.run.run_bash", return_value=0)
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        code = main(
             [
                 "run",
                 f"--config-file={_config(tmp_path)}",
                 "--application=cece",
-                "--dry-run",
+                "--stage=test",
             ]
         )
-        == 0
+    assert code == 0
+    run_bash.assert_not_called()
+    assert _scripts(tmp_path) == []
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("tests disabled for cece" in m for m in messages)
+    assert any("stages: test" in m for m in messages)
+
+
+def test_test_stage_renders_the_script_and_its_job_and_runs_after_the_build(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    run_bash = mocker.patch("cli.commands.run.run_bash", return_value=0)
+    path = _config(tmp_path, overrides=_TESTS_ENABLED)
+    assert (
+        main(["run", f"--config-file={path}", "--application=cece", "--dry-run"]) == 0
     )
-    assert _scripts(tmp_path) == _CECE_SCRIPTS
+    run_bash.assert_not_called()
+    scripts = tmp_path / "root" / "scripts"
+    assert _scripts(tmp_path) == sorted([*_CECE_SCRIPTS, "04-test-cece.sh"])
+    # The whole job is reviewable before anything is submitted.
+    job = (scripts / "04-test-cece.sbatch").read_text()
+    assert "#SBATCH -n 4" in job
+    assert "ctest --test-dir build" in job
+    assert "submit-tests" in (scripts / "04-test-cece.sh").read_text()
+    assert sorted(p.name for p in (tmp_path / "root").iterdir()) == ["logs", "scripts"]
+
+    assert main(["run", f"--config-file={path}", "--application=cece"]) == 0
+    ran = [call.args[0].name for call in run_bash.call_args_list]
+    assert ran == [
+        "01-source-cece.sh",
+        "02-build-cece.sh",
+        "04-test-cece.sh",  # stage order, not slot order: tests follow the build
+        "03-data-cece.sh",
+        "05-harness-cece-simple-maccity.sh",
+        "05-harness-cece-gcafs-anthro.sh",
+    ]
+
+
+@pytest.mark.usefixtures("stub")
+def test_tests_enabled_without_a_test_suite_is_a_clean_error(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    run_bash = mocker.patch("cli.commands.run.run_bash")
+    path = _config(
+        tmp_path,
+        overrides={
+            "applications.stub": {
+                "git_url": "u",
+                "ref": "m",
+                "tests": {"enabled": True},
+            }
+        },
+    )
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        code = main(["run", f"--config-file={path}", "--application=stub", "--dry-run"])
+    assert code == 1
+    run_bash.assert_not_called()
+    assert "stub has no test suite of its own" in caplog.records[-1].getMessage()
 
 
 def test_platform_flag_overrides_file(tmp_path: Path, mocker: MockerFixture) -> None:
@@ -544,10 +707,19 @@ def test_unconfigured_application_is_a_clean_error(
     assert "['cece']" in errors[0]
 
 
-def test_missing_application_is_a_usage_error(tmp_path: Path) -> None:
-    with pytest.raises(SystemExit) as excinfo:
-        main(["run", f"--config-file={_config(tmp_path)}", "--dry-run"])
-    assert excinfo.value.code == 2
+def test_without_application_every_configured_one_runs(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    # No --application and no selected_applications in the file: every
+    # application in the config's applications: map, as the file selects.
+    mocker.patch("cli.commands.run.run_bash")
+    path = _config(tmp_path)
+    assert main(["run", f"--config-file={path}", "--dry-run"]) == 0
+    effective = yaml.safe_load(
+        (tmp_path / "root" / "scripts" / "run-config.yaml").read_text()
+    )
+    configured = yaml.safe_load(path.read_text())["applications"]
+    assert effective["selected_applications"] == list(configured)
 
 
 def test_application_all_and_multi_selectors(
@@ -1571,3 +1743,102 @@ def test_every_command_has_a_handler(mocker: MockerFixture) -> None:
         assert main([command.value]) == 7, command
         parse.assert_called_once()
         handlers[command].assert_called_once()
+
+
+# ── Applications that are built and tested, never swept ──────────────────────
+
+_BUILT_ONLY: dict[str, object] = {
+    "applications.catchem": {
+        "git_url": "git@github.com:ufs-community/CATChem.git",
+        "ref": "develop",
+        "tests": {"enabled": True},
+    },
+    "applications.kokkos-smoke": {"tests": {"enabled": True}},
+}
+
+
+def test_a_comprehensive_run_renders_each_application_its_own_stages(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    run_bash = mocker.patch("cli.commands.run.run_bash", return_value=0)
+    path = _config(tmp_path, overrides=_BUILT_ONLY)
+    with caplog.at_level(logging.INFO, logger=_CLI_LOGGER):
+        assert main(["run", f"--config-file={path}", "--application", "all"]) == 0
+    ran = [call.args[0].name for call in run_bash.call_args_list]
+    assert ran == [
+        "01-source-cece.sh",
+        "01-source-catchem.sh",  # kokkos-smoke ships with the harness: no source
+        "02-build-cece.sh",
+        "02-build-catchem.sh",
+        "02-build-kokkos-smoke.sh",
+        "04-test-catchem.sh",  # cece's own tests are off in the template
+        "04-test-kokkos-smoke.sh",
+        "03-data-cece.sh",  # the driver stages are cece's alone
+        "05-harness-cece-simple-maccity.sh",
+        "05-harness-cece-gcafs-anthro.sh",
+    ]
+    scripts = tmp_path / "root" / "scripts"
+    assert (scripts / "04-test-kokkos-smoke.sbatch").is_file()
+    # The harness-wide data lines still render once, under the first
+    # application that has a data stage.
+    assert "natural_earth" in (scripts / "03-data-cece.sh").read_text()
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "catchem takes no part in the data, harness, resume stage(s)" in m
+        for m in messages
+    )
+    assert any(
+        "kokkos-smoke takes no part in the source, data, harness, resume stage(s)" in m
+        for m in messages
+    )
+
+
+def test_the_shared_data_lines_follow_the_first_application_with_a_data_stage(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    mocker.patch("cli.commands.run.run_bash", return_value=0)
+    path = _config(tmp_path, overrides=_BUILT_ONLY)
+    assert (
+        main(
+            [
+                "run",
+                f"--config-file={path}",
+                "--application",
+                "kokkos-smoke catchem cece",
+                "--stage=data",
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    assert _scripts(tmp_path) == ["03-data-cece.sh"]
+    data = (tmp_path / "root" / "scripts" / "03-data-cece.sh").read_text()
+    assert "natural_earth" in data
+
+
+def test_watch_and_report_see_sessions_only_for_driver_applications(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    from cli.selectors import selected_applications, selected_sessions
+    from cli.sessions import configured_sessions, load_effective
+
+    mocker.patch("cli.commands.run.run_bash")
+    path = _config(tmp_path, overrides=_BUILT_ONLY)
+    assert main(["run", f"--config-file={path}", "--application=all", "--dry-run"]) == 0
+    config = load_effective(tmp_path / "root")
+    watched = configured_sessions(
+        config,
+        selected_applications(config, None),
+        selected_sessions(config, None),
+        tmp_path / "root" / "scripts",
+    )
+    assert {w.application for w in watched} == {"cece"}
+    assert len(watched) == 2
+
+
+def test_fetch_refuses_an_application_without_a_driver_suite(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.ERROR, logger=_CLI_LOGGER):
+        assert main(["fetch", "--application=catchem"]) == 1
+    assert "catchem has no driver suite" in caplog.text

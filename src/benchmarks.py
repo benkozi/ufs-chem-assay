@@ -14,13 +14,14 @@ lines in the `.out` give a runtime-independent wall time.
 from __future__ import annotations
 
 import csv
+import os
 import re
 import subprocess
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypeVar
 
 import pandas as pd
 from pydantic import ConfigDict, Field
@@ -100,6 +101,13 @@ class SlurmAccounting(StrictModel):
     )
     exit_code: int | None = Field(description="The first number of ExitCode (N:M)")
 
+    @property
+    def completed(self) -> bool:
+        """Whether Slurm says the job ran to its end (COMPLETED). ExitCode's
+        first number alone does not: a job Slurm ended itself (out of
+        memory, a lost node, a signal) can carry 0 there."""
+        return (self.state or "").startswith("COMPLETED")
+
 
 def _parse_clock(text: str) -> datetime | None:
     try:
@@ -159,12 +167,18 @@ def parse_sacct(output: str, job_id: str) -> SlurmAccounting | None:
     )
 
 
-def slurm_accounting(job_id: str) -> SlurmAccounting | None:
+def slurm_accounting(
+    job_id: str, clusters: str | None = None
+) -> SlurmAccounting | None:
     """Ask `sacct` for a finished job, retrying once after a short pause
-    (accounting can trail completion by seconds). None, logged once, when
-    sacct is missing, fails, or has no row for the job — never an error."""
+    (accounting can trail completion by seconds) — on the job's own
+    cluster (`-M`) when it was submitted to a named one. None, logged once,
+    when sacct is missing, fails, or has no row for the job — never an
+    error."""
+    on = [] if clusters is None else ["-M", clusters]
     argv = [
         "sacct",
+        *on,
         "-j",
         job_id,
         "-P",
@@ -194,10 +208,9 @@ def slurm_accounting(job_id: str) -> SlurmAccounting | None:
         if attempt == 1:
             time.sleep(BENCHMARK_CONVENTIONS.sacct_retry_delay_s)
     logger.warning(
-        "sacct has no record of job %s yet; accounting columns left empty "
-        "(sacct -j %s by hand)",
+        "sacct has no record of job %s yet; accounting columns left empty (%s by hand)",
         job_id,
-        job_id,
+        " ".join(["sacct", *on, "-j", job_id]),
     )
     return None
 
@@ -247,6 +260,13 @@ class BenchmarkRow(StrictModel):
     )
     application_commit: str | None = Field(
         description="HEAD of the application checkout; null when none"
+    )
+    build_type: str | None = Field(
+        description=(
+            "CMAKE_BUILD_TYPE of the checkout's build directory (run.yaml's): a "
+            "Debug-build row is never read beside a Release one by mistake; null "
+            "without a CMake cache, and in rows older than the column"
+        )
     )
     harness_version: str = Field(description="Harness package version")
     harness_commit: str | None = Field(
@@ -311,48 +331,156 @@ class BenchmarkRow(StrictModel):
 
 BENCHMARK_COLUMNS = list(BenchmarkRow.model_fields)
 
+# Columns added after files were already written, per kind of file: a file
+# without them still reads (the cells are null). A driver rows' file — an old
+# output root, a published baseline's row — is never appended to (the
+# committed files were migrated); a test rows' file — a tests root, evaluated
+# once per run — is rewritten with the current header on its next append
+# (_MIGRATED_ON_APPEND), since a tests root outlives harness updates.
+_ADDED_COLUMNS: dict[str, frozenset[str]] = {
+    "BenchmarkRow": frozenset({"build_type"}),
+    "TestBenchmarkRow": frozenset({"build"}),
+}
+_MIGRATED_ON_APPEND = frozenset({"TestBenchmarkRow"})
 
-def _cells(row: BenchmarkRow) -> list[str]:
+
+class TestBenchmarkRow(StrictModel):
+    """One run of an application's own test suite — the whole run is the
+    benchmarked unit (the junit report under the tests root has the
+    individual tests). The CSV columns, in this order."""
+
+    __test__ = False  # a model, not a pytest class
+
+    recorded_at: datetime = Field(description="When the run was evaluated (UTC, aware)")
+    run_id: str = Field(description="The test run's ULID (the test ledger's)")
+    application: str = Field(description="Registry name of the application")
+    toolchain: str | None = Field(
+        description="The run config's toolchain the build used; null without one"
+    )
+    build: str | None = Field(
+        description="The build variant the tests ran against; null for the unnamed build"
+    )
+    platform: Platform = Field(description="Machine the tests ran on")
+    runtime: Runtime = Field(description="How the tests were launched")
+    modulefile: str | None = Field(
+        description="Modulefile the build and the tests loaded; null without one"
+    )
+    build_type: str | None = Field(
+        description="CMAKE_BUILD_TYPE of the build directory; null when unknown"
+    )
+    cmake_args: str | None = Field(
+        description="The run config's configure flags, space-joined; null when none"
+    )
+    application_commit: str | None = Field(
+        description="HEAD of the application checkout; null when unknown"
+    )
+    harness_version: str = Field(description="Harness package version")
+    harness_commit: str | None = Field(
+        description="Harness checkout HEAD (-dirty when edited); null outside a checkout"
+    )
+    slurm_job_id: str | None = Field(description="The Slurm job id; null outside slurm")
+    slurm_state: str | None = Field(
+        description="Slurm State as printed; null without accounting"
+    )
+    exit_code: int = Field(
+        description="The run's verdict: the test command's exit status (0: all passed)"
+    )
+    wall_s: float | None = Field(
+        description="toc - tic around the test command; null without both lines"
+    )
+    queue_s: float | None = Field(
+        description="Slurm Start - Submit; null without accounting"
+    )
+    elapsed_s: float | None = Field(
+        description="Slurm Elapsed; null without accounting"
+    )
+    max_rss_kb: int | None = Field(
+        description="Slurm MaxRSS over the job's steps, KiB; null without accounting"
+    )
+    tests_total: int | None = Field(
+        description="Tests in the junit report; null without a report"
+    )
+    tests_passed: int | None = Field(
+        description="Tests that passed; null without a report"
+    )
+    tests_failed: int | None = Field(
+        description="Tests that failed; null without a report"
+    )
+    tests_skipped: int | None = Field(
+        description="Tests skipped or not run; null without a report"
+    )
+    ctest_s: float | None = Field(
+        description="The tests' own durations, summed (the junit's); null without a report"
+    )
+    tests_root: Path = Field(
+        description="The tests root the run's output and junit report are under"
+    )
+
+
+TEST_BENCHMARK_COLUMNS = list(TestBenchmarkRow.model_fields)
+
+RowT = TypeVar("RowT", BenchmarkRow, TestBenchmarkRow)
+
+# What a header error calls each model's columns.
+_KINDS: dict[type[StrictModel], str] = {
+    BenchmarkRow: "benchmark",
+    TestBenchmarkRow: "test benchmark",
+}
+
+
+def _cells(row: StrictModel) -> list[str]:
     dumped = row.model_dump(mode="json")
-    return [
-        "" if dumped[column] is None else str(dumped[column])
-        for column in BENCHMARK_COLUMNS
-    ]
+    return ["" if dumped[name] is None else str(dumped[name]) for name in dumped]
+
+
+def _write_csv(
+    model: type[StrictModel], rows: Sequence[StrictModel], path: Path
+) -> None:
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f, lineterminator="\n")
+        writer.writerow(list(model.model_fields))
+        for row in rows:
+            writer.writerow(_cells(row))
 
 
 def write_benchmarks_csv(rows: Sequence[BenchmarkRow], path: Path) -> pd.DataFrame:
     """Write rows as a CSV with the model's columns (an empty list writes the
     header alone); None cells are empty. Returns the frame written."""
     frame = pd.DataFrame([_cells(row) for row in rows], columns=BENCHMARK_COLUMNS)
-    with open(path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(BENCHMARK_COLUMNS)
-        for row in rows:
-            writer.writerow(_cells(row))
+    _write_csv(BenchmarkRow, rows, path)
     logger.info("wrote %s benchmark row(s) to %s", len(rows), path)
     return frame
 
 
-def _validate_header(path: Path, header: Sequence[str]) -> None:
-    if list(header) != BENCHMARK_COLUMNS:
-        raise ValueError(
-            f"{path}: header {list(header)} is not the benchmark columns "
-            f"{BENCHMARK_COLUMNS}; a schema change edits the file deliberately"
-        )
+def _older_columns(model: type[StrictModel]) -> list[str]:
+    """The model's columns less the ones added since files were first written."""
+    added = _ADDED_COLUMNS.get(model.__name__, frozenset())
+    return [name for name in model.model_fields if name not in added]
 
 
-def read_benchmarks_csv(path: Path) -> list[BenchmarkRow]:
-    """Every row validated through the model; empty cells are None. A header
-    that is not the model's columns is a ValueError naming both."""
+def _read_csv(model: type[RowT], path: Path, *, legacy: bool = False) -> list[RowT]:
+    """Every row validated through `model`; empty cells are None. The header
+    must be the model's columns — or, with `legacy`, those columns less the
+    ones added since (read as None); anything else is a ValueError naming
+    both."""
+    columns = list(model.model_fields)
     with open(path, newline="") as f:
         reader = csv.reader(f)
         header = next(reader, [])
-        _validate_header(path, header)
+        older = _older_columns(model)
+        if header != columns and not (legacy and header == older):
+            raise ValueError(
+                f"{path}: header {header} is not the {_KINDS[model]} columns "
+                f"{columns}; a schema change edits the file deliberately"
+            )
         return [
-            BenchmarkRow.model_validate(
+            model.model_validate(
                 {
-                    column: (cell if cell != "" else None)
-                    for column, cell in zip(BENCHMARK_COLUMNS, cells, strict=True)
+                    **dict.fromkeys(columns),
+                    **{
+                        name: (cell if cell != "" else None)
+                        for name, cell in zip(header, cells, strict=True)
+                    },
                 }
             )
             for cells in reader
@@ -360,15 +488,107 @@ def read_benchmarks_csv(path: Path) -> list[BenchmarkRow]:
         ]
 
 
+def read_benchmarks_csv(path: Path) -> list[BenchmarkRow]:
+    """Every row validated through the model; empty cells are None. A header
+    that is not the model's columns is a ValueError naming both — except a
+    file older than a later-added column (build_type), which reads with that
+    column None."""
+    return _read_csv(BenchmarkRow, path, legacy=True)
+
+
+def read_test_benchmarks_csv(path: Path) -> list[TestBenchmarkRow]:
+    """A tests root's (or the committed per-application) rows, validated
+    through the model; a header that is not its columns is a ValueError —
+    except a file older than a later-added column (build), which reads with
+    that column None."""
+    return _read_csv(TestBenchmarkRow, path, legacy=True)
+
+
 class AppendResult(StrictModel):
-    """What append_benchmarks did."""
+    """What an append did."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     appended: int = Field(description="Rows added")
-    skipped: int = Field(
-        description="Rows already present (same run_id and combo_id), left alone"
+    skipped: int = Field(description="Rows already present (same key), left alone")
+
+
+def _append_locked(
+    model: type[RowT],
+    key: Callable[[RowT], tuple[str, ...]],
+    repo_csv: Path,
+    rows: Sequence[RowT],
+) -> AppendResult:
+    """The append, under the file's lock. New rows are written after what
+    is there (append mode: the lock is on this file, so it is never
+    replaced, and existing lines are never rewritten); nothing is written
+    when nothing is new. A batch may repeat a key: the first row of each is
+    the one kept."""
+    offered = len(rows)
+    first_of: dict[tuple[str, ...], RowT] = {}
+    for row in rows:
+        first_of.setdefault(key(row), row)
+    rows = list(first_of.values())
+    if not repo_csv.is_file() or repo_csv.stat().st_size == 0:
+        _write_csv(model, rows, repo_csv)
+        logger.info("wrote %s %s row(s) to %s", len(rows), _KINDS[model], repo_csv)
+        return AppendResult(appended=len(rows), skipped=offered - len(rows))
+    if model.__name__ in _MIGRATED_ON_APPEND and _header(repo_csv) == _older_columns(
+        model
+    ):
+        rows_before = _read_csv(model, repo_csv, legacy=True)
+        _write_csv(model, rows_before, repo_csv)
+        added = sorted(set(model.model_fields) - set(_older_columns(model)))
+        logger.warning(
+            "%s: added the %s column%s to its %s row(s) (empty in each)",
+            repo_csv,
+            ", ".join(added),
+            "" if len(added) == 1 else "s",
+            len(rows_before),
+        )
+    keys = {key(row) for row in _read_csv(model, repo_csv)}  # validates the header
+    to_append = [row for row in rows if key(row) not in keys]
+    result = AppendResult(appended=len(to_append), skipped=offered - len(to_append))
+    if to_append:
+        original = repo_csv.read_bytes()
+        with open(repo_csv, "a", newline="") as f:
+            if not original.endswith(b"\n"):
+                f.write("\n")
+            writer = csv.writer(f, lineterminator="\n")
+            for row in to_append:
+                writer.writerow(_cells(row))
+        try:
+            _read_csv(model, repo_csv)
+        except (ValueError, OSError) as exc:
+            os.truncate(repo_csv, len(original))
+            raise ValueError(
+                f"{repo_csv}: reload after the append failed ({exc}); restored"
+            ) from exc
+    logger.info(
+        "%s: %s row(s) appended, %s skipped (already recorded)",
+        repo_csv,
+        result.appended,
+        result.skipped,
     )
+    return result
+
+
+def _header(path: Path) -> list[str]:
+    with open(path, newline="") as f:
+        return next(csv.reader(f), [])
+
+
+def _append(
+    model: type[RowT],
+    key: Callable[[RowT], tuple[str, ...]],
+    repo_csv: Path,
+    rows: Sequence[RowT],
+) -> AppendResult:
+    # The whole read-modify-write holds the file's exclusive lock (fslock),
+    # so two writers ending at once append one after the other.
+    repo_csv.parent.mkdir(parents=True, exist_ok=True)
+    with locked(repo_csv):
+        return _append_locked(model, key, repo_csv, rows)
 
 
 def append_benchmarks(repo_csv: Path, rows: Sequence[BenchmarkRow]) -> AppendResult:
@@ -376,53 +596,18 @@ def append_benchmarks(repo_csv: Path, rows: Sequence[BenchmarkRow]) -> AppendRes
     when absent (or empty), a present (run_id, combo_id) is skipped; the
     rest are appended as lines. Existing lines are never touched,
     re-sorted, or re-formatted. The file is reloaded through the model
-    afterwards and restored from the original text if that fails. The
-    whole read-modify-write holds the file's exclusive lock (fslock), so
-    two sessions ending at once append one after the other."""
-    repo_csv.parent.mkdir(parents=True, exist_ok=True)
-    with locked(repo_csv):
-        return _append_benchmarks_locked(repo_csv, rows)
+    afterwards and restored from the original text if that fails."""
+    return _append(BenchmarkRow, lambda row: (row.run_id, row.combo_id), repo_csv, rows)
 
 
-def _append_benchmarks_locked(
-    repo_csv: Path, rows: Sequence[BenchmarkRow]
+def append_test_benchmarks(
+    csv_path: Path, rows: Sequence[TestBenchmarkRow]
 ) -> AppendResult:
-    if not repo_csv.is_file() or repo_csv.stat().st_size == 0:
-        write_benchmarks_csv(rows, repo_csv)
-        return AppendResult(appended=len(rows), skipped=0)
-    original = repo_csv.read_text()
-    existing = read_benchmarks_csv(repo_csv)  # validates the header
-    keys = {(row.run_id, row.combo_id) for row in existing}
-    appended = skipped = 0
-    to_append: list[BenchmarkRow] = []
-    for row in rows:
-        if (row.run_id, row.combo_id) in keys:
-            skipped += 1
-            continue
-        to_append.append(row)
-        appended += 1
-    text = original
-    if text and not text.endswith("\n"):
-        text += "\n"
-    with open(repo_csv, "w", newline="") as f:
-        f.write(text)
-        writer = csv.writer(f)
-        for row in to_append:
-            writer.writerow(_cells(row))
-    try:
-        read_benchmarks_csv(repo_csv)
-    except (ValueError, OSError) as exc:
-        repo_csv.write_text(original)
-        raise ValueError(
-            f"{repo_csv}: reload after the append failed ({exc}); restored"
-        ) from exc
-    logger.info(
-        "%s: %s row(s) appended, %s skipped (already recorded)",
-        repo_csv,
-        appended,
-        skipped,
-    )
-    return AppendResult(appended=appended, skipped=skipped)
+    """Grow a test-benchmarks file — a tests root's (one row per evaluated
+    run) or the committed per-application one — by the rows whose run_id is
+    not there yet; the same append-only, reload-and-restore discipline as
+    append_benchmarks."""
+    return _append(TestBenchmarkRow, lambda row: (row.run_id,), csv_path, rows)
 
 
 # ── building a row ───────────────────────────────────────────────────────────
@@ -489,6 +674,7 @@ def collect_row(
         combo_id=combo_id,
         config_sha256=config_sha256,
         application_commit=run.application_commit,
+        build_type=run.build_type,
         harness_version=run.harness_version,
         harness_commit=run.harness_commit,
         platform=run.platform,

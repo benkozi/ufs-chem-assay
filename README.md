@@ -22,7 +22,7 @@ steps, 32 streams over seven placed inputs; Ursa only, see
 [docs/gcafs-anthro-runbook.md](docs/gcafs-anthro-runbook.md)), and
 `monetio/aeronet/` (a native Python CLI configuration reading AERONET
 direct-sun AOD and inversion datasets into CF-1.8 / UGRID-1.0 `(time, node)`
-NetCDF files). Design rationale lives in [design/design.md](design/design.md).
+NetCDF files).
 
 ## Prerequisites
 
@@ -51,7 +51,8 @@ NetCDF files). Design rationale lives in [design/design.md](design/design.md).
 
 ```sh
 uv sync                       # includes dev tools (mypy, pre-commit, stubs) and
-                              #   installs the `ufs-chem-assay` command (editable)
+                              #   installs the `ufs-chem-assay` command (editable);
+                              #   Python 3.14, the .python-version pin
 uv run pre-commit install     # ruff check/format, mypy, vulture, codespell, the lock check
                               #   on every commit, plus
                               #   the conventional-commit message gate (the
@@ -79,13 +80,13 @@ uv run pytest --application=cece   # only this application's suites (the default
 ASSAY_RUNTIME=native uv run pytest --application=monetio  # runs monetio's default aeronet-suite.yaml natively
 uv run pytest -vs                  # show each driver's output as it runs
 uv run pytest -x                   # fail fast: stop at the first failure
-uv run pytest -k map-consd         # run a subset by combo name
+uv run pytest -k map-bilinear      # run a subset by combo name
 uv run pytest --combo-clean-root   # delete an existing output root first
 
 uv run pytest src/tests/ufs_chem_assay                  # harness only: fast, no docker
 uv run pytest src/tests/ufs_chem_assay --cov            # ... with coverage: CI fails under 100%
 uv run pytest src/tests/ufs_chem_assay/applications/cece  # the CECE adapter's tests only
-uv run pytest src/tests/test_driver_combos.py  # integration only (real docker)
+uv run pytest src/tests/test_driver_combos.py --application=cece  # integration only (real docker)
 
 uv run mypy                        # type checking (all of src/; zero errors expected)
 uv run pre-commit run --all-files  # everything the commit hook runs: ruff check/format,
@@ -93,8 +94,10 @@ uv run pre-commit run --all-files  # everything the commit hook runs: ruff check
                                    #   uv lock --check, yamlfix/yamllint, whitespace,
                                    #   merge markers, private keys, large files
 
-# everything except driver execution (no docker needed); all combo tests skip
-uv run pytest src/tests/test_driver_combos.py --dry-run
+# everything except driver execution (no docker needed); all combo tests skip.
+# --application picks the adapter and runs its default suite (several adapters are
+# registered, so a command naming neither an application nor a suite is a usage error)
+uv run pytest src/tests/test_driver_combos.py --dry-run --application=cece
 
 # stage the inputs the selected suites declare (inputs:) into <CECE_ROOT_DIR>/data —
 # a present file with the declared sha256 is skipped without touching the network —
@@ -172,7 +175,8 @@ skipped with a `driver run failed: ...` reason.
 Options:
 
 - `--application=NAME` — run only suites of this application (registry
-  name; `cece` today), overriding `ASSAY_APPLICATION`. Without it the
+  name: `cece`, `monetio` — the applications with a driver the harness
+  sweeps), overriding `ASSAY_APPLICATION`. Without it the
   application is inferred from the selected suites, which must all agree
   (a mixed selection is a usage error naming the flag); with it, suites
   of other applications are dropped from the selection with a log line.
@@ -425,7 +429,13 @@ application's section under `applications:` mirrors its own settings
 (`CECE_*`) plus how to obtain and build it. The shipped templates
 (`config/local.yaml` for a laptop, `config/ursa.yaml` for Ursa — whose
 `sessions:` map carries `simple-maccity` and the gcafs-anthro use case)
-list every key and run as-is from a checkout laid out like the runbook:
+list every key and run as-is from a checkout laid out like the runbook.
+A third, `config/ursa-kokkos.yaml`, builds and tests CECE, CATChem and
+the Kokkos smoke project against a spack-stack environment with two
+toolchains (below; its runbook is
+[docs/kokkos-runbook.md](docs/kokkos-runbook.md)). A fourth,
+`config/gaea-c7.yaml`, builds and tests CECE on Gaea C7 the same way,
+with one toolchain (also below):
 
 ```yaml
 platform: ursa
@@ -435,6 +445,12 @@ applications:            # one section per application in the run
     ref: develop
     clone_dir:           # null: <root_dir>/CECE (CECE_ROOT_DIR)
     modulefile: cece_ursa.intelllvm
+    modulepath: []       # dirs to `module use` first; empty: <clone>/modulefiles
+    module_env: {}       # exported before the load (what the modulefile reads)
+    toolchain_tools: []  # `which` these after the load; empty: the adapter's probe
+    configure_gates: []  # extra grep -E patterns the configure log must match
+    build_node: login    # or compute: configure and build behind srun
+    tests: {enabled: false}  # build the application's own test stack
     ...
 harness:
   suite_config: simple-maccity-suite.yaml
@@ -448,6 +464,81 @@ sessions:              # one pytest session per entry, under <output_root>/<sess
     harness: {suite_config: gcafs-anthro-suite.yaml, run_timeout_s: 28800, env: {...}}
     slurm: {cpus: 1, srun_args: --cpu-bind=cores, extra_args: --mem=0}
 ```
+
+**The module environment is four keys of an application section.**
+`modulefile` names the module to load and switches the whole block on
+(null: no modules at all). `modulepath` lists the directories to
+`module use` first, in order: an absolute entry is used as written (a
+spack-stack environment's `modules/Core`), a relative one is under the
+harness checkout, and an empty list means the application's own
+`<clone>/modulefiles`. `module_env` is exported before the load — what
+the modulefile reads, such as a `<name>_ver` version pin. The build
+stage and every driver job render the same block from them
+(`CECE_MODULEFILE`, `CECE_MODULEPATH`, `CECE_MODULE_ENV` carry it to the
+pytest session), so a job loads exactly what the build loaded. How the
+block starts is a fact of the platform, not a key: `module purge` on
+Ursa, `module reset` on Gaea (`gaea-c6`, `gaea-c7`; detected from the
+login-node hostnames `gaea6N` / `gaea7N`), where a purge
+strips the Cray programming environment. Two more keys shape the build
+stage only: `toolchain_tools` (the commands `which` locates after the
+load, so the log names the compilers the configure will see) and
+`configure_gates` (extended regular expressions the configure log must
+match before anything is built, after the adapter's own gates — the
+claims of the environment, such as `Using system Kokkos`).
+
+The build and test stages, and the test job, start by leaving the
+harness's own Python environment: they take its `bin/` off `PATH` and
+unset `VIRTUAL_ENV` and `CONDA_PREFIX`, which `uv run` and a conda shell
+would otherwise pass on. A CMake project can read those variables (HELM's
+AXIS library, inside CECE, puts either one first on `CMAKE_PREFIX_PATH`),
+so without this the harness venv would be searched before the module
+environment for every package. The source, data and harness stages keep
+the venv: they run the harness itself.
+
+The harness ships UFS platform modulefiles of its own under
+`modulefiles/` (`modulefiles/ufs_ursa.oneapi.lua`, `ufs_ursa.gnu.lua`,
+`ufs_gaeac6.oneapi.lua`, `ufs_gaeac7.oneapi.lua`, and the `ufs_common.lua`
+they load): copies of
+the ufs-weather-model files plus the Kokkos packages, for building an
+application against a spack-stack environment the way the UFS does.
+They carry no environment of their own — name it in the run config:
+
+```yaml
+    modulefile: ufs_ursa.oneapi
+    modulepath:
+      - modulefiles                              # this checkout's modulefiles/
+      - /path/to/spack-stack/envs/<env>/modules/Core
+    module_env: {kokkos_ver: 4.5.01}             # optional pins
+```
+
+(`ASSAY_SPACK_ENV_ROOT: /path/to/spack-stack/envs/<env>` in `module_env`
+is the one-variable alternative to the second path: the modulefiles turn
+it into the same `modules/Core` entry. An empty pin, `kokkos_ver: ''`, is
+no pin — the way a file that `extends:` another clears one its base sets.)
+
+**Where the build runs is a key too.** `build_node: login` (the default)
+configures and builds where the CLI runs, with network access.
+`build_node: compute` — slurm runtime only, and it needs the `slurm:`
+section — puts the configure and the build each behind its own `srun`
+(the section's account, QOS, partition and `extra_args`, one task with
+`build_jobs` cores, `build_minutes` minutes), in the module environment
+the login shell loaded: an offline compile probe, the way a workflow that
+compiles on compute nodes must build. The adapter turns off what would
+reach the network at configure time and says so in the log; CECE
+configures with `-DCECE_BUILD_TESTING=OFF`, because its test stack
+fetches GTest and RapidCheck. `tests.enabled: true` asks the build stage
+for the application's own test stack: on the login node that is the one
+configure as `cmake_args` and `targets` say; after a compute-node probe
+it is a second, login-node configure of the same build directory with
+the test stack back on, the gates again, and a build that reuses the
+compute-built objects. For CECE, `tests.enabled` requires
+`-DCMAKE_BUILD_TYPE=Debug` and `-DENABLE_ESMF=ON` in `cmake_args` (a
+validation error names the missing flag) — its unit tests are built
+against a Debug build with ESMF; any other build keeps the tests off.
+And whenever `-DENABLE_ESMF=ON` is among the `cmake_args`, the configure
+log must show `CECE dependency ESMF: system`: the environment's ESMF,
+never a fetched one. The build stage's first line names the node
+(`build node: login`, or `compute (srun ...)`, `then login (tests)`).
 
 **Command-line arguments are overrides on the file.** `--override`
 (`-o`) takes `key:path=value` entries, repeatable and several per flag;
@@ -478,21 +569,339 @@ Every invocation, dry runs included, writes the effective configuration
 re-runs the same configuration with no override list, and it is the way
 to check that an override landed.
 
+**A run config may extend another, and select the run.** `extends:
+config/gaea-c7.yaml` reads that file first (a relative path is the
+harness checkout's) and merges this one over it — mappings key by key,
+scalars and lists replacing; a base may extend another. A run config is
+read as YAML 1.2, like an `--override` value: only `true` and `false` are
+booleans, so an unquoted `on` or `no` is that word. A file that is
+missing, is not YAML or is not a mapping is an error naming it. The `selected_*`
+keys (`selected_applications`, `selected_stages`, `selected_toolchains`,
+`selected_builds`) are the run's selection, each flag replacing only its
+own key, so `--application` is optional when the file selects (none
+anywhere: every application). `transfer_dir` is where `ufs-chem-assay
+transfer` sends the root. A personal file holds just those over the
+shared template, gitignored as `config/*.local.yaml`:
+
+```yaml
+extends: config/gaea-c7.yaml
+root_dir: /gpfs/f7/epic/proj-shared/<you>/sandbox/work-ufs-chem-assay
+transfer_dir: ~/l/c7-epic-proj-shared/git/<your work repo>/transfer
+selected_stages: [source, build, test]
+```
+
+The effective config is the merged result without `extends`, so passing
+it back as `--config-file` reruns that root's run. `run --watch` watches
+the root after the stages — whatever they returned — and exits with the
+stages' status when they failed, else watch's; every `run` writes its
+transcript to `<root_dir>/logs/assay-run-<YYYYmmdd-HHMMSS>.log`.
+`ufs-chem-assay transfer --config-file=<file> [--name NAME] [--dry-run]`
+zips the root's logs, rendered scripts and records, tests roots, CMake
+caches and report into one payload, `<transfer_dir>/<name>.zip`, which
+unzips to `<name>/` (default `assay-<YYYYmmdd-HHMM>`; a plain file name
+of letters, digits, `.`, `_` and `-`; an existing zip or directory of
+that name is refused). It runs `git pull --ff-only` in the transfer repo
+first, so a repository that cannot be brought up to date gets no payload
+left in it, then writes the zip and runs `add -f`, `commit` and `push`.
+The tests roots and caches are found from the config: under each
+toolchain's directory, or directly under the root without toolchains.
+The daily loop on a
+machine is in [ops/](ops/README.md).
+
 Stages (`--stage`, repeatable): `source` (clone or fast-forward the
 checkout), `build` (modules + cmake, or the application's container build
-script locally), `data` (`ufs-chem-assay fetch` for the inputs each
-session's `suite_config` selects, under that session's exports, plus the
-cartopy cache), `harness` (the pytest session), and `resume` (the second
-half of a submit-only session, below; rendered by default, executed only
-when named). Running CECE's own tests is a separate task (issue #9). Each
+script locally), `test` (the application's own test suite against that
+build, for applications with `tests.enabled`; below), `data`
+(`ufs-chem-assay fetch` for the inputs each session's `suite_config`
+selects, under that session's exports, plus the plots' map data, downloaded
+into `data.cartopy_dir` — `<root_dir>/cartopy` unless named), `harness`
+(the pytest session), and `resume` (the second half of a submit-only
+session, below; rendered by default, executed only when named). Each
 renders to `<root_dir>/scripts/<NN>-<stage>-<application>.sh` —
 `<NN>-<stage>-<application>-<session>.sh` for the harness and resume
 stages of a named session — and runs with bash where the CLI runs; logs
-land in `<root_dir>/logs/`. A run config naming several applications is a
+land in `<root_dir>/logs/`. Each log's first line says what wrote it —
+`# ufs-chem-assay run: 04-test-cece-oneapi.sh (run <ULID>, harness <version>
+<commit>, started <time>)`, or `watch` for a resume script — and every
+harness log line names its command in brackets
+(`INFO ufs-chem-assay.cli [watch]: ...`, `ufs-chem-assay.apptests
+[submit-tests]: ...` inside a test stage, `[pytest]` for the pytest
+session), so a captured `run ... && watch ...` reads apart. A run config naming several applications is a
 comprehensive run: the stages render per application in stage-major order
 (every `source`, then every `build`, ...) and the harness stage runs one
 pytest session per application, each under `<output_root>/<application>`;
 `--application NAME` (repeatable) narrows such a run.
+
+**The application's own tests.** `tests.enabled: true` on an application
+section gives it a `test` stage: its own test suite — `ctest` for CECE,
+all 577 of its tests — run against the build the build stage left. The
+stage only runs tests: a guard fails it when the test stack is not there,
+and nothing in it compiles. Where they run follows the runtime. Under
+**slurm** they are one job, rendered beside the stage script as
+`04-test-<application>.sbatch` so a dry run shows all of it: the
+`slurm:` section's account, QOS, partition and `extra_args`, one node
+with `tests.ntasks` tasks of `tests.cpus` cores for `tests.minutes`, the
+application's module block, the `tests.env` exports, then `ctest`
+**directly on the node, not behind `srun`** — ctest is the launcher, and
+each MPI test starts its own ranks — writing a junit report, bracketed
+by `tic`/`toc` and followed by `report-mem` like a driver job. The stage
+script submits it with `ufs-chem-assay submit-tests` and returns at once:
+nothing waits on the queue, and the data and harness stages go on while
+the tests run. `submit-tests` records the job in the tests root,
+`<root_dir>/tests/<application>/tests.yaml` (the test ledger: the job,
+who submitted it, what build it ran against, and later the verdict),
+refuses a second submission while one is queued (`--resubmit` cancels
+and submits again), and evaluates a finished run nobody evaluated before
+replacing it. The job's files carry its id (`tests-<job id>.out`,
+`tests-<job id>.xml`), so a resubmission overwrites nothing. Under
+**native** and **docker** the stage runs the command in place — behind
+`harness.launcher` natively, in the application's image under docker —
+tees it to `tests.out`, then calls `ufs-chem-assay evaluate-tests` and
+exits with the tests' status. `tests.filter` and `tests.parallel` are
+`ctest -R` and `ctest -j`. For CECE the tests need a Debug build with
+ESMF and `all` among the targets (above); `config/ursa.yaml` ships with
+them off.
+
+`ufs-chem-assay watch` covers the test job with the sessions' jobs in
+one `squeue` per tick, and evaluates it in-process when it has left the
+queue (there is no resume script): Slurm's accounting, the junit counts,
+one line — `tests cece: evaluated (exit 0), 577 passed / 0 failed / 0
+skipped` — and its verdict in `watch`'s exit status. `watch --only tests`
+(or `--only sessions`) watches one kind; after a run of the source,
+build and test stages alone it is the form to use, since no session was
+submitted. `evaluate-tests` is the same evaluation by hand. `report`
+adds one line per test run and, for a run that failed, one issue:
+`tests-failed` with the failed tests' names (up to `--tail`) and the tail
+of the output, or `tests-job-failed` when the job died without a failed
+test to name (a time limit, no junit report). `cancel --tests-root
+<root_dir>/tests/<application>` scancels a queued test job.
+
+**Stage outcomes.** `run` records what every stage script it executed or
+skipped came to in `<root_dir>/scripts/stages.yaml`, beside the effective
+config: the script, its stage, application, toolchain and build variant,
+`passed` / `failed` / `skipped`, the exit status, start and end times,
+its log under `<root_dir>/logs/` and, for a skipped script, the failure
+that skipped it. Each script's entry is replaced by its next run, so a
+run of one variant leaves the others' entries alone; a dry run records
+nothing. `report` and `watch` read it:
+
+- a line per selected source, build and data stage (`build
+  catchem/oneapi/musica  failed (exit 2)  2026-11-20 16:43 UTC
+  02-build-catchem-oneapi-musica.sh`), with a `stage-failed` issue (the
+  log's last `--tail` lines and its path) or a `stage-skipped` one (the
+  failure that skipped it). `--only` does not hide these lines: sessions
+  and test runs both stand on the builds;
+- a test run with no record names the stage that kept it from running
+  (`no test run: 02-build-catchem-oneapi-musica.sh failed (exit 2)`);
+- a test run older than its variant's latest build, or than a later test
+  stage that failed, gets a `tests-stale` issue: the result shown is not
+  the current build's.
+
+A failed or skipped stage and a stale result make the report's exit 1.
+
+**Applications that are built and tested, never swept.** Two registered
+applications have no driver, so no suite and no pytest session: a run
+gives them the stages they take part in and skips the rest, saying so
+(`catchem takes no part in the data, harness, resume stage(s)`), and
+anything driver-shaped that names one — a suite file, `pytest
+--application`, `fetch` — is refused (`catchem has no driver suite: it
+takes part in the source, build and test stages only`). Neither builds
+under the docker runtime.
+
+- `catchem` (source, build, test): CATChem cloned with its submodules
+  (a guard requires MUSICA's), configured with `cmake_args` — by default
+  `-DCMAKE_BUILD_TYPE=Debug -DCATCHEM_ENABLE_KOKKOS=ON
+  -DCATCHEM_BUILD_MUSICA=ON -DCATCHEM_BUILD_NUOPC=ON` — and built
+  (`targets`, default `all`). Kokkos is always on (a build without
+  `-DCATCHEM_ENABLE_KOKKOS=ON` is refused), and the configure log must
+  show `Using system Kokkos`: the module environment's, never a fetched
+  one. MUSICA fetches its dependencies at configure time, so a build
+  with `-DCATCHEM_BUILD_MUSICA=ON` and `build_node: compute` is refused;
+  with MUSICA off nothing is fetched, and a compute-node build is the
+  whole build, its tests included. A compute-node build and a MUSICA
+  build are two build variants (below). With
+  `-DCATCHEM_USE_SYSTEM_YAML_CPP=ON` the build also checks, after each
+  configure, that CATChem took an installed yaml-cpp: its fallback line
+  (`yaml-cpp not found on system, using internal version`) must be
+  absent and `yaml-cpp_DIR` in `CMakeCache.txt` found, and the log
+  prints it. Its tests are `ctest`, one single-rank job; `tests.enabled`
+  requires the Debug build and `all` among the targets.
+- `kokkos-smoke` (build, test): a small CMake project shipped with the
+  harness that requires the module environment's Kokkos and
+  kokkos-kernels with no fallback, builds one executable (a
+  `parallel_for` and a BLAS `axpby`), and runs it — the direct check that
+  an environment provides the two packages. Its section needs no
+  `git_url` or `ref`; `modulepath` defaults to the harness's own
+  `modulefiles/`; the build is under `<root_dir>/kokkos-smoke/build`. The
+  configure log must show both packages found. The test is the
+  executable itself: it writes no junit report, so the run counts as one
+  test, passed when its output holds `SMOKE TEST PASSED`.
+
+```yaml
+applications:
+  cece: {...}
+  catchem:
+    git_url: git@github.com:ufs-community/CATChem.git
+    ref: develop
+    modulefile: ufs_ursa.oneapi
+    modulepath: [modulefiles, /path/to/spack-stack/envs/<env>/modules/Core]
+    tests: {enabled: true}
+  kokkos-smoke:
+    modulefile: ufs_ursa.oneapi
+    modulepath: [modulefiles, /path/to/spack-stack/envs/<env>/modules/Core]
+    tests: {enabled: true}
+```
+
+`--application all` on such a config clones, builds and tests all three
+and runs the data and harness stages for `cece` alone.
+
+**Toolchains.** `toolchains:` is a map of toolchain name → a compiler
+suite: everything that must change together when the compiler does, so
+no application can pair one suite's modulefile with another's flags.
+
+```yaml
+toolchains:
+  oneapi:
+    modulefile: ufs_ursa.oneapi
+    modulepath: [modulefiles, /path/to/envs/<oneapi env>/modules/Core]
+    module_env: {}                    # exported before the load: version pins
+    toolchain_tools: [mpiicx, mpiicpx, mpiifx, cmake, ctest]
+    cmake_args: [-DCMAKE_CXX_FLAGS=-fp-model=precise]
+    mpi_launcher: mpiexec             # mpiexec (FindMPI's default) | srun
+    tests_env: {I_MPI_HYDRA_BOOTSTRAP: fork}
+    configure_gates: []               # added to every application's: see below
+  gnu:
+    modulefile: ufs_ursa.gnu
+    modulepath: [modulefiles, /path/to/envs/<gcc env>/modules/Core]
+    toolchain_tools: [mpicc, mpic++, mpifort, cmake, ctest]
+    mpi_launcher: srun
+    tests_env: {OMPI_MCA_plm: isolated}
+```
+
+A toolchain is overlaid on every application section: its module
+environment (`modulefile`, `modulepath`, `module_env`,
+`toolchain_tools`) replaces the section's whole — and under a
+`toolchains:` map a section may not set those keys itself, nor
+`clone_dir`; its `cmake_args` are appended to the application's own; its
+`configure_gates` are added to them, so a toolchain gate must be a line
+every application's configure prints (a gate only one application can
+pass, such as CECE's ArborX line, goes on that application's section);
+its `tests_env` is merged over `tests.env`. `mpi_launcher: srun` adds `-DMPIEXEC_EXECUTABLE` (the path
+of `srun`), `-DMPIEXEC_NUMPROC_FLAG=-n` and, when `mpiexec_preflags` is
+set, `-DMPIEXEC_PREFLAGS` to every CMake configure, so each MPI test is
+its own Slurm step; `mpiexec` leaves CMake's default. A section's rules
+are checked as each toolchain builds it (a flag CECE's tests require
+may be the toolchain's).
+
+`--toolchain NAME` (several, or `all`) selects what a `run` builds; it
+is required when the config names more than one. Each toolchain is its
+own build: its checkouts, build directories and tests roots are under
+`<root_dir>/<toolchain>/`, its scripts are
+`<NN>-<stage>-<application>-<toolchain>[-<session>].sh`, and its session
+output roots gain a `/<toolchain>` segment, so two toolchains never
+share anything but the harness checkout, `scripts/`, `logs/` and the uv
+cache. With several selected, the run is toolchain-major — every script
+of every toolchain is rendered first, then the whole stage list runs for
+one toolchain, then for the next. A failed stage stops only what
+depends on it, within its application: a failed source stage skips
+everything after it; a failed build its variant's tests and, for an
+application without variants, its data stage and sessions; a failed data
+stage every session; a session's failed harness stage that session's
+resume. A failed test or resume stage skips nothing: no session depends
+on the application's own tests, or on another session. Every
+other application, variant and toolchain runs on, each skipped script
+logged with the failure that skipped it. The run exits with the first
+failure's status after one line per toolchain (`oneapi: failed at
+02-build-cece-oneapi.sh (exit 2)`, `gnu: ok`):
+
+```sh
+uv run ufs-chem-assay run --config-file=<config> --application all --toolchain all \
+    --stage source --stage build --stage test
+uv run ufs-chem-assay watch --only tests      # every toolchain the run selected
+uv run ufs-chem-assay report --only tests --toolchain gnu
+```
+
+The effective config stays one file — the config as loaded, plus
+`selected_toolchains` (and `selected_applications`, `selected_stages`, `selected_builds`) — and `watch` and `report` cover the toolchains
+the last `run` selected (`--toolchain` narrows them), labelling each
+session and test run with its toolchain (`gnu/simple-maccity`, `tests
+cece/gnu`). Without a `toolchains:` map nothing changes: one unnamed
+build, the module keys on the application section, today's paths.
+`config/ursa-kokkos.yaml` is the shipped use of all of this: the
+`oneapi` and `gnu` toolchains on Ursa, the three applications built as
+the offline compile probe and tested, the driver sessions left to be
+asked for.
+
+`config/gaea-c7.yaml` is the same idea on Gaea C7, for what has been
+built and tested there: one toolchain (`oneapi`: Intel's `icx` / `icpx` /
+`ifx` with cray-mpich, `mpi_launcher: srun`), CECE and CATChem, against the
+spack-stack 2.2.0 environment through `modulefiles/ufs_gaeac7.oneapi.lua`.
+Three things in it are particular to the machine. `module_env` pins
+`esmf_ver` and `mapl_ver`, because the environment's default ESMF is a
+later beta than the one its MAPL is built against. `slurm.extra_args` is
+`--clusters=c7`, which reaches the build's `srun` steps as well as the
+test job. And CECE takes everything from the environment: Kokkos,
+kokkos-kernels and ArborX, and yaml-cpp (the modulefile loads `yaml-cpp`,
+a local addition), each held by a gate (`CECE dependency Kokkos: system`,
+`CECE dependency yaml-cpp: system`, the ArborX line). So the build is the
+offline compile probe, as on Ursa: `build_node: compute`, with
+`--override applications:cece:build_node=login` to build on the login
+node alone. CATChem is two build variants of one checkout (`compute`,
+MUSICA off, built whole on a compute node; `musica`, on the login node),
+both with `-DCATCHEM_USE_SYSTEM_YAML_CPP=ON`, so they take the
+environment's yaml-cpp and the build checks that they did. The Kokkos
+smoke project is not in the template. CECE's test job exports
+`PIP_NO_INDEX=1`, which stops the pip fixtures of CECE's Python tests
+from retrying an index a compute node cannot reach; CATChem's tests reach
+no network.
+
+```bash
+ufs-chem-assay run --config-file=config/gaea-c7.yaml --application cece \
+  --stage source --stage build --stage test
+ufs-chem-assay watch --only tests
+```
+
+**Build variants.** `applications.<name>.builds:` is a map of variant
+name → an overlay on that application's section: several builds of one
+checkout with different options, each with its own build directory,
+tests root and scripts. A variant may set `cmake_args`, `build_jobs`,
+`targets` and `tests` (each replacing the section's whole),
+`configure_gates` (added to the section's), `build_node` and
+`build_minutes`; the checkout keys and, under `toolchains:`, the module
+keys stay the section's and the toolchain's. The variant is overlaid on
+the section as written, then the toolchain on top, so a toolchain's
+configure arguments still come last.
+
+```yaml
+applications:
+  catchem:
+    builds:
+      compute:   # MUSICA off: nothing to fetch, so the whole build runs on a compute node
+        cmake_args: [-DCMAKE_BUILD_TYPE=Debug, -DCATCHEM_ENABLE_KOKKOS=ON, -DCATCHEM_BUILD_MUSICA=OFF]
+        build_node: compute
+      musica:    # MUSICA fetches at configure time: the login node
+        cmake_args: [-DCMAKE_BUILD_TYPE=Debug, -DCATCHEM_ENABLE_KOKKOS=ON, -DCATCHEM_BUILD_MUSICA=ON]
+        build_node: login
+```
+
+| | No `builds:` | Variant `<v>` |
+|---|---|---|
+| Build directory | `<checkout>/build` | `<checkout>/build-<v>` |
+| Tests root | `<root>[/<toolchain>]/tests/<app>` | `<root>[/<toolchain>]/tests/<app>/<v>` |
+| Build and test scripts | `02-build-<app>[-<toolchain>].sh` | `02-build-<app>[-<toolchain>]-<v>.sh`, the same for `04-test-…` |
+| Labels | `tests <app>[/<toolchain>]` | `tests <app>[/<toolchain>]/<v>` |
+
+The source stage runs once per application (one checkout serves every
+variant); the build and test stages run once per variant, in the map's
+order. `--build NAME [NAME ...]` (or `all`) on `run`, `watch` and
+`report` selects variants, every one by default; an application
+without `builds:` keeps its one build either way, and a name no selected
+application has is an error on all three. `run` records the selection
+(`selected_builds`, empty for every variant) for `watch` and `report`;
+`submit-tests` and `evaluate-tests` take `--build` the way they take
+`--toolchain`. An application with variants takes no data or harness
+stage yet: a driver session runs against one build, and a run config
+cannot name which. Without `builds:` nothing about a run changes.
 
 **Sessions.** `sessions:` is a map of session name → an overlay on the
 file's `harness:`, `slurm:` and `baselines:` sections, one level deep: an
@@ -514,8 +923,8 @@ purpose is another run config over the same base.
 **Submit, then watch.** With `harness.submit_only: true` (the Ursa
 template; slurm runtime only) the harness stage's pytest session submits
 every combination's job at once, writes `<output root>/jobs.yaml` (the
-job ledger: each job's id, script, `.out` and deadline, who submitted,
-and later when a session evaluated them with what status) and returns
+job ledger: each job's id, cluster, script, `.out` and deadline, who
+submitted, and later when a session evaluated them with what status) and returns
 within minutes; `run` renders a sixth script per session,
 `06-resume-<application>-<session>.sh` — `pytest --resume` over the same
 root — and executes it only under `--stage resume`. `ufs-chem-assay
@@ -528,12 +937,39 @@ session's resume script once its jobs have all left the queue — one
 session at a time, so the committed files are written serially — and
 exits when every selected session is evaluated, with the sessions'
 pytest statuses as its own (`--once` reports and exits; `--session` and
-`--application` narrow it). It is safe to kill and restart: a session
+`--application` narrow it, and by default it covers the applications the
+last `run` selected, recorded as `selected_applications` in the effective
+config). `watch` and `report` cover only what a run started: a session
+when the last `run` selected the harness or resume stage, a test run when
+it selected the test stage (`selected_stages`), or when the stage record
+holds that script from an earlier run, or the root already has a ledger.
+So a `run --stage source --stage build --stage test` reports and watches
+its test runs alone, with no driver session flagged as not submitted, and a
+later build-only run keeps the earlier test runs in view (stale, if the
+build is newer). A session or test run that is not submitted does not keep it
+waiting: when the stage record says why (its source, build, data or
+harness stage failed or was skipped) `watch` settles it at the first
+check, as `not submitted (02-build-cece.sh failed (exit 2))`; with
+nothing recorded it gives up after `--not-submitted-ticks` checks
+(default 10, about five minutes at a 30 s poll), as `not submitted
+(still not submitted after 10 checks)`. Either way it ends with the
+report and exit status 1, naming what was never submitted. It is safe to kill and restart: a session
 already evaluated is skipped by its ledger, a resume that died is tried
 again by the next `watch`. `tmux` is a convenience for watching, not a
 requirement. `ufs-chem-assay cancel --output-root=<session root>`
 scancels a session's jobs still in the queue, and `clean_root` refuses to
 remove a root whose ledger lists queued jobs, naming that command.
+
+**Multi-cluster Slurm.** On a machine whose jobs go to a named cluster
+(Gaea: `slurm.extra_args: --clusters=c7`), `sbatch --parsable` answers
+`<job id>;<cluster>`. The harness records that cluster beside the job id
+— in `jobs.yaml` for the driver jobs, in `tests.yaml` for a test job —
+and names it (`-M <cluster>`) on every later `squeue`, `sacct` and
+`scancel` about that job: the wait inside pytest, `watch`, `cancel`,
+`evaluate-tests`, the `clean_root` guard. `extra_args` is the only
+setting; no `SLURM_CLUSTERS` is needed in the shell, and a ledger whose
+jobs are on two clusters is asked once per cluster. A job submitted
+without a cluster name is asked about without one, as before.
 
 **Then report.** `watch` ends with the run report, and
 `ufs-chem-assay report` prints the same thing any time later, from the
@@ -572,8 +1008,11 @@ RDHPCS machines have no docker, so the target driver is built natively
 against the application's own modulefiles (`<checkout>/modulefiles/cece_ursa.*.lua`
 for CECE), and the harness runs on a **login node** submitting **one
 Slurm job per driver call — all of a session's at once**, then waiting
-for each by polling `squeue` and judging it by `sacct` — the **slurm
-runtime**, selected by `ASSAY_RUNTIME=slurm` (the default once
+for each by polling `squeue` and judging it by `sacct` (a job passes
+only when its state is `COMPLETED` and its exit code 0: a job Slurm ended
+itself, out of memory or on a lost node, can carry exit code 0) — the **slurm
+runtime**, which needs the run config's `slurm:` section (`slurm: {}`
+takes every default), selected by `ASSAY_RUNTIME=slurm` (the default once
 `ASSAY_PLATFORM` is anything but `local`; the platform is detected from
 the hostname and overridable). The jobs are recorded in `<output
 root>/jobs.yaml` as they are submitted; `pytest --submit-only` ends the
@@ -586,7 +1025,10 @@ a rendered script, `<combo_id>.sbatch`, kept beside the combo's `.yaml`
 and `.out` so a failed job is reproducible by hand: `#SBATCH` directives
 from `ASSAY_SBATCH_ARGS` (account, QOS, partition, `-N 1 -n <ntasks> -c
 <cpus>`, then `slurm.extra_args` verbatim) and the suite's
-`timeout_s` rounded up to whole minutes, the `CECE_MODULEFILE` load,
+`timeout_s` rounded up to whole minutes, the module block (the
+platform's `module purge` or `module reset`, the `CECE_MODULE_ENV`
+exports, a `module use` per `CECE_MODULEPATH` entry — the checkout's
+own `modulefiles` by default — and the `CECE_MODULEFILE` load),
 the `ASSAY_JOB_ENV` exports, and the driver behind `srun` with
 `ASSAY_SRUN_ARGS` (`--ntasks=<ntasks>` plus `slurm.srun_args`, e.g.
 `--cpu-bind=cores`; MPI inside a batch job needs Slurm's PMI endpoint),
@@ -605,7 +1047,16 @@ shell already suits both the harness and the driver; not Ursa, where the
 two environments conflict.
 
 The run config above assembles all of that; the same steps by hand are
-in [docs/ursa-runbook.md](docs/ursa-runbook.md). The gcafs-anthro
+in [docs/ursa-runbook.md](docs/ursa-runbook.md). For the everyday loop on
+an RDHPC machine, one personal run config says everything about a run:
+it `extends:` the shared template and adds your `root_dir`,
+`transfer_dir` and `selected_*` keys (gitignored as `config/*.local.yaml`).
+`ops/assay-run.sh <run config>` is the bootstrap (`module reset`, `git
+pull`, then `run --watch`), and `ops/assay-transfer.sh <run config>`
+(`transfer --config-file` on the same file) sends the root's logs, records
+and report to the transfer repo.
+`ops/assay` runs any harness command with uv's cache and Pythons in the
+checkout's `.uv/`, for the assay alone; see [ops/](ops/README.md). The gcafs-anthro
 configuration is the `gcafs-anthro` session of `config/ursa.yaml` (an
 overlay with the suite, a raised timeout cap, and one task on one bound
 core with the single-thread exports and `--mem=0`; its inputs' Ursa
@@ -782,7 +1233,7 @@ directory per combination:
     *.nc                         #   driver NetCDF output
 ```
 
-Test ids stay human-readable (`MACCITY.map-consd`, target-qualified;
+Test ids stay human-readable (`MACCITY.map-bilinear`, target-qualified;
 `<suite>/<combo>` in multi-suite sessions); directories are runtime ULIDs —
 minted per combo per run, time-ordered (directories list in creation order),
 never derived from content. The output root stays flat however many suites
@@ -821,9 +1272,14 @@ symlog` keeps zeros on the colorbar inside a linear core of that floor;
 `linear` is the plain exact min/max. The title carries `[log]`/`[symlog]`.
 Bias maps are symmetric at the exact max |difference|, linear by default;
 `plotting.bias_scale: symlog` (with `bias_decades`) shows ULP-level
-structure beside gross differences. First-time boundary rendering
-downloads Natural Earth coastline/border data; offline, plots degrade to
-data-only maps with a warning.
+structure beside gross differences. Boundary rendering needs Natural
+Earth coastline/border data. Under `ufs-chem-assay run` it lives in
+`data.cartopy_dir` (`<root_dir>/cartopy` by default, exported to the
+session as `ASSAY_CARTOPY_DATA_DIR`), and the data stage downloads it
+there (`data.warm_cartopy`); a bare `pytest` run leaves cartopy its own
+directory (`$XDG_DATA_HOME/cartopy`, else `~/.local/share/cartopy`) and
+downloads on first use. Offline, or when the directory cannot be written,
+plots degrade to data-only maps with a warning.
 
 Stats CSV columns: `run_id`, `application`, `suite` (the suite's unique
 `name` from its yaml, e.g. `simple-maccity`), identity (`combo_id`, `combo`, `file`,
@@ -876,14 +1332,18 @@ a published baseline carries its own benchmark. A row is a `BenchmarkRow`
 (`src/benchmarks.py`; the model's fields are the columns): identity
 (`run_id`, `combo_id`, `suite`, `combo`, `config_sha256` — equal across
 runs of the same generated configuration), provenance
-(`application_commit`, `harness_version`, `harness_commit`, `platform`,
+(`application_commit`, `build_type` — the `CMAKE_BUILD_TYPE` of the
+checkout's build directory, read from its CMake cache at session start
+and recorded in `run.yaml`, so a Debug-build row is never read beside a
+Release one by mistake; empty without a cache and in rows older than the
+column — `harness_version`, `harness_commit`, `platform`,
 `runtime`, `modulefile`, the launch: `sbatch_args`, `srun_args`,
 `job_env`), timings (`duration_s`: docker/native, the harness's clock
 around the driver call; slurm, submission to end as `sacct` reports it,
 queue included; `wall_s`: the job's own `tic`→`toc`
 lines, empty when the job was killed; `queue_s`, `elapsed_s`,
 `max_rss_kb`, `slurm_job_id`, `slurm_state`: Slurm accounting via `sacct`,
-on platforms that have it — Ursa today — and empty elsewhere), outcome
+on platforms that have it — Ursa and Gaea C7 today — and empty elsewhere), outcome
 (`driver_result`: passed/failed/timeout, `exit_code`, `nc_files`,
 `output_bytes`), and the baseline links (`baseline_ulid`,
 `baseline_state`, `comparison_result`). Whether a combination later became
@@ -893,8 +1353,8 @@ column: a row never changes once written.
 The committed copy lives beside each configuration's suites,
 `src/tests/config/<application>/<configuration>/benchmarks.csv`, and grows
 by rows: `pytest --record-benchmarks` (the run config's
-`harness.record_benchmarks`, **true in the Ursa templates**, false in
-`local.yaml`) appends the run's rows at session end, and
+`harness.record_benchmarks`, **true in `config/ursa.yaml`**, false in
+the other templates) appends the run's rows at session end, and
 `ufs-chem-assay record-benchmarks --output-root=<root>` does the same for a
 finished run (`--dry-run` lists what it would append). A row already
 present — same `run_id` and `combo_id` — is skipped; existing lines are
@@ -906,6 +1366,25 @@ one after another anyway (on Lustre, locking across nodes needs the
 mount's `flock` option). Review the diff and commit it, as with baseline
 ULIDs and input digests.
 
+An application's own test runs are benchmarked as whole runs: every
+evaluated run appends one row to `<root_dir>/tests/<application>/benchmarks.csv`
+(a `TestBenchmarkRow`: the run's id, `application`, `toolchain`,
+`build` (the build variant; empty for an application without `builds:`),
+`platform`, `runtime`, `modulefile`, `build_type`, `cmake_args`,
+`application_commit`, the harness's identity, the Slurm job and its
+accounting, `exit_code`, `wall_s`, the junit counts — `tests_total`,
+`tests_passed`, `tests_failed`, `tests_skipped` — and `ctest_s`, the
+tests' own durations summed).
+`ufs-chem-assay record-benchmarks --tests-root=<root_dir>/tests/<application>`
+appends those rows to the committed per-application file,
+`src/tests/config/<application>/tests-benchmarks.csv`, skipping runs
+already there; `record-benchmarks --transfer <payload>` does it for every
+tests root of one transfer `transfer` wrote (its `.zip`, read in place, or
+the directory it unzips to) ([ops/](ops/README.md)). A tests root's file from before the `build` column still
+reads (the cell empty); the next evaluation there rewrites it with the
+current header, its rows kept, and says so. A regression shows in the whole-run numbers; the run's
+junit report in the tests root has the individual tests.
+
 ## Environment variables
 
 Every variable can also be set (lowercase works) in a gitignored `.env`
@@ -914,21 +1393,25 @@ variables override `.env`. AWS credentials are not harness settings at
 all — the AWS CLI reads its own configuration (see
 [S3 data sync](#s3-data-sync)). Two namespaces: **harness-wide** settings under
 `ASSAY_*`, and each **application's** settings under its
-own prefix — `CECE_*` for the CECE adapter and `MONETIO_*` for the MONETIO adapter.
+own prefix — `CECE_*` for the CECE adapter and `MONETIO_*` for the MONETIO adapter
+(`CATCHEM_*` and `KOKKOS_SMOKE_*` exist for the two build-and-test
+applications — `CATCHEM_ROOT_DIR`, `CATCHEM_MODULEFILE`, ... — but
+nothing reads them outside `ufs-chem-assay run`, which takes those
+values from the run config).
 
 Harness-wide:
 
 | Env var                         | Meaning                                        | Default                          |
 |---------------------------------|------------------------------------------------|----------------------------------|
 | `ASSAY_APPLICATION`             | the application the session runs (`--application` overrides) | unset → inferred from the selected suites |
-| `ASSAY_PLATFORM`                | machine the harness runs on (`local`, `ursa`)  | detected from the hostname, else `local` |
+| `ASSAY_PLATFORM`                | machine the harness runs on (`local`, `ursa`, `gaea-c6`, `gaea-c7`) | detected from the hostname, else `local` |
 | `ASSAY_RUNTIME`                 | how the driver is spawned (`docker`, `native`, `slurm`) | `docker` on `local`, `slurm` elsewhere |
 | `ASSAY_LAUNCHER`                | command prefix for native driver runs (e.g. `srun --ntasks=1`) | empty (run directly) |
 | `ASSAY_SBATCH_ARGS`             | slurm runtime: sbatch options per driver job (`-A … -q … -p … -N 1 -n 1 -c …`) | empty |
 | `ASSAY_SRUN_ARGS`               | slurm runtime: options of the `srun` that launches the driver inside each job (the run config renders `--ntasks=<slurm.ntasks> <slurm.srun_args>`) | `--ntasks=1` |
 | `ASSAY_SLURM_QUEUE_WAIT_S`      | slurm runtime: seconds a driver job may wait in the queue before the harness cancels it (the run config's `slurm.queue_wait_s`) | `3600` |
 | `ASSAY_SLURM_POLL_S`            | slurm runtime: seconds between `squeue` polls while a driver job is queued or running (the run config's `slurm.poll_s`) | `30` |
-| `ASSAY_JOB_ENV`                 | slurm runtime: `NAME=VALUE` pairs exported inside each driver job | empty |
+| `ASSAY_JOB_ENV`                 | slurm runtime: `NAME=VALUE` pairs exported inside each driver job; each name a shell variable name; values are written as given, so `$VAR` expands in the job | empty |
 | `ASSAY_RUN_TIMEOUT_S`           | caps the suite `timeout_s` when smaller        | `300`                            |
 | `ASSAY_LOG_LEVEL`               | runner log level (`DEBUG`, `INFO`, ...)        | `INFO`                           |
 | `ASSAY_DASK_NWORKERS`           | dask workers for the stats cluster (int > 0)   | unset → all available cores      |
@@ -939,6 +1422,7 @@ Harness-wide:
 | `ASSAY_BASELINE_ATOL`           | absolute data tolerance over every comparison's own `atol` (`--baseline-atol` wins) | unset → the entries' values |
 | `ASSAY_BASELINE_RTOL`           | relative data tolerance (× \|baseline\|) over every comparison's own `rtol` (`--baseline-rtol` wins) | unset → the entries' values |
 | `ASSAY_INPUT_SEARCH_PATH`       | colon-separated dirs `fetch` searches recursively, by basename, to link source-less (`url: null`) inputs into the data directory | unset → absent ones fail |
+| `ASSAY_CARTOPY_DATA_DIR`        | where cartopy downloads the plots' Natural Earth coastlines and borders (the run config's `data.cartopy_dir`, `<root_dir>/cartopy` by default) | unset → cartopy's own (`$XDG_DATA_HOME/cartopy`, else `~/.local/share/cartopy`) |
 | `ASSAY_CONFIG_SEARCH_PATH`      | prepended to relative `config_path` values     | unset                            |
 | `ASSAY_SUITE_CONFIG_SEARCH_PATH` | colon-separated dirs searched recursively for `--suite-config` selection | unset → built-in suite dir only |
 
@@ -950,6 +1434,8 @@ The CECE adapter:
 | `CECE_DOCKER_IMAGE`             | container image (docker runtime)               | `cece/cece-dev`                  |
 | `CECE_DRIVER_PATH`              | driver path, relative to the checkout          | `./build/cece_standalone_driver` |
 | `CECE_MODULEFILE`               | modulefile each driver job loads before the driver (slurm runtime; recorded in `run.yaml`) | unset |
+| `CECE_MODULEPATH`               | colon-separated dirs each driver job `module use`s before the load | unset → `<checkout>/modulefiles` |
+| `CECE_MODULE_ENV`               | `NAME=VALUE` pairs exported in each driver job before the load (what the modulefile reads) | empty |
 
 The MONETIO adapter:
 
@@ -959,6 +1445,8 @@ The MONETIO adapter:
 | `MONETIO_DOCKER_IMAGE`          | container image (docker runtime)               | `monetio/monetio-dev`            |
 | `MONETIO_DRIVER_PATH`           | CLI executable path, relative to the checkout  | `.venv/bin/monetio`              |
 | `MONETIO_MODULEFILE`            | modulefile each driver job loads before the CLI (slurm runtime; recorded in `run.yaml`) | unset |
+| `MONETIO_MODULEPATH`            | colon-separated dirs each driver job `module use`s before the load | unset → `<checkout>/modulefiles` |
+| `MONETIO_MODULE_ENV`            | `NAME=VALUE` pairs exported in each driver job before the load | empty |
 
 There is no AWS table: the AWS CLI's own `~/.aws/credentials`,
 `~/.aws/config`, and `AWS_*` variables apply unchanged to

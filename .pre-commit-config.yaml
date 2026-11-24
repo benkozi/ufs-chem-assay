@@ -32,6 +32,11 @@ repos:
         exclude: ^(design/|uv\.lock$)
       - id: end-of-file-fixer
         exclude: ^(design/|uv\.lock$)
+      # LF everywhere (see .gitattributes): a CRLF line is rewritten, so the
+      # commit stops and is made again with the fix.
+      - id: mixed-line-ending
+        args:
+          - --fix=lf
       - id: check-merge-conflict
       - id: detect-private-key
         # The release-script tests carry a fabricated PEM (BEGIN/END around
