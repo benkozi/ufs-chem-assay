@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.1.0-rc.12 (2026-11-24)
+
+### Chores
+
+- **deps**: Bump the python group with 3 updates
+  ([#47](https://github.com/benkozi/ufs-chem-assay/pull/47),
+  [`94bfb47`](https://github.com/benkozi/ufs-chem-assay/commit/94bfb474da78c82a5ea2fb2048c4fa4a305bcf6f))
+
+### Features
+
+- Build/test with kokkos on HPC ([#48](https://github.com/benkozi/ufs-chem-assay/pull/48),
+  [`695ba00`](https://github.com/benkozi/ufs-chem-assay/commit/695ba00bf51c9cc484a0ad0e5344a5f875105328))
+
+
 ## v0.1.0-rc.11 (2026-11-13)
 
 ### Chores
