@@ -33,7 +33,7 @@ def harness(tmp_path: Path) -> Path:
     paths land there."""
     checkout = tmp_path / "harness"
     (checkout / "ops").mkdir(parents=True)
-    for script in ("assay-run.sh", "assay"):
+    for script in ("assay-run.sh", "assay-transfer.sh", "assay"):
         shutil.copy2(_OPS / script, checkout / "ops" / script)
     return checkout
 
@@ -211,3 +211,57 @@ def test_assay_finds_uv_in_the_users_local_bin(
     assert _calls(env)[0].startswith(
         f"uv run --project {harness} ufs-chem-assay report"
     )
+
+
+# ── ops/assay-transfer.sh ───────────────────────────────────────────────────
+
+
+def test_transfer_runs_the_harness_transfer_on_the_one_config(
+    tmp_path: Path, harness: Path, env: dict[str, str]
+) -> None:
+    # The daily loop's second step, read like the first: no module reset
+    # and no git pull of the harness, only the transfer through ops/assay.
+    config = _config(tmp_path)
+    done = _bash(
+        harness, env, "c7.local.yaml", cwd=config.parent, script="assay-transfer.sh"
+    )
+    assert done.returncode == 0, done.stderr
+    assert _calls(env) == [
+        (
+            f"uv run --project {harness} ufs-chem-assay transfer "
+            f"--config-file {config} (in {harness})"
+        )
+    ]
+    assert _uv_dirs(env) == [_scoped(harness)]
+
+
+def test_transfers_status_is_the_scripts(
+    tmp_path: Path, harness: Path, env: dict[str, str]
+) -> None:
+    done = _bash(
+        harness,
+        env,
+        str(_config(tmp_path)),
+        script="assay-transfer.sh",
+        STUB_UV_EXIT="1",
+    )
+    assert done.returncode == 1
+
+
+@pytest.mark.parametrize("args", [(), ("a.yaml", "b.yaml"), ("--name", "x")])
+def test_transfer_takes_exactly_one_argument(
+    harness: Path, env: dict[str, str], args: tuple[str, ...]
+) -> None:
+    done = _bash(harness, env, *args, script="assay-transfer.sh")
+    assert done.returncode == 2
+    assert "usage: ops/assay-transfer.sh <run config yaml>" in done.stderr
+    assert _calls(env) == []
+
+
+def test_transfer_refuses_a_missing_config(
+    tmp_path: Path, harness: Path, env: dict[str, str]
+) -> None:
+    done = _bash(harness, env, str(tmp_path / "nope.yaml"), script="assay-transfer.sh")
+    assert done.returncode == 2
+    assert "assay-transfer: no run config" in done.stderr
+    assert _calls(env) == []

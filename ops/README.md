@@ -9,6 +9,7 @@ file `extends:` the shared template, so it holds only what is yours, and
 |---|---|
 | `ops/assay <arguments>` | The harness (`ufs-chem-assay <arguments>`), with uv's cache and managed Pythons in this checkout's `.uv/` (gitignored) and nowhere else: set for that process only, never in your shell, so other uv projects keep their own. Use it for every harness command on a machine, from the checkout (relative paths and `.env` are read from the current directory). |
 | `ops/assay-run.sh <run config>` | The bootstrap: `module reset` and `git pull`, which only a shell can do before the harness starts, then `ops/assay run --watch --config-file <run config>`. One argument, nothing else. |
+| `ops/assay-transfer.sh <run config>` | The daily loop's second step, read like the first: `ops/assay transfer --config-file <run config>` (no module reset or git pull). One argument; for `--name` or `--dry-run` call `ops/assay transfer` itself. |
 | `ops/assay transfer --config-file <run config>` | Zips the root's logs, rendered scripts and records, tests roots, CMake caches and report into one payload, `<transfer_dir>/<name>.zip` (unzipping to `<name>/`), then `git pull`, `add`, `commit` and `push` in the transfer repo. Only the zip is committed. |
 | `ops/assay record-benchmarks --transfer <payload>` | On the laptop: appends every test run a transfer holds (its `.zip`, read in place, or the directory it unzips to) to this checkout's committed `src/tests/config/<application>/tests-benchmarks.csv`. |
 
@@ -45,7 +46,7 @@ root overwrite each other's scripts and records.
 ```bash
 cd /gpfs/f7/epic/proj-shared/Benjamin.Koziol/git/ufs-chem-assay
 ops/assay-run.sh config/c7.local.yaml
-ops/assay transfer --config-file config/c7.local.yaml
+ops/assay-transfer.sh config/c7.local.yaml
 ```
 
 Then, on the laptop, once the transfer is synced:

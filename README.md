@@ -1037,8 +1037,9 @@ an RDHPC machine, one personal run config says everything about a run:
 it `extends:` the shared template and adds your `root_dir`,
 `transfer_dir` and `selected_*` keys (gitignored as `config/*.local.yaml`).
 `ops/assay-run.sh <run config>` is the bootstrap (`module reset`, `git
-pull`, then `run --watch`), and `ops/assay transfer --config-file <run
-config>` sends the root's logs, records and report to the transfer repo.
+pull`, then `run --watch`), and `ops/assay-transfer.sh <run config>`
+(`transfer --config-file` on the same file) sends the root's logs, records
+and report to the transfer repo.
 `ops/assay` runs any harness command with uv's cache and Pythons in the
 checkout's `.uv/`, for the assay alone; see [ops/](ops/README.md). The gcafs-anthro
 configuration is the `gcafs-anthro` session of `config/ursa.yaml` (an

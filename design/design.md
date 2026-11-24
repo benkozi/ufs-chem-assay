@@ -1559,7 +1559,9 @@ All code under `src/`; the project is `uv`-managed with its own
                           #   for that process only, so uv's directories serve the assay alone;
                           #   assay-run.sh <run config>: the bootstrap (exactly one argument): module reset
                           #   and git pull, which only a shell before the harness can do, then
-                          #   `assay run --watch --config-file`; README.md (a personal config/*.local.yaml
+                          #   `assay run --watch --config-file`; assay-transfer.sh <run config> (one
+                          #   argument, like assay-run.sh: `assay transfer --config-file`, no module reset
+                          #   or git pull); README.md (a personal config/*.local.yaml
                           #   that extends: the shared template, the loop with transfer and
                           #   record-benchmarks --transfer), c7-runbook.md (the one file to create on C7)
   config/                 # run-config templates: local.yaml (docker), ursa.yaml (native + slurm;

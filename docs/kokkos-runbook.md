@@ -281,8 +281,8 @@ build on C7, count the `YAML::` symbols the environment's ESMF exports
 For the everyday loop, a personal run config extending
 `config/gaea-c7.yaml` names the root, the selection and the transfer
 directory; `ops/assay-run.sh <run config>` runs it and then `watch`, with a
-transcript in `<root>/logs`, and `ops/assay transfer --config-file <run
-config>` sends the root's logs, records and report to the transfer repo
+transcript in `<root>/logs`, and `ops/assay-transfer.sh <run config>`
+sends the root's logs, records and report to the transfer repo
 (`ops/assay` keeps uv's cache and Pythons in the checkout's `.uv/`; see
 `ops/README.md` and `ops/c7-runbook.md`).
 The same steps by hand:

@@ -89,11 +89,13 @@ CMake caches and `report.txt` into one payload, `transfer/assay-<YYYYmmdd-HHMM>.
 then pull, add, commit, push; only the zip is committed):
 
 ```bash
-ops/assay transfer --config-file config/c7.local.yaml
+ops/assay-transfer.sh config/c7.local.yaml
 ```
 
-Add `--dry-run` to see what it would copy, or `--name assay-<something>` to
-name it. An existing name is refused.
+It takes the one file, like `ops/assay-run.sh`. To see what it would zip
+first, or to name the payload, call the harness command itself:
+`ops/assay transfer --config-file config/c7.local.yaml --dry-run` (or
+`--name assay-<something>`). An existing name is refused.
 
 ## On the laptop: benchmarks
 
